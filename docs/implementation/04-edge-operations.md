@@ -32,7 +32,7 @@ node mac/start.mjs
 node mac/cli.mjs open
 ```
 
-也可通过 `node mac/cli.mjs ...` 调用官方 CLI。例如 `node mac/cli.mjs gateway status` 或 `node mac/cli.mjs agent --agent main --message '你好' --json`。运行中的 Gateway 拥有本机状态，不另开 `--local` 进程竞争同一目录。
+也可通过 `node mac/cli.mjs ...` 调用官方 CLI。例如 `node mac/cli.mjs models list` 或 `node mac/cli.mjs agent --agent main --message '你好' --json`。运行中的 Gateway 拥有本机状态，不另开 `--local` 进程竞争同一目录。
 
 文件工具在配置工作区内运行；进程命令沿用 OpenClaw allowlist / on-miss 审批。首阶段验证原生文件工具，不声称已验证任意 GUI、麦克风或屏幕操作。
 
@@ -56,7 +56,7 @@ launchctl kill SIGTERM gui/$(id -u)/com.anylink.openclaw
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anylink.openclaw.plist
 ```
 
-正常重启使用 SIGTERM；LaunchAgent 为原生 Gateway 保留 360 秒收尾预算，Gateway 退出后才关闭隧道。停止服务不会删除本机状态或云端事实。日志为本机进程输出，日常排障避免打印完整配置和环境变量。
+正常重启使用 SIGTERM；LaunchAgent 的停止预算按本机 `launchctl print` 实际报告配置为 60 秒，Gateway 退出后才关闭隧道。更新或停止前先等待本地任务完成；长任务与未知副作用不能依赖系统强制结束自动恢复。停止服务不会删除本机状态或云端事实。日志为本机进程输出，日常排障避免打印完整配置和环境变量。
 
 ## 云端
 

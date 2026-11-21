@@ -52,7 +52,7 @@
 - 主动中断专属 SSH 进程，本地 Gateway PID 未变化，health 与 UI 仍可用。
 - SSH 自动重连后，云端设备身份恢复，Gateway 仍为原进程。
 
-当前用户 LaunchAgent 为 `com.anylink.openclaw`，原生 Gateway 收尾完成后才关闭隧道；服务配置预留 360 秒正常停机预算。自动任务关闭，未启用语音、形象或主动联系。
+当前用户 LaunchAgent 为 `com.anylink.openclaw`，原生 Gateway 收尾完成后才关闭隧道；本机 launchd 实测停止预算为 60 秒，服务定义已与生效值对齐。更新或停止前先等本地任务收尾；本次验证空闲重启，不把它扩大成任意长任务停机保证。自动任务关闭，未启用语音、形象或主动联系。
 
 这不等于已证明任意 GUI 点击、外部提交都具备 exactly-once。它们不在本次 Mac 基础能力的验收范围内。
 
