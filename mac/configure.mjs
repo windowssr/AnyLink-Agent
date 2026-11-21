@@ -13,11 +13,11 @@ export function configure(connection){
   const token=fs.existsSync(paths.gateway)?fs.readFileSync(paths.gateway,'utf8').trim():crypto.randomBytes(32).toString('base64url');save(paths.gateway,token+'\n');
   const config={
     gateway:{mode:'local',bind:'loopback',port:18791,auth:{mode:'token',token},controlUi:{enabled:true,basePath:'/openclaw',allowedOrigins:['http://127.0.0.1:18791','http://localhost:18791']},http:{endpoints:{chatCompletions:{enabled:true}}}},
-    agents:{defaults:{workspace:paths.workspace,model:{primary:'anylink/deepseek-flash'},thinkingDefault:'off',maxConcurrent:1,timeoutSeconds:120,compaction:{memoryFlush:{enabled:false}}}},
+    agents:{defaults:{workspace:paths.workspace,model:{primary:'anylink/deepseek-flash'},thinkingDefault:'off',maxConcurrent:1,timeoutSeconds:180,compaction:{memoryFlush:{enabled:false}}}},
     cron:{enabled:false},discovery:{mdns:{mode:'off'}},
-    models:{mode:'replace',providers:{anylink:{baseUrl:connection.server+'/model/v1',apiKey:'${ANYLINK_DEVICE_TOKEN}',api:'openai-completions',models:[{id:'deepseek-flash',name:'DeepSeek Flash via AnyLink',reasoning:false,input:['text'],contextWindow:128000,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]}}},
+    models:{mode:'replace',providers:{anylink:{baseUrl:connection.server+'/model/v1',apiKey:'${ANYLINK_DEVICE_TOKEN}',api:'openai-completions',models:[{id:'deepseek-flash',name:'DeepSeek Flash via AnyLink',reasoning:false,input:['text','image'],contextWindow:128000,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]}}},
     tools:{profile:'coding',fs:{workspaceOnly:true},exec:{security:'allowlist',ask:'on-miss'},deny:['sessions_spawn','sessions_send','cron','gateway','message']},
-    plugins:{allow:['anylink-memory'],load:{paths:[paths.plugin]},slots:{memory:'none'},entries:{'anylink-memory':{enabled:true,hooks:{allowConversationAccess:true,allowPromptInjection:true},config:{connectionFile:paths.connection}}}},
+    plugins:{allow:['anylink-memory','anylink-mac-control'],load:{paths:[paths.plugin,path.join(root,'mac/control')]},slots:{memory:'none'},entries:{'anylink-memory':{enabled:true,hooks:{allowConversationAccess:true,allowPromptInjection:true},config:{connectionFile:paths.connection}},'anylink-mac-control':{enabled:true,hooks:{allowConversationAccess:true,allowPromptInjection:true},config:{projectRoot:root}}}},
   };
   save(path.join(paths.state,'openclaw.json'),JSON.stringify(config,null,2)+'\n');
   console.log(JSON.stringify({configured:true,device_id:connection.device_id,workspace:paths.workspace,chat_url:'http://127.0.0.1:18791/openclaw/',cloud_agent:false}));

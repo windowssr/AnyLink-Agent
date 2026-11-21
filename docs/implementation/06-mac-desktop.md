@@ -1,5 +1,7 @@
 # Mac 桌面应用 V0.2.1
 
+本文记录 V0.2.1 的桌面壳基线。当前 V0.3 已加入电脑控制，安装时还需准备固定的 Peekaboo 组件；当前使用、权限和验收方式见 [Mac 电脑控制](07-mac-computer-control.md)。
+
 ## 使用入口与能力
 
 在当前 Mac 双击 `~/Applications/AnyLink.app`。应用使用 Swift / AppKit 创建原生窗口和菜单栏入口，通过 WKWebView 显示本机 OpenClaw Control UI；不依赖浏览器标签页或 Electron。

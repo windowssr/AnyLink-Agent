@@ -1,0 +1,15 @@
+{
+  "id": "anylink-mac-control",
+  "name": "AnyLink Mac Computer Control",
+  "version": "0.3.0",
+  "description": "Observe and operate this Mac through the pinned signed Peekaboo host. No cloud executor.",
+  "activation": {"onStartup": true},
+  "configSchema": {"type": "object", "properties": {"projectRoot":{"type":"string"}}, "required":["projectRoot"], "additionalProperties": false},
+  "contracts": {"tools": ["anylink_mac_status", "anylink_mac_apps", "anylink_mac_observe", "anylink_mac_act"]},
+  "toolMetadata": {
+    "anylink_mac_status": {"profiles": ["coding"]},
+    "anylink_mac_apps": {"profiles": ["coding"]},
+    "anylink_mac_observe": {"profiles": ["coding"]},
+    "anylink_mac_act": {"profiles": ["coding"]}
+  }
+}

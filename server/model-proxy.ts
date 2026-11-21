@@ -11,8 +11,8 @@ const inputSchema=z.object({
 }).passthrough();
 export function registerModelProxy(app:FastifyInstance,db:Db,config:Config) {
   const active=new Map<string,AbortController>();
-  app.get('/model/v1/models',async()=>({object:'list',data:[{id:MODEL,object:'model',owned_by:'deepseek'}]}));
-  app.post('/model/v1/chat/completions',async(req,reply)=>{
+  app.get('/model/v1/models',async()=>({object:'list',data:[{id:MODEL,object:'model',owned_by:'deepseek',input_modalities:['text','image']}]}));
+  app.post('/model/v1/chat/completions',{bodyLimit:16*1024*1024},async(req,reply)=>{
     const who=req.edgeIdentity!,input=inputSchema.parse(req.body),id=randomUUID();
     const controller=new AbortController();
     await transaction(db,async c=>{

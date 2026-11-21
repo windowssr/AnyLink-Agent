@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var wasHealthy = false
     private var startedAt = Date()
     private var root: URL?
+    private var computer: MacControlCoordinator?
     private var serviceError: String?
     private var checkingInterface = false
     private var pendingInterfaceRoute: String?
@@ -49,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             let candidate = URL(fileURLWithPath: config.projectRoot, isDirectory: true).standardizedFileURL
             guard FileManager.default.fileExists(atPath: candidate.appendingPathComponent("mac/start.mjs").path) else { throw DesktopError.configuration }
             root = candidate
+            computer = MacControlCoordinator(root: candidate)
         } catch {
             serviceError = "找不到已配置的 AnyLink 工程。请在工程中重新运行 node mac/build-app.mjs 和 node mac/install-app.mjs。"
         }
@@ -84,6 +86,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: ""); editItem.submenu = edit; main.addItem(editItem)
         let view = NSMenu(title: "助理")
         view.addItem(menuItem("重新连接", #selector(reconnect), "r"))
+        view.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
+        view.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
         view.addItem(menuItem("打开工作区", #selector(openWorkspace), "1"))
         view.addItem(menuItem("打开日志文件夹", #selector(openLogs)))
         view.addItem(menuItem("在浏览器打开", #selector(openBrowser)))
@@ -117,7 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let workspace = NSButton(title: "工作区", target: self, action: #selector(openWorkspace)); workspace.bezelStyle = .rounded
         workspace.setAccessibilityLabel("打开工作区")
         let reload = NSButton(title: "重新连接", target: self, action: #selector(reconnect)); reload.bezelStyle = .rounded
-        for view in [progress, status, spacer, workspace, reload] { toolbar.addArrangedSubview(view) }
+        let control = NSButton(title: "电脑控制", target: self, action: #selector(openComputerControl)); control.bezelStyle = .rounded
+        for view in [progress, status, spacer, control, workspace, reload] { toolbar.addArrangedSubview(view) }
         content.addSubview(toolbar)
 
         let config = WKWebViewConfiguration()
@@ -165,6 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         menu.addItem(menuItem("显示 AnyLink", #selector(showWindow(_:))))
         menu.addItem(menuItem("打开工作区", #selector(openWorkspace)))
         menu.addItem(menuItem("重新连接", #selector(reconnect)))
+        menu.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
+        menu.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
         menu.addItem(.separator())
         menu.addItem(menuItem("退出 AnyLink 窗口", #selector(quit)))
         statusItem.menu = menu
@@ -335,6 +342,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         pollHealth()
     }
     @objc private func openWorkspace() { if let root = root { NSWorkspace.shared.open(root.appendingPathComponent("data/mac/workspace")) } }
+    @objc private func openComputerControl() { computer?.showSettings() }
+    @objc private func stopComputerControl() { computer?.stopControl() }
     @objc private func openLogs() { if let root = root { NSWorkspace.shared.open(root.appendingPathComponent("data/mac/logs")) } }
     @objc private func openBrowser() {
         do {

@@ -21,7 +21,14 @@ const run=(executable,args)=>execFileSync(executable,args,{stdio:'inherit',cwd:r
 fs.rmSync(app,{recursive:true,force:true});
 for(const dir of [resources,binaries,cache])fs.mkdirSync(dir,{recursive:true});
 const compilerArgs=['-swift-version','5','-O','-module-cache-path',cache,'-target',`${architecture}-apple-macosx${version.minimumMacOS}`];
-run('/usr/bin/xcrun',['swiftc',...compilerArgs,'-parse-as-library','mac/desktop/App.swift','-o',path.join(binaries,'AnyLink'),'-framework','AppKit','-framework','WebKit']);
+run('/usr/bin/xcrun',['swiftc',...compilerArgs,'-parse-as-library','mac/desktop/App.swift','mac/desktop/MacControl.swift','-o',path.join(binaries,'AnyLink'),'-framework','AppKit','-framework','WebKit']);
+const controlRuntime=path.join(root,'data/mac/control/runtime.json');
+if(!fs.existsSync(controlRuntime))throw new Error('Install the signed control component first: node mac/install-control.mjs');
+const control=JSON.parse(fs.readFileSync(controlRuntime,'utf8'));
+run('/usr/bin/codesign',['--verify','--deep','--strict',control.app]);
+const helpers=path.join(app,'Contents/Helpers');fs.mkdirSync(helpers,{recursive:true});
+run('/usr/bin/ditto',[control.app,path.join(helpers,'Peekaboo.app')]);
+fs.copyFileSync(path.join(root,'mac/control/PEEKABOO-LICENSE'),path.join(resources,'PEEKABOO-LICENSE'));
 const render=path.join(output,'render-icon');
 run('/usr/bin/xcrun',['swiftc',...compilerArgs,'mac/desktop/Icon.swift','-o',render,'-framework','AppKit']);
 const iconPNG=path.join(output,'AnyLink.png');run(render,[iconPNG]);

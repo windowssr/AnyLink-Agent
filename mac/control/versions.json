@@ -1,0 +1,14 @@
+{
+  "version": "4.9.10",
+  "sourceCommit": "fa2f76ed24ea8bc76e0f000124c909e96db3e29d",
+  "release": "https://github.com/openclaw/Peekaboo/releases/tag/v4.9.10",
+  "application": {
+    "name": "Peekaboo-4.9.10.app.zip",
+    "sha256": "b64078157022720b31d20437a00f699a8082e8932cae65f1b75a2ae06f246f6c"
+  },
+  "cli": {
+    "arm64": {"name": "peekaboo-macos-arm64.tar.gz", "sha256": "ebd37b07edc9c6f7f526086ec762ce9f50efd508db713e1c0bf2b36f69714037"},
+    "x64": {"name": "peekaboo-macos-x86_64.tar.gz", "sha256": "284f1cc7528c39971f95f93e53a287d6663a3cfcbfd0f2d7a4da34f8a23187ef"}
+  },
+  "allowedTeams": ["FWJYW4S8P8", "Y5PE65HELJ"]
+}

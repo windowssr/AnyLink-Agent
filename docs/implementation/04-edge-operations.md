@@ -1,6 +1,6 @@
 # 边缘架构：安装、使用与运维
 
-适用代码：V0.2。角色分工为 Mac 原生 OpenClaw＋ywc 的记忆与模型 API。真实完成情况以同目录的 V0.2 验收记录为准。
+适用代码：V0.2 / V0.3。角色分工为 Mac 原生 OpenClaw＋ywc 的记忆与模型 API。V0.3 电脑控制的新增组件、权限与真实完成情况见 [Mac 电脑控制](07-mac-computer-control.md)。
 
 ## Mac 目录
 

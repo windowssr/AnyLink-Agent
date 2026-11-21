@@ -1,6 +1,6 @@
 {
   "name": "anylink-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,6 +15,8 @@
     "test:integration": "node scripts/test-integration.mjs",
     "desktop:build": "node mac/build-app.mjs",
     "desktop:install": "node mac/install-app.mjs",
+    "desktop:control:install": "node mac/install-control.mjs",
+    "test:mac-control": "node --test mac/control/*.test.mjs",
     "start": "node dist/server/index.js"
   },
   "dependencies": {

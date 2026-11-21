@@ -24,8 +24,8 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
   await new Promise<void>(r=>upstream.listen(0,'127.0.0.1',r));
   const config:Config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/v1`,origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180};
   let instance=await createApp(config,{logger:false});let cookie='',device:any,android:any,token='',memory:any;
-  async function owner(method:string,path:string,body?:unknown,key=randomUUID(),headers:Record<string,string>={}){return instance.app.inject({method:method as any,url:path,headers:{cookie,'idempotency-key':key,...headers},payload:body});}
-  async function edge(method:string,path:string,body?:unknown,key=randomUUID(),credential=token){return instance.app.inject({method:method as any,url:path,headers:{authorization:`Bearer ${credential}`,'idempotency-key':key},payload:body});}
+  async function owner(method:string,path:string,body?:unknown,key=randomUUID(),headers:Record<string,string>={}){return instance.app.inject({method:method as any,url:path,headers:{cookie,'idempotency-key':key,...headers},payload:body as any});}
+  async function edge(method:string,path:string,body?:unknown,key=randomUUID(),credential=token){return instance.app.inject({method:method as any,url:path,headers:{authorization:`Bearer ${credential}`,'idempotency-key':key},payload:body as any});}
   const model=(content:string,stream=false,extra={})=>edge('POST','/model/v1/chat/completions',{model:'deepseek-flash',messages:[{role:'user',content}],stream,...extra});
   try{
     await t.test('owner authentication and no cloud agent endpoint',async()=>{
@@ -72,6 +72,14 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
       const r=await model('stream',true);assert.match(String(r.headers['content-type']),/event-stream/);assert.match(r.body,/"tool_calls"/);assert.match(r.body,/data: \[DONE\]/);
       const record=(await instance.db.query('SELECT * FROM model_requests WHERE id=$1',[r.headers['x-anylink-request-id']])).rows[0];assert.equal(record.state,'completed');assert.equal(record.prompt_tokens,12);
       for(const forbidden of ['messages','prompt','response_text','tool_calls'])assert.equal(forbidden in record,false);
+    });
+    await t.test('image input larger than the ordinary API limit reaches only the model provider',async()=>{
+      const image='data:image/jpeg;base64,'+'A'.repeat(3*1024*1024);
+      const content=[{type:'text',text:'Describe this local screenshot'},{type:'image_url',image_url:{url:image}}];
+      const r=await edge('POST','/model/v1/chat/completions',{model:'deepseek-flash',messages:[{role:'user',content}]});
+      assert.equal(r.statusCode,200);assert.deepEqual(lastBody.messages[0].content,content);
+      const stored=(await instance.db.query('SELECT * FROM model_requests WHERE id=$1',[r.headers['x-anylink-request-id']])).rows[0];
+      assert.equal(JSON.stringify(stored).includes('data:image'),false);
     });
     await t.test('upstream rejections and interrupted streams are not replayed',async()=>{
       const before=calls;assert.equal((await model('reject')).statusCode,503);assert.equal(calls,before+1);

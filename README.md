@@ -8,16 +8,20 @@ Mac 上运行成熟 OpenClaw，自己服务器提供统一记忆和模型 API。
               └⇄ ywc 记忆 API ⇄ PostgreSQL
 ```
 
-当前版本 V0.2，Mac 使用独立 Node 24.22.3、OpenClaw 2026.11.6 与 AnyLink memory 插件。Android、语音、虚拟形象和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
+当前版本 V0.3，Mac 使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行。Android、语音、虚拟形象和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
 
 ## 在当前 Mac 使用
 
-双击 `~/Applications/AnyLink.app`，即可在独立 Mac 窗口中聊天、查看工具执行结果；菜单栏提供重新连接、工作区和日志入口。桌面壳版本为 V0.2.1，复用 V0.2 的本机 Agent 与云端服务。关闭窗口或退出桌面壳后，后台 Agent 继续运行。
+双击 `~/Applications/AnyLink.app`，即可在独立 Mac 窗口中聊天、查看工具执行结果；菜单栏提供电脑控制、重新连接、工作区和日志入口。关闭窗口或退出桌面壳后，后台 Agent 继续运行。
+
+在“电脑控制”中显式启用，并为 Peekaboo 开启 macOS 辅助功能和屏幕录制权限后，可以操作所选软件窗口、点击、输入、快捷键、滚动和拖拽。窗口截图与界面文字随任务经 ywc 发送给 Flash 理解；停止按钮可阻止后续控制。详情见[Mac 电脑控制说明](docs/implementation/07-mac-computer-control.md)。
 
 重新构建与安装桌面壳：
 
 ```bash
 node mac/configure-desktop.mjs
+node mac/install-control.mjs
+node mac/configure-control.mjs
 npm run desktop:build
 npm run desktop:install
 open ~/Applications/AnyLink.app
@@ -34,7 +38,7 @@ node mac/cli.mjs open
 
 此命令在默认浏览器打开经过本机认证的聊天界面，不打印令牌。地址为 <http://127.0.0.1:18791/openclaw/>。若需要手动填写本地 Gateway Token，在自己的终端运行 `node mac/cli.mjs token`；不要把输出发到聊天或提交 Git。
 
-初始文件工作区为 `data/mac/workspace`。可以让 Agent 创建、读取和修改这里的文件。文件工具限定于工作区，进程命令沿用 OpenClaw allowlist / on-miss 审批；本阶段没有声称任意 GUI 操作已验证。
+初始文件工作区为 `data/mac/workspace`。可以让 Agent 创建、读取和修改这里的文件。文件工具限定于工作区，进程命令沿用 OpenClaw allowlist / on-miss 审批；普通软件操作走专用 Mac 控制工具。
 
 明确说“记住……”时，本地 Agent 使用云端记忆工具保存；新会话会读取当前 global 和 Mac 事实。记忆更正使用 revision，删除后不再作为当前事实召回。原始会话仍可能包含历史陈述。
 
@@ -58,6 +62,7 @@ ssh -N -L 3180:127.0.0.1:3180 ywc
 npm ci
 node mac/install-runtime.mjs
 node mac/pair.mjs
+node mac/install-control.mjs
 node mac/launch-agent.mjs
 ```
 
@@ -84,6 +89,7 @@ npm run test:integration
 
 - [安装、常驻、凭据与运维](docs/implementation/04-edge-operations.md)
 - [Mac 桌面应用、构建与更新](docs/implementation/06-mac-desktop.md)
+- [Mac 电脑控制、权限与验收](docs/implementation/07-mac-computer-control.md)
 - [V0.2 真实验收记录](docs/implementation/05-edge-validation.md)
 - [当前产品设计](docs/product/README.md)
 - [修正后的 Mac 施工基线](docs/implementation/03-edge-mac-plan.md)

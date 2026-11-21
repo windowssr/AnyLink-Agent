@@ -1,6 +1,6 @@
 # AnyLink：边缘 Agent 产品设计
 
-版本：v0.2 架构基线。修订日期：2026-11-22。**Mac 本地 OpenClaw＋云端模型和记忆的基础闭环已实现；其他模块仍按各自阶段推进。** 真实完成范围见 [V0.2 验收](../implementation/05-edge-validation.md)。旧 V0.1 云端 Agent 原型已退役，历史数据保留。
+版本：v0.3，沿用边缘 Agent 架构。修订日期：2026-11-22。**Mac 本地 OpenClaw、云端模型和记忆已打通；当前加入原生窗口观察和鼠标键盘工具。** 当前实现与验收见 [Mac 电脑控制](../implementation/07-mac-computer-control.md)，基础记忆通路见 [V0.2 验收](../implementation/05-edge-validation.md)。其他模块仍按各自阶段推进。旧 V0.1 云端 Agent 原型已退役，历史数据保留。
 
 用户始终与所在设备的 Agent 交互。Mac 运行成熟 harness，管理会话、上下文、工具循环、任务、权限、语音和形象；服务器只提供共享记忆与模型调用服务，以及这两种服务必需的身份、配额和运维设施。
 
