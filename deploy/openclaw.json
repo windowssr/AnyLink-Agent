@@ -1,6 +1,7 @@
 {
   "gateway": {
     "mode": "local", "bind": "lan", "port": 18789,
+    "controlUi": { "enabled": false },
     "auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },
     "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
   },
@@ -13,5 +14,5 @@
     }
   },
   "tools": { "profile": "minimal", "deny": ["exec", "process", "read", "write", "edit", "apply_patch", "browser", "computer", "canvas", "nodes", "cron", "gateway", "message", "sessions_spawn", "sessions_send", "web_search", "web_fetch"] },
-  "plugins": { "slots": { "memory": "none" } }
+  "plugins": { "allow": ["deepseek"], "slots": { "memory": "none" }, "entries": { "deepseek": { "enabled": true } } }
 }

@@ -33,6 +33,8 @@
 
 Gateway 使用显式官方 CLI 入口，避免镜像的自动 doctor 修复适配器在非交互环境反复运行。运行期配置放在 UID 1000 可写的专属状态目录，发布文件仍不含秘密；启用单进程启动和编译缓存。此调整不修改 OpenClaw 源码或放宽其运行期权限。
 
+实机初始 768 MiB Gateway 上限出现 Docker OOM / exit 137，因此调整为 1024 MiB，并将插件 allowlist 收窄到 deepseek、关闭内部 Control UI。产品服务和数据库仍各为 256 MiB；仅产品 Web 发布到宿主回环地址。
+
 ## 查看状态
 
 ```bash
