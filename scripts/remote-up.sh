@@ -12,11 +12,11 @@ mkdir -p "$base/data/postgres" "$base/data/openclaw" "$base/backups"
 chown 1000:1000 "$base/data/openclaw"
 compose=(docker compose --project-name anylink-agent --env-file "$release/release.env" -f "$release/compose.yaml")
 source "$release/release.env"
-python3 - "$release/manifest.json" "$APP_IMAGE" <<'PY'
+python3 - "$release/manifest.json" "$APP_IMAGE" "$release/image-fingerprint.py" <<'PY'
 import json,subprocess,sys
 manifest=json.load(open(sys.argv[1]))
-actual=subprocess.check_output(['docker','image','inspect','--format','{{.Id}}',sys.argv[2]],text=True).strip()
-if actual!=manifest['app_image_id']:raise SystemExit('App image does not match release manifest')
+actual=subprocess.check_output(['python3',sys.argv[3],sys.argv[2]],text=True).strip()
+if actual!=manifest['app_image_fingerprint']:raise SystemExit('App content/config fingerprint does not match release manifest')
 PY
 for image in "$OPENCLAW_IMAGE" "$POSTGRES_IMAGE"; do
   if ! docker image inspect "$image" >/dev/null 2>&1; then docker pull --platform linux/amd64 "$image"; fi

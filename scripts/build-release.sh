@@ -26,14 +26,15 @@ if [ "${BUNDLE_UPSTREAM:-0}" = 1 ]; then
   images+=("$gateway_runtime" "$postgres_runtime")
 fi
 docker save --platform linux/amd64 "${images[@]}" | gzip -1 > "$folder/images.tar.gz"
-cp deploy/compose.yaml deploy/openclaw.json scripts/remote-up.sh "$folder/"
+cp deploy/compose.yaml deploy/openclaw.json scripts/remote-up.sh scripts/image-fingerprint.py "$folder/"
 printf 'APP_IMAGE=anylink-agent:%s\nOPENCLAW_IMAGE=%s\nPOSTGRES_IMAGE=%s\n' "$short" "$gateway_runtime" "$postgres_runtime" > "$folder/release.env"
 node --input-type=module - "$revision" "$folder" <<'JS'
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 const [revision,folder]=process.argv.slice(2);
 const imageId=execFileSync('docker',['image','inspect','--format','{{.Id}}',`anylink-agent:${revision.slice(0,12)}`],{encoding:'utf8'}).trim();
-fs.writeFileSync(`${folder}/manifest.json`,JSON.stringify({version:'0.1.0',revision,app_image_id:imageId,platform:'linux/amd64',built_at:new Date().toISOString(),gateway:'2026.11.6',gateway_digest:'sha256:65e229536a2698f0ab211c8a3d1c5c8e2685d19379d153e95f93ff76f22779cf',postgres_digest:'sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb',model:'deepseek/deepseek-flash'},null,2)+'\n');
+const fingerprint=execFileSync('python3',['scripts/image-fingerprint.py',`anylink-agent:${revision.slice(0,12)}`],{encoding:'utf8'}).trim();
+fs.writeFileSync(`${folder}/manifest.json`,JSON.stringify({version:'0.1.0',revision,app_image_id:imageId,app_image_fingerprint:fingerprint,platform:'linux/amd64',built_at:new Date().toISOString(),gateway:'2026.11.6',gateway_digest:'sha256:65e229536a2698f0ab211c8a3d1c5c8e2685d19379d153e95f93ff76f22779cf',postgres_digest:'sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb',model:'deepseek/deepseek-flash'},null,2)+'\n');
 JS
-(cd "$folder" && shasum -a 256 images.tar.gz compose.yaml openclaw.json release.env remote-up.sh manifest.json > SHA256SUMS)
+(cd "$folder" && shasum -a 256 images.tar.gz compose.yaml openclaw.json release.env remote-up.sh image-fingerprint.py manifest.json > SHA256SUMS)
 printf 'Release ready: %s\n' "$folder"
