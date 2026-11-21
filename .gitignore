@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+secrets/
+data/
+backups/
+artifacts/
+*.log
+*.tar
+*.tar.gz
+*.sql.gz
+.DS_Store
+playwright-report/
+test-results/
