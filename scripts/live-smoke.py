@@ -19,7 +19,7 @@ report = {'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat()
 suffix = uuid.uuid4().hex[:10]
 
 def api(path, method='GET', body=None, key=None, headers=None, expected=200):
-    h = {'Content-Type': 'application/json', **(headers or {})}
+    h = {**({'Content-Type': 'application/json'} if body is not None else {}), **(headers or {})}
     if method != 'GET':
         h['Idempotency-Key'] = key or str(uuid.uuid4())
         report['idempotency_keys'].append(h['Idempotency-Key'])
