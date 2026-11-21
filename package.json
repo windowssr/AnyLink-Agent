@@ -22,7 +22,8 @@
     "test:mac-control": "node --test mac/control/*.test.mjs",
     "start": "node dist/server/index.js",
     "desktop:voice:install": "node mac/voice/install.mjs",
-    "test:voice:input": "PYTHONPYCACHEPREFIX=artifacts/python-cache python3 mac/voice/test_synthesize.py"
+    "test:voice:input": "PYTHONPYCACHEPREFIX=artifacts/python-cache python3 mac/voice/test_synthesize.py",
+    "desktop:branding": "node mac/branding/install.mjs"
   },
   "dependencies": {
     "@fastify/static": "10.1.12",

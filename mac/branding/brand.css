@@ -1,0 +1,6 @@
+/* Limit overrides to product identity surfaces; normal tool and provider icons remain semantic. */
+.anylink-brand-portrait{position:relative!important;display:inline-flex!important;align-items:center;justify-content:center;overflow:hidden;border-radius:28%;background:#eaf5ff;min-width:1em;min-height:1em;vertical-align:middle}
+.anylink-brand-portrait>*{visibility:hidden!important}
+.anylink-brand-portrait::after{content:"";position:absolute!important;inset:0!important;background:var(--anylink-brand-portrait) center/cover no-repeat;border-radius:inherit;pointer-events:none;z-index:2}
+img.anylink-brand-avatar{object-fit:cover;border-radius:28%;background:#eaf5ff}
+openclaw-mascot.anylink-brand-portrait{width:var(--openclaw-mascot-size,32px);height:var(--openclaw-mascot-size,32px)}

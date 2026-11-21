@@ -1,10 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn,execFileSync} from 'node:child_process';
 import {paths} from './configure.mjs';
 const connection=JSON.parse(fs.readFileSync(paths.connection,'utf8'));
 const node=path.join(paths.runtime,'node_modules/node/bin/node'),cli=path.join(paths.runtime,'node_modules/openclaw/openclaw.mjs');
 const log=event=>process.stdout.write(JSON.stringify({event,time:new Date().toISOString()})+'\n');
+// Reapply only the reviewed cosmetic adapter after a pinned runtime reinstall.
+// A missing portrait or incompatible UI never prevents the Agent from starting.
+if(fs.existsSync(path.join(paths.root,'data/mac/branding/avatar.png'))&&!fs.existsSync(path.join(paths.root,'data/mac/branding/disabled'))){
+  try{execFileSync(node,[path.join(paths.root,'mac/branding/apply.mjs')],{stdio:['ignore','inherit','inherit']});}
+  catch{log('ui_branding_not_applied');}
+}
 let stopping=false,tunnel,reconnect;
 function connect(){
   if(stopping)return;

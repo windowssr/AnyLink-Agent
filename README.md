@@ -28,6 +28,7 @@ node mac/install-control.mjs
 node mac/configure-control.mjs
 npm run desktop:companion:install
 npm run desktop:companion:configure
+npm run desktop:branding
 # 可选在线神经语音：先阅读语音说明并同意文字发送给微软
 npm run desktop:voice:install
 node mac/voice/select.mjs sweet-lively --consent-microsoft
@@ -106,3 +107,5 @@ npm run test:integration
 - [当前产品设计](docs/product/README.md)
 - [修正后的 Mac 施工基线](docs/implementation/03-edge-mac-plan.md)
 - [V0.1 历史原型验收](docs/implementation/02-validation.md)
+
+OpenClaw 聊天界面的标识与助手头像采用本机大肥鱼模型生成的统一头像，详见[界面标识与还原](docs/implementation/11-dafeiyu-branding.md)。
