@@ -40,15 +40,23 @@ node mac/cli.mjs open
 
 `mac/start.mjs` 管理本地 Gateway 和专属 SSH 隧道：本机 3181 → ywc 的回环 3180。隧道断开会重连，本地 Gateway 和 UI 保持运行；云端暂不可达时推理 / 记忆请求报告未完成，不通过重启整个任务来掩盖断线。
 
-`node mac/launch-agent.mjs` 先在项目目录生成可审阅的 `data/mac/com.anylink.openclaw.plist`。安装到 `~/Library/LaunchAgents/com.anylink.openclaw.plist` 后，通过以下命令管理当前用户服务：
+`node mac/launch-agent.mjs` 先在项目目录生成可审阅的 `data/mac/com.anylink.openclaw.plist`。首次安装到当前用户目录并启动：
+
+```bash
+mkdir -p "$HOME/Library/LaunchAgents"
+install -m 600 data/mac/com.anylink.openclaw.plist "$HOME/Library/LaunchAgents/com.anylink.openclaw.plist"
+launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.anylink.openclaw.plist"
+```
+
+之后通过以下命令管理当前用户服务：
 
 ```bash
 launchctl print gui/$(id -u)/com.anylink.openclaw
-launchctl kickstart -k gui/$(id -u)/com.anylink.openclaw
+launchctl kill SIGTERM gui/$(id -u)/com.anylink.openclaw
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anylink.openclaw.plist
 ```
 
-停止服务不会删除本机状态或云端事实。日志为本机进程输出，日常排障避免打印完整配置和环境变量。
+正常重启使用 SIGTERM；LaunchAgent 为原生 Gateway 保留 360 秒收尾预算，Gateway 退出后才关闭隧道。停止服务不会删除本机状态或云端事实。日志为本机进程输出，日常排障避免打印完整配置和环境变量。
 
 ## 云端
 

@@ -19,7 +19,8 @@ const env={...process.env,PATH:path.dirname(node)+':'+(process.env.PATH??'/usr/b
 // DeepSeek credentials never enter this process; OpenClaw owns the Agent loop.
 delete env.DEEPSEEK_API_KEY;
 const gateway=spawn(node,[cli,'gateway','--port','18791','--bind','loopback'],{env,stdio:'inherit',cwd:paths.workspace});
-const shutdown=()=>{if(stopping)return;stopping=true;clearTimeout(reconnect);gateway.kill('SIGTERM');tunnel?.kill('SIGTERM');};
+// Keep the model connection available until the native Gateway has drained its owned work.
+const shutdown=()=>{if(stopping)return;stopping=true;clearTimeout(reconnect);gateway.kill('SIGTERM');};
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
 gateway.on('error',()=>{log('local_openclaw_start_failed');shutdown();process.exitCode=1;});
-await new Promise(resolve=>gateway.on('exit',code=>{if(!stopping)process.exitCode=code??1;shutdown();resolve();}));
+await new Promise(resolve=>gateway.on('close',code=>{if(!stopping)process.exitCode=code??1;stopping=true;clearTimeout(reconnect);tunnel?.kill('SIGTERM');resolve();}));
