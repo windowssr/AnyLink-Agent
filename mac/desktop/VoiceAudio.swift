@@ -144,7 +144,9 @@ final class VoiceAudio {
             if self.outputEpoch == epoch { self.neuralTask = nil; self.reportIdle() }
         }
     }
-    private func reportIdle() { if !hasOutput { onOutput?(false) } }
+    // Pending network synthesis remains interruptible via hasOutput, but must
+    // not keep the mouth moving across a gap with no scheduled audio.
+    private func reportIdle() { if scheduled == 0 && synthesizing == 0 { onOutput?(false) } }
     func interrupt() {
         outputEpoch &+= 1
         neuralTask?.cancel(); neuralTask = nil; neuralPending.removeAll()
