@@ -37,4 +37,6 @@ node mac/branding/restore.mjs
 - 在已安装的 AnyLink 内检查侧栏头像、助手入口及聊天页面；历史消息和 DeepSeek Flash 会话设置正常加载。旧会话的助手文字头像也覆盖为人物形象。
 - 源码凭据扫描通过；图片、受保护配置和本机运行数据排除在 Git 外。离屏渲染的临时目录与编译缓存已清除，本次没有创建新的 `.app` 备份。
 
+原生窗口回归也观察到后台 WebView 被 macOS 挂起、WebSocket 以 `WebSocket is closed due to suspension` 关闭的现象。Gateway 保持就绪，窗口仍可显示缓存历史和新头像，但最后一次重新打开时会话设置仍在恢复。本轮没有修改原生 WebView 生命周期，因此不将最后一次重连后的消息提交计为通过。
+
 这是界面换标验证，没有再次发起模型请求或重跑电脑操作任务。
