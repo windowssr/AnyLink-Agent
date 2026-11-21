@@ -6,3 +6,4 @@
 
 .mobile-logout{display:none}.memory-device-filter{max-width:210px;font-size:11px}
 @media(max-width:700px){.mobile-logout{display:grid;margin-left:12px}.topbar .connection{margin-left:auto}.memory-device-filter{max-width:none}}
+.local-chat-link{color:var(--accent);text-decoration:none;font-size:12px}.credential-reveal{background:#25331f;border:1px solid #6b814c;border-radius:8px;padding:18px;margin-bottom:22px}.credential-reveal textarea{margin:12px 0;font-family:monospace;word-break:break-all}.device-card code{overflow-wrap:anywhere}.model-request-list{max-width:900px}

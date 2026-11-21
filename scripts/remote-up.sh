@@ -6,10 +6,9 @@ release=${1:?Usage: remote-up.sh /opt/anylink-agent/releases/COMMIT}
 case "$release" in "$base"/releases/*) ;; *) printf 'Invalid release path\n' >&2; exit 1;; esac
 test -f "$release/release.env"
 test -f "$base/secrets/app.env"
-test -f "$base/secrets/gateway.env"
+test -f "$base/secrets/model.env"
 test -f "$base/secrets/postgres.env"
-mkdir -p "$base/data/postgres" "$base/data/openclaw" "$base/backups"
-chown 1000:1000 "$base/data/openclaw"
+mkdir -p "$base/data/postgres" "$base/backups"
 compose=(docker compose --project-name anylink-agent --env-file "$release/release.env" -f "$release/compose.yaml")
 source "$release/release.env"
 python3 - "$release/manifest.json" "$APP_IMAGE" "$release/image-fingerprint.py" <<'PY'
@@ -18,18 +17,16 @@ manifest=json.load(open(sys.argv[1]))
 actual=subprocess.check_output(['python3',sys.argv[3],sys.argv[2]],text=True).strip()
 if actual!=manifest['app_image_fingerprint']:raise SystemExit('App content/config fingerprint does not match release manifest')
 PY
-for image in "$OPENCLAW_IMAGE" "$POSTGRES_IMAGE"; do
+for image in "$POSTGRES_IMAGE"; do
   if ! docker image inspect "$image" >/dev/null 2>&1; then docker pull --platform linux/amd64 "$image"; fi
 done
 if [ "$(docker inspect --format '{{.State.Running}}' anylink-agent-postgres-1 2>/dev/null || true)" = true ]; then
   docker exec anylink-agent-postgres-1 pg_dump -U anylink -d anylink -Fc > "$base/backups/before-$(date -u +%Y%m%dT%H%M%SZ).dump"
 fi
 old=$(readlink -f "$base/current" 2>/dev/null || true)
-"${compose[@]}" stop -t 90 app openclaw
-install -m 600 -o 1000 -g 1000 "$release/openclaw.json" "$base/data/openclaw/openclaw.json"
+"${compose[@]}" stop -t 25 app
 if ! "${compose[@]}" up -d --wait --wait-timeout 240; then
   if [ -n "$old" ] && [ "$old" != "$release" ]; then
-    install -m 600 -o 1000 -g 1000 "$old/openclaw.json" "$base/data/openclaw/openclaw.json"
     docker compose --project-name anylink-agent --env-file "$old/release.env" -f "$old/compose.yaml" up -d --wait --wait-timeout 240
     printf 'New release failed; restored %s\n' "$(basename "$old")" >&2
   fi

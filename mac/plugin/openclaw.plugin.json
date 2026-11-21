@@ -1,0 +1,51 @@
+{
+  "id": "anylink-memory",
+  "name": "AnyLink Cloud Memory",
+  "description": "Shared cloud facts for the local Mac agent. Never runs a cloud agent.",
+  "version": "0.2.0",
+  "contracts": {
+    "tools": [
+      "anylink_memory_search",
+      "anylink_memory_save",
+      "anylink_memory_update",
+      "anylink_memory_delete"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "connectionFile": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "connectionFile"
+    ],
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "toolMetadata": {
+    "anylink_memory_search": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_memory_save": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_memory_update": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_memory_delete": {
+      "profiles": [
+        "coding"
+      ]
+    }
+  }
+}

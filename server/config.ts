@@ -7,12 +7,12 @@ function secret(name: string) {
 }
 export function loadConfig() {
   return z.object({
-    databaseUrl: z.string().min(1), ownerToken: z.string().min(24), gatewayToken: z.string().min(24),
-    gatewayUrl: z.url().default('http://openclaw:18789'), origin: z.url().default('http://127.0.0.1:3180'),
+    databaseUrl: z.string().min(1), ownerToken: z.string().min(24), deepseekApiKey:z.string().min(20),
+    deepseekBaseUrl:z.url().default('https://api.deepseek.com/v1'),origin: z.url().default('http://127.0.0.1:3180'),
     host: z.string().default('127.0.0.1'), port: z.coerce.number().int().min(1).max(65535).default(3180),
   }).parse({
-    databaseUrl: secret('DATABASE_URL'), ownerToken: secret('OWNER_TOKEN'), gatewayToken: secret('GATEWAY_TOKEN'),
-    gatewayUrl: process.env.GATEWAY_URL, origin: process.env.APP_ORIGIN,
+    databaseUrl: secret('DATABASE_URL'), ownerToken: secret('OWNER_TOKEN'),deepseekApiKey:secret('DEEPSEEK_API_KEY'),
+    deepseekBaseUrl:process.env.DEEPSEEK_BASE_URL, origin: process.env.APP_ORIGIN,
     host: process.env.HOST, port: process.env.PORT,
   });
 }

@@ -13,7 +13,6 @@ export const memorySchema = z.object({
   if (v.scope === 'global' && v.applicable_device_id) c.addIssue({code:'custom',message:'全局记忆不能绑定适用设备'});
 });
 export const memoryPatchSchema = z.object({ title: z.string().trim().min(1).max(120).optional(), content: z.string().trim().min(1).max(4000).optional(), expected_revision: z.number().int().positive() }).strict().refine(v => v.title !== undefined || v.content !== undefined, '至少修改一个字段');
-export const taskSchema = z.object({ goal: z.string().trim().min(1).max(2000), target_device_id: z.uuid(), origin_device_id: z.uuid().nullable().optional(), conversation_id: z.uuid().nullable().optional() }).strict();
 export type Source = { deviceId?: string | null; requestId?: string | null; kind: string };
 export async function requireDevice(db: Queryable, id?: string | null) {
   if (!id) return;
@@ -70,22 +69,4 @@ export async function memoryDirectory(db: Queryable, id: string) {
   await requireDevice(db,id);
   const facts=await searchMemories(db,{device_id:id});
   return { device_id:id,executor_connected:false,source:'current_active_facts',entries:facts.map(m=>({id:m.id,title:m.title,revision:m.revision,updated_at:m.updated_at})) };
-}
-export async function createTask(db: Queryable, input: z.infer<typeof taskSchema>, source: Source) {
-  await requireDevice(db,input.target_device_id); await requireDevice(db,source.deviceId ?? input.origin_device_id);
-  if(input.conversation_id) await requireConversation(db,input.conversation_id);
-  return (await db.query(`INSERT INTO tasks(id,owner_id,goal,origin_device_id,target_device_id,conversation_id,source_request_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *,false AS execution_enabled`,[randomUUID(),OWNER_ID,input.goal,source.deviceId ?? input.origin_device_id ?? null,input.target_device_id,input.conversation_id ?? null,source.requestId ?? null])).rows[0];
-}
-export async function listTasks(db: Queryable) {
-  return (await db.query(`SELECT t.*,d.name AS target_name,o.name AS origin_name,false AS execution_enabled FROM tasks t JOIN devices d ON d.id=t.target_device_id LEFT JOIN devices o ON o.id=t.origin_device_id WHERE t.owner_id=$1 ORDER BY t.created_at DESC LIMIT 100`,[OWNER_ID])).rows;
-}
-export async function getTask(db: Queryable,id:string) {
-  const row=(await db.query(`SELECT t.*,d.name AS target_name,o.name AS origin_name,false AS execution_enabled FROM tasks t JOIN devices d ON d.id=t.target_device_id LEFT JOIN devices o ON o.id=t.origin_device_id WHERE t.owner_id=$1 AND t.id=$2`,[OWNER_ID,id])).rows[0];
-  if(!row)throw new ApiError(404,'TASK_NOT_FOUND','任务不存在');return row;
-}
-export async function cancelTask(db: Queryable, id: string) {
-  const row=(await db.query(`UPDATE tasks SET status='cancelled',revision=revision+CASE WHEN status='cancelled' THEN 0 ELSE 1 END,updated_at=CASE WHEN status='cancelled' THEN updated_at ELSE now() END WHERE id=$1 AND owner_id=$2 RETURNING *,false AS execution_enabled`,[id,OWNER_ID])).rows[0];
-  if(!row) throw new ApiError(404,'TASK_NOT_FOUND','任务不存在');
-  return row;
 }

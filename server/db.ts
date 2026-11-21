@@ -49,5 +49,19 @@ CREATE TABLE IF NOT EXISTS tasks(id uuid PRIMARY KEY,owner_id uuid NOT NULL,goal
 INSERT INTO schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING;
 `;
 export async function migrate(db: Db) {
-  await transaction(db, async c => { await c.query('SELECT pg_advisory_xact_lock(3180001)'); await c.query(schema); });
+  await transaction(db, async c => {
+    await c.query('SELECT pg_advisory_xact_lock(3180001)');await c.query(schema);
+    await c.query(`CREATE TABLE IF NOT EXISTS edge_credentials(
+      id uuid PRIMARY KEY,device_id uuid NOT NULL REFERENCES devices(id),token_hash text NOT NULL UNIQUE,
+      created_at timestamptz NOT NULL DEFAULT now(),last_used_at timestamptz,revoked_at timestamptz);
+      CREATE UNIQUE INDEX IF NOT EXISTS one_edge_credential ON edge_credentials(device_id) WHERE revoked_at IS NULL;
+      CREATE TABLE IF NOT EXISTS model_requests(
+      id uuid PRIMARY KEY,credential_id uuid NOT NULL REFERENCES edge_credentials(id),device_id uuid NOT NULL REFERENCES devices(id),
+      model text NOT NULL,state text NOT NULL CHECK(state IN ('submitted','completed','rejected','submission_unknown','cancelled')),
+      prompt_tokens integer,completion_tokens integer,error_code text,created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz);
+      CREATE INDEX IF NOT EXISTS model_device_recent ON model_requests(device_id,created_at);
+      INSERT INTO schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING;`);
+    // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
+    await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");
+  });
 }
