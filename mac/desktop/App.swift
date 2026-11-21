@@ -31,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var root: URL?
     private var computer: MacControlCoordinator?
     private var companion: CompanionCoordinator?
+    private var voice: (any VoiceControlling)?
+    private var terminationReplied = false
     private var serviceError: String?
     private var checkingInterface = false
     private var pendingInterfaceRoute: String?
@@ -59,7 +61,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         buildWindow()
         buildStatusItem()
         if let root {
-            do { companion = try CompanionCoordinator(root:root,openChat:{ [weak self] in self?.showWindow(nil) }) }
+            do {
+                companion = try CompanionCoordinator(root:root,openChat:{ [weak self] in self?.showMainChat() })
+                companion?.currentSession = { [weak self] in
+                    guard let path = self?.webView?.url?.path else { return nil }
+                    if path == "/openclaw/new" { return "__new__" }
+                    guard path.contains("/chat/main/") else { return nil }
+                    return path.components(separatedBy:"/").last
+                }
+                companion?.openRecord = { [weak self] agent,id in self?.openConversationRecord(agent:agent,id:id,sessionKey:"agent:companion:anylink:buddy:"+id.lowercased()) }
+                companion?.openVoice = { [weak self] in self?.openVoice() }
+                companion?.interruptVoice = { [weak self] in self?.voice?.interruptOutput() }
+                companion?.onSuspend = { [weak self] in self?.voice?.stop() }
+            }
             catch { status.stringValue = "桌面伙伴素材不可用，聊天仍可使用" }
         }
         showWindow(nil)
@@ -95,6 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         view.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
         view.addItem(menuItem("显示／隐藏桌面伙伴", #selector(toggleCompanion)))
         view.addItem(menuItem("定位桌面伙伴", #selector(revealCompanion)))
+        view.addItem(menuItem("语音聊天…", #selector(openVoice)))
+        view.addItem(menuItem("停止说话与语音", #selector(stopVoice)))
         view.addItem(menuItem("打开工作区", #selector(openWorkspace), "1"))
         view.addItem(menuItem("打开日志文件夹", #selector(openLogs)))
         view.addItem(menuItem("在浏览器打开", #selector(openBrowser)))
@@ -130,7 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let reload = NSButton(title: "重新连接", target: self, action: #selector(reconnect)); reload.bezelStyle = .rounded
         let control = NSButton(title: "电脑控制", target: self, action: #selector(openComputerControl)); control.bezelStyle = .rounded
         let companion = NSButton(title:"桌面伙伴",target:self,action:#selector(revealCompanion)); companion.bezelStyle = .rounded
-        for view in [progress, status, spacer, companion, control, workspace, reload] { toolbar.addArrangedSubview(view) }
+        let voice = NSButton(title:"语音聊天",target:self,action:#selector(openVoice)); voice.bezelStyle = .rounded
+        for view in [progress, status, spacer, companion, voice, control, workspace, reload] { toolbar.addArrangedSubview(view) }
         content.addSubview(toolbar)
 
         let config = WKWebViewConfiguration()
@@ -182,6 +199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         menu.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
         menu.addItem(menuItem("显示／隐藏桌面伙伴", #selector(toggleCompanion)))
         menu.addItem(menuItem("定位桌面伙伴", #selector(revealCompanion)))
+        menu.addItem(menuItem("语音聊天…", #selector(openVoice)))
+        menu.addItem(menuItem("停止说话与语音", #selector(stopVoice)))
         menu.addItem(.separator())
         menu.addItem(menuItem("退出 AnyLink 窗口", #selector(quit)))
         statusItem.menu = menu
@@ -204,11 +223,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let current = webView?.url
         let route = [current, remembered].compactMap { $0 }.first(where: { isLocal($0) && !$0.path.contains("/__openclaw__/session-entry") }) ?? gateway
         var components = URLComponents(url: route, resolvingAgainstBaseURL: false)!
-        components.queryItems = components.queryItems?.filter { $0.name == "agent" }
+        components.queryItems = components.queryItems?.filter { ["agent","__openclawSessionKey"].contains($0.name) }
         // Chat document GETs otherwise render OpenClaw's public reader first.
         // Use its official protected handoff; the Gateway still checks access.
         if route.path.hasPrefix("/openclaw/chat/") {
-            let returnPath = components.percentEncodedPath
+            let returnPath = components.percentEncodedPath+(components.percentEncodedQuery.map { "?"+$0 } ?? "")
             components.path = "/openclaw/__openclaw__/session-entry"
             components.queryItems = [URLQueryItem(name: "path", value: returnPath)]
         }
@@ -219,8 +238,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private func saveRoute() {
         guard let url = webView?.url, isLocal(url), !url.path.contains("/__openclaw__/session-entry"), var route = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
         route.fragment = nil
-        route.queryItems = route.queryItems?.filter { $0.name == "agent" }
-        if let url = route.url { UserDefaults.standard.set(url.absoluteString, forKey: "lastChatRoute") }
+        route.queryItems = route.queryItems?.filter { ["agent","__openclawSessionKey"].contains($0.name) }
+        if let url = route.url {
+            UserDefaults.standard.set(url.absoluteString, forKey: "lastChatRoute")
+            if url.path.contains("/chat/main/") { UserDefaults.standard.set(url.absoluteString,forKey:"lastMainChatRoute") }
+        }
     }
 
     private func pollHealth() {
@@ -356,6 +378,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     @objc private func stopComputerControl() { computer?.stopControl() }
     @objc private func toggleCompanion() { companion?.toggle() }
     @objc private func revealCompanion() { companion?.reveal() }
+    private func showMainChat() {
+        if webView.url?.path.contains("/chat/main/") == true { showWindow(nil); return }
+        if let value = UserDefaults.standard.string(forKey:"lastMainChatRoute"),let url = URL(string:value),isLocal(url),let id = url.path.components(separatedBy:"/").last { openConversationRecord(agent:"main",id:id); return }
+        do {
+            var url = URLComponents(string:"http://127.0.0.1:18791/openclaw/new?agent=main")!; url.fragment = "token="+(try token())
+            var request = URLRequest(url:url.url!); request.setValue("Bearer "+(try token()),forHTTPHeaderField:"Authorization")
+            pageLoaded = true; webView.load(request); showWindow(nil)
+        } catch { showWindow(nil) }
+    }
+    @objc private func openVoice() {
+        guard let root else { return }
+        if voice == nil {
+            do {
+                if #available(macOS 26.0, *) {
+                    let controller = try VoiceCoordinator(root:root,openChat:{ [weak self] id in self?.openConversationRecord(agent:"main",id:id,sessionKey:"agent:main:anylink:voice:"+id.lowercased()) })
+                    controller.onActivity = { [weak self] running,speaking in self?.companion?.setVoiceActivity(running:running,speaking:speaking) }; voice = controller
+                } else { let alert = NSAlert(); alert.messageText = "本地语音输入需要 macOS 26"; alert.informativeText = "当前系统仍可使用文字聊天和伙伴中文播报。"; alert.runModal(); return }
+            } catch { status.stringValue = "语音初始化失败，请检查本机凭据与权限。"; return }
+        }
+        companion?.stopSpeaking(); voice?.show()
+    }
+    @objc private func stopVoice() { voice?.stop(); companion?.stopSpeaking() }
+    private func openConversationRecord(agent: String,id: String,sessionKey: String? = nil) {
+        let identifier = id.replacingOccurrences(of:"-",with:"").lowercased()
+        guard ["main","companion"].contains(agent),identifier.range(of:"^[a-f0-9]{32}$",options:.regularExpression) != nil else { return }
+        do {
+            var components = URLComponents(string:"http://127.0.0.1:18791/openclaw/__openclaw__/session-entry")!
+            var destination = URLComponents(); destination.path = "/openclaw/chat/"+agent+"/"+identifier
+            // Short IDs can collide across legacy session-key namespaces. The
+            // official literal-key path resolves the exact native-owned key.
+            if let sessionKey { destination.path = "/openclaw/chat/"+agent+"/~key/"+sessionKey.components(separatedBy:":").dropFirst(2).joined(separator:"/") }
+            components.queryItems = [URLQueryItem(name:"path",value:destination.string!)]; components.fragment = "token="+(try token())
+            var request = URLRequest(url:components.url!); request.setValue("Bearer "+(try token()),forHTTPHeaderField:"Authorization")
+            pageLoaded = true; pendingInterfaceRoute = nil; pendingInterfaceSince = nil
+            webView.load(request); showWindow(nil)
+        } catch { status.stringValue = "无法打开本机聊天记录。" }
+    }
     @objc private func openLogs() { if let root = root { NSWorkspace.shared.open(root.appendingPathComponent("data/mac/logs")) } }
     @objc private func openBrowser() {
         do {
@@ -376,6 +435,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(nil); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) { saveRoute(); companion?.stop() }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        companion?.stop()
+        guard let voice else { return .terminateNow }
+        terminationReplied = false
+        Task { await voice.shutdown(); if !terminationReplied { terminationReplied = true; NSApp.reply(toApplicationShouldTerminate:true) } }
+        Task { try? await Task.sleep(nanoseconds:3_000_000_000); if !terminationReplied { terminationReplied = true; NSApp.reply(toApplicationShouldTerminate:true) } }
+        return .terminateLater
+    }
     func windowWillClose(_ notification: Notification) { saveRoute() }
 
     private func isLocal(_ url: URL) -> Bool {

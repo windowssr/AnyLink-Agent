@@ -8,13 +8,15 @@ Mac 上运行成熟 OpenClaw，自己服务器提供统一记忆和模型 API。
               └⇄ ywc 记忆 API ⇄ PostgreSQL
 ```
 
-当前服务版本 V0.3，Mac 桌面版本 V0.4，使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行；桌面新增正常比例的蓝色大肥鱼 Live2D 伙伴。Android、语音和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
+当前服务版本 V0.3，Mac 桌面版本 V0.5，使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行；正常比例的蓝色大肥鱼 Live2D 伙伴已加入聊天表情与动作、主动招呼、桌面漫游、中文播报及原生语音入口。Android 和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
 
 ## 在当前 Mac 使用
 
 双击 `~/Applications/AnyLink.app`，即可在独立 Mac 窗口中聊天、查看工具执行结果；菜单栏提供电脑控制、重新连接、工作区和日志入口。关闭窗口或退出桌面壳后，后台 Agent 继续运行。
 
-桌面伙伴可以拖动、单击举手、双击打开聊天；右键可选择举手、竖起手指、点头、大小和隐藏。工具栏“桌面伙伴”可重新定位角色。状态气泡读取本地 Agent 的只读运行状态，不产生另一条模型请求。角色和 Core 只安装在本机，商业发布需另行确认素材许可，详见[桌面伙伴说明](docs/implementation/08-desktop-companion.md)。
+桌面伙伴可以拖动、缩放、自由漫游，聊天时按语气或模型选择做表情和动作，并用已选的“活泼甜妹”神经女声播报。右键“现在聊两句”可立即请求一次真实模型招呼；“主动找我聊天”“自由走动”“语音播报 · 活泼甜妹”和免打扰可分别控制。默认白天每 20–40 分钟择机搭话，任务忙碌、离开、睡眠、免打扰或 23:00–08:00 时暂停，连续两次未回应后等待用户重新交流。正常状态轮询不调用模型，主动招呼才发起单独的本机 Agent 回合。详情见[伙伴行为与语音](docs/implementation/09-companion-behavior-and-voice.md)。
+
+工具栏“语音聊天”打开本地面板，点击“开始语音聊天”后才开启麦克风；结束或关闭面板即停止收音。本地中文识别使用 macOS 26 SpeechAnalyzer，文字经本机 OpenClaw → ywc → DeepSeek，原始音频不上传、不保存；回复文字经用户同意发送给微软在线语音服务；播放在本机，LLM 和记忆通路不变。文字聊天、伙伴播报和漫游仍支持 macOS 15。角色与 Core 的安装及许可见[素材说明](mac/companion/ASSET-NOTICE.md)。
 
 在“电脑控制”中显式启用，并为 Peekaboo 开启 macOS 辅助功能和屏幕录制权限后，可以操作所选软件窗口、点击、输入、快捷键、滚动和拖拽。窗口截图与界面文字随任务经 ywc 发送给 Flash 理解；停止按钮可阻止后续控制。详情见[Mac 电脑控制说明](docs/implementation/07-mac-computer-control.md)。
 
@@ -25,6 +27,10 @@ node mac/configure-desktop.mjs
 node mac/install-control.mjs
 node mac/configure-control.mjs
 npm run desktop:companion:install
+npm run desktop:companion:configure
+# 可选在线神经语音：先阅读语音说明并同意文字发送给微软
+npm run desktop:voice:install
+node mac/voice/select.mjs sweet-lively --consent-microsoft
 npm run desktop:build
 npm run desktop:install
 open ~/Applications/AnyLink.app
@@ -94,6 +100,7 @@ npm run test:integration
 - [Mac 桌面应用、构建与更新](docs/implementation/06-mac-desktop.md)
 - [Mac 电脑控制、权限与验收](docs/implementation/07-mac-computer-control.md)
 - [蓝色大肥鱼 Live2D 桌面伙伴](docs/implementation/08-desktop-companion.md)
+- [聊天联动、主动陪伴、漫游与语音](docs/implementation/09-companion-behavior-and-voice.md)
 - [V0.2 真实验收记录](docs/implementation/05-edge-validation.md)
 - [当前产品设计](docs/product/README.md)
 - [修正后的 Mac 施工基线](docs/implementation/03-edge-mac-plan.md)

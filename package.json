@@ -17,9 +17,12 @@
     "desktop:install": "node mac/install-app.mjs",
     "desktop:control:install": "node mac/install-control.mjs",
     "desktop:companion:install": "node mac/companion/install.mjs",
+    "desktop:companion:configure": "node mac/configure-companion.mjs",
     "test:companion": "node --test mac/companion/*.test.mjs && node mac/companion/asset-check.mjs",
     "test:mac-control": "node --test mac/control/*.test.mjs",
-    "start": "node dist/server/index.js"
+    "start": "node dist/server/index.js",
+    "desktop:voice:install": "node mac/voice/install.mjs",
+    "test:voice:input": "PYTHONPYCACHEPREFIX=artifacts/python-cache python3 mac/voice/test_synthesize.py"
   },
   "dependencies": {
     "@fastify/static": "10.1.12",

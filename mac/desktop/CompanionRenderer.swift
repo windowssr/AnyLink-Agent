@@ -65,9 +65,9 @@ final class CompanionRenderer: NSObject, WKScriptMessageHandler, WKNavigationDel
         webView.stopLoading(); webView.loadHTMLString("",baseURL:nil); onChange?()
     }
     private func fail() { ready = false; hit = false; status = "load_failed"; onChange?() }
-    func update(mood: CompanionMood,x: Double,y: Double,reducedMotion: Bool) {
+    func update(mood: CompanionMood,x: Double,y: Double,reducedMotion: Bool,emotion: CompanionEmotion = .neutral,speaking: Bool = false,walking: Bool = false,direction: Double = 1) {
         guard ready,!evaluating else { return }; evaluating = true
-        let value: [String:Any] = ["mood":mood.rawValue,"x":x,"y":y,"reducedMotion":reducedMotion]
+        let value: [String:Any] = ["mood":mood.rawValue,"x":x,"y":y,"reducedMotion":reducedMotion,"emotion":emotion.rawValue,"speaking":speaking,"walking":walking,"direction":direction]
         guard let data = try? JSONSerialization.data(withJSONObject:value), let json = String(data:data,encoding:.utf8) else { evaluating = false; return }
         webView.evaluateJavaScript("window.anylinkAvatar?.update(\(json))") { [weak self] _,_ in self?.evaluating = false }
     }

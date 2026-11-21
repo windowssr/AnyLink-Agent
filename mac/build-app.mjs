@@ -23,7 +23,7 @@ run(process.execPath,['mac/companion/asset-check.mjs']);
 fs.rmSync(app,{recursive:true,force:true});
 for(const dir of [resources,binaries,cache])fs.mkdirSync(dir,{recursive:true});
 const compilerArgs=['-swift-version','5','-O','-module-cache-path',cache,'-target',`${architecture}-apple-macosx${version.minimumMacOS}`];
-run('/usr/bin/xcrun',['swiftc',...compilerArgs,'-parse-as-library','mac/desktop/App.swift','mac/desktop/MacControl.swift','mac/desktop/LocalGatewayClient.swift','mac/desktop/CompanionState.swift','mac/desktop/CompanionRenderer.swift','mac/desktop/CompanionView.swift','mac/desktop/Companion.swift','-o',path.join(binaries,'AnyLink'),'-framework','AppKit','-framework','WebKit']);
+run('/usr/bin/xcrun',['swiftc',...compilerArgs,'-parse-as-library',...['App','MacControl','LocalGatewayClient','CompanionState','CompanionBehavior','NeuralSpeech','CompanionSpeech','CompanionConversation','CompanionRenderer','CompanionView','Companion','VoiceCore','VoiceAudio','VoiceGateway','Voice'].map(name=>'mac/desktop/'+name+'.swift'),'-o',path.join(binaries,'AnyLink'),'-framework','AppKit','-framework','WebKit','-framework','AVFoundation','-framework','Speech']);
 const companionResources=path.join(resources,'CompanionRenderer');fs.mkdirSync(companionResources,{recursive:true});
 fs.cpSync(path.join(root,'mac/companion/web'),companionResources,{recursive:true});
 fs.cpSync(path.join(root,'mac/companion/vendor'),path.join(companionResources,'vendor'),{recursive:true});
@@ -61,6 +61,8 @@ const plist=`<?xml version="1.0" encoding="UTF-8"?>
 <key>LSMinimumSystemVersion</key><string>${xml(version.minimumMacOS)}</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>开启语音聊天后，在本机识别你说的话；结束语音即关闭麦克风。</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>将你主动开启的语音聊天转换为文字，交给本机助理处理。</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>\n`;
 fs.writeFileSync(path.join(app,'Contents/Info.plist'),plist);

@@ -1,6 +1,6 @@
 # AnyLink：边缘 Agent 产品设计
 
-版本：Mac 桌面 v0.4／云端服务 v0.3，沿用边缘 Agent 架构。修订日期：2026-11-22。**Mac 本地 OpenClaw、云端模型与记忆、鼠标键盘工具已打通；当前加入蓝色大肥鱼 Live2D 桌面伙伴。** 当前实现见[桌面伙伴](../implementation/08-desktop-companion.md)和 [Mac 电脑控制](../implementation/07-mac-computer-control.md)，基础记忆通路见 [V0.2 验收](../implementation/05-edge-validation.md)。语音暂停，其他模块仍按各自阶段推进。旧 V0.1 云端 Agent 原型已退役，历史数据保留。
+版本：Mac 桌面 v0.5／云端服务 v0.3，沿用边缘 Agent 架构。修订日期：2026-11-22。**Mac 本地 OpenClaw、云端模型与记忆、鼠标键盘工具已打通；蓝色大肥鱼已加入聊天表情动作、主动招呼、漫游和中文语音。** 当前实现见[伙伴行为与语音](../implementation/09-companion-behavior-and-voice.md)和 [Mac 电脑控制](../implementation/07-mac-computer-control.md)，基础记忆通路见 [V0.2 验收](../implementation/05-edge-validation.md)。Android 和设备间协作继续留到后续阶段。旧 V0.1 云端 Agent 原型已退役，历史数据保留。
 
 用户始终与所在设备的 Agent 交互。Mac 运行成熟 harness，管理会话、上下文、工具循环、任务、权限、语音和形象；服务器只提供共享记忆与模型调用服务，以及这两种服务必需的身份、配额和运维设施。
 

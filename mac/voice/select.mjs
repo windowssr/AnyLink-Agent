@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {paths} from '../configure.mjs';
+const profile=process.argv[2];
+if(!['sweet-lively','sweet-warm','off'].includes(profile))throw new Error('Choose sweet-lively, sweet-warm or off.');
+if(profile!=='off'&&!process.argv.includes('--consent-microsoft'))throw new Error('Explicit consent required: spoken chat text is sent to Microsoft online speech.');
+const file=path.join(paths.root,'data/mac/voice/neural.json');
+fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
+fs.writeFileSync(file,JSON.stringify({provider:'edge-tts',profile,enabled:profile!=='off',consent_microsoft:profile!=='off',selected_at:new Date().toISOString()},null,2)+'\n',{mode:0o600});
+console.log('Updated the local voice selection. No chat was submitted.');

@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {paths} from '../configure.mjs';
+const folder=path.join(paths.root,'data/mac/voice'),venv=path.join(folder,'neural-venv');
+fs.mkdirSync(folder,{recursive:true,mode:0o700});
+const run=args=>execFileSync('uv',args,{stdio:'inherit'});
+if(!fs.existsSync(path.join(venv,'bin/python')))run(['venv','--python','/usr/bin/python3',venv]);
+run(['pip','sync','--python',path.join(venv,'bin/python'),'--require-hashes',path.join(paths.root,'mac/voice/requirements.lock')]);
+console.log('Installed the optional neural speech runtime. Online speech remains disabled until explicit selection.');

@@ -2,7 +2,8 @@
 (() => {
   const send = value => window.webkit?.messageHandlers.anylinkAvatar.postMessage(value);
   window.addEventListener('error',() => send({type:'error',code:'renderer_failed'}));
-  let model, app, ready = false, input = {mood:'idle',x:-1,y:-1,reducedMotion:false}, lastMood, lastHit = false, actionEpoch = 0;
+  let model, app, ready = false, input = {mood:'idle',emotion:'neutral',x:-1,y:-1,reducedMotion:false,speaking:false,walking:false,direction:1}, lastMood, lastHit = false, actionEpoch = 0;
+  const emotions = new Set(['neutral','happy','excited','comfort','curious','apologetic']);
   const allowedMoods = new Set(['idle','thinking','working','attention','finished','offline','happy','sleepy']);
   const resetExpression = () => model?.internalModel.motionManager.expressionManager?.resetExpression();
   function fit() {
@@ -34,11 +35,12 @@
   window.anylinkAvatar = {
     update(value) {
       if (!value || !allowedMoods.has(value.mood)) return;
-      input = {mood:value.mood,x:Number.isFinite(value.x)?value.x:-1,y:Number.isFinite(value.y)?value.y:-1,reducedMotion:!!value.reducedMotion};
+      input = {mood:value.mood,emotion:emotions.has(value.emotion)?value.emotion:'neutral',x:Number.isFinite(value.x)?value.x:-1,y:Number.isFinite(value.y)?value.y:-1,reducedMotion:!!value.reducedMotion,speaking:!!value.speaking,walking:!!value.walking,direction:value.direction===-1?-1:1};
       if (!ready) return;
-      if (input.mood !== lastMood) {
-        lastMood = input.mood; resetExpression();
-        const expression = {happy:'blush',attention:'concerned',finished:'smile'}[input.mood];
+      const expressionKey = input.mood+':'+input.emotion;
+      if (expressionKey !== lastMood) {
+        lastMood = expressionKey; resetExpression();
+        const expression = {happy:'blush',excited:'smile',apologetic:'concerned'}[input.emotion] ?? {happy:'blush',attention:'concerned',finished:'smile'}[input.mood];
         if (expression) model.expression(expression);
       }
       // The library setter registers a ticker listener each time. Only toggle
@@ -55,11 +57,20 @@
     model.anchor.set(0.5,1); app.stage.addChild(model); fit();
     window.addEventListener('resize',fit);
     const internal = model.internalModel, core = internal.coreModel;
-    const hasAngleY = core.getParameterIndex('ParamAngleY') < core.getParameterCount();
+    const ids = ['ParamAngleY','ParamAngleZ','ParamBodyAngleZ','HipAngleX','LEGAngleZ2','ParamMouthOpenY'];
+    const available = new Set(ids.filter(id=>core.getParameterIndex(id)<core.getParameterCount()));
+    const set = (id,value) => {if(available.has(id))core.setParameterValueById(id,value);};
     internal.on('beforeModelUpdate',() => {
-      if (input.reducedMotion) return;
       const t = performance.now();
-      if (nodUntil > t && hasAngleY) core.setParameterValueById('ParamAngleY',Math.sin((nodUntil-t)/120)*8);
+      set('ParamMouthOpenY',input.speaking?0.18+Math.abs(Math.sin(t/94))*0.50:0);
+      if (input.reducedMotion) return;
+      if (nodUntil > t) set('ParamAngleY',Math.sin((nodUntil-t)/120)*8);
+      if(input.emotion==='curious')set('ParamAngleZ',6);
+      if(input.emotion==='comfort')set('ParamAngleY',-5);
+      if(input.walking){
+        set('ParamBodyAngleZ',Math.sin(t/230)*1.4);set('HipAngleX',Math.sin(t/230)*2.5);set('LEGAngleZ2',Math.sin(t/230)*2);
+        model.y=innerHeight-4-Math.abs(Math.sin(t/230))*3;
+      }else model.y=innerHeight-4;
     });
     // Sample our transparent WebGL canvas only, never the desktop. The native
     // window uses this single alpha value to pass empty pixels through.
