@@ -1,10 +1,14 @@
 # AnyLink Agent
 
-一个把人格、记忆和任务放在自己服务器上的个人助理。V0.1 提供文字交流、全局 / 设备记忆、逻辑设备管理和待办任务。
+目标是一个运行在边缘设备上的个人助理：用户与 Mac / Android 本地成熟 harness 交互，服务器提供共享记忆和模型 API 代理。
+
+**架构已于 2026-11-22 校正。** 下文是已部署 `v0.1.0` 云端原型的运行说明，不能作为后续 Mac 接入方案。当前目标见 [边缘 Agent 设计](docs/product/README.md) 与 [Mac 接入施工基线](docs/implementation/03-edge-mac-plan.md)。
+
+已部署 V0.1 提供云端文字交流、全局 / 设备记忆、逻辑设备管理和待办任务；尚未接入 Mac 本地 harness。旧发布 tag 与验收结果保留，不改写为新架构成功证据。
 
 **当前设备执行器尚未接入。** 设备是手工登记的逻辑设备，任务仅保存为 `waiting_device`，不会操作电脑或手机。
 
-## 架构
+## 已部署 V0.1 原型架构
 
 ```text
 浏览器 → SSH 隧道 → AnyLink Web / API → OpenClaw → DeepSeek Flash
@@ -71,6 +75,7 @@ bash scripts/rollback.sh ywc
 - [V0.1 实施与接口](docs/implementation/00-foundation.md)
 - [部署、秘密与回退](docs/implementation/01-operations.md)
 - [V0.1 实机验收记录](docs/implementation/02-validation.md)
+- [Mac 边缘 Agent 接入施工基线](docs/implementation/03-edge-mac-plan.md)
 - [整体产品设计文档集](docs/product/README.md)
 
 后续：可信设备绑定、持久设备回执与执行器、虚拟形象、语音和主动联系。它们不计入当前版本的已实现能力。

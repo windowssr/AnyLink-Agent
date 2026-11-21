@@ -1,5 +1,7 @@
 # 部署、秘密与回退
 
+> 本文只维护已部署 V0.1 云端原型。目标架构已改为 [Mac 本地 Agent＋云端模型和记忆](03-edge-mac-plan.md)，不能把此三容器结构当成新架构的部署清单。
+
 ## 服务器目录
 
 `/opt/anylink-agent` 下使用 releases、current、previous、data、secrets 和 backups。应用为非 root 容器用户；秘密目录仅宿主 root 可读。配置文件只包含环境变量引用，不包含真实模型 Key。
