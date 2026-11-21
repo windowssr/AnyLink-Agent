@@ -25,6 +25,7 @@ AnyLink.app → 127.0.0.1:18791 本机 OpenClaw → 本机工具
 - 后台服务未运行时，尝试 bootstrap / kickstart 当前用户已有的 `com.anylink.openclaw` LaunchAgent，不使用强制重启，不另开第二个 Gateway。
 - Gateway 冷启动可能需要约一分钟；没有安装服务或本机配置缺失时，显示具体处理指引。
 - “重新连接”刷新本地 UI，不取消正在执行的 Agent 任务。
+- 对固定的 OpenClaw 2026.11.6 UI，新建会话可能卡在面板重新连接状态。桌面壳只读检测这一状态：本机健康、没有未发送草稿且持续约 12 秒时，每条会话最多自动刷新一次受保护文档。它不读取聊天内容、不重发模型请求，也不点击发送；仍未恢复时可手动重新连接。
 - UI 使用官方 `gateway.controlUi.basePath=/openclaw`。聊天深层链接通过官方受保护的 `__openclaw__/session-entry?path=...` 入口加载，避免先进入公开阅读页面。重新连接和重启应用会保留当前会话路径；保存路径时排除认证 fragment。
 
 ## 构建与安装
@@ -72,6 +73,8 @@ open ~/Applications/AnyLink.app
 - 已安装到当前用户 `~/Applications/AnyLink.app`，原生窗口显示中文聊天界面与 DeepSeek Flash via AnyLink 模型。
 - 从应用中新建会话，实际调用本机 write / read 创建并回读 `anylink-desktop-proof-20261122.txt`，窗口显示工具完成和文件内容。
 - 在同一会话追加读取请求，实时收到工具结果与最终回复。
+- 另建会话验证 `cat anylink-desktop-proof-20261122.txt` 的“允许一次”审批和执行结果；没有选择“始终允许”，没有扩大持久命令权限。
+- 最终新会话回归在无需手动刷新时，4 秒完成 read 工具与内容展示；该会话只记录一条用户输入和一次 read 调用。
 - 退出桌面壳期间，LaunchAgent 保持运行；重启桌面壳后恢复到原会话，结果仍在。
 - 点击重新连接后，保留同一会话并恢复为已连接状态；本地记录仍只有原来的两条用户输入、三个工具调用和两条最终回复，没有重发任务。
 - 加载界面时保持 WebKit 视图可见并以原生状态卡覆盖，避免隐藏视图挂起模块初始化；离窗使用官方 throttle 策略。

@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var startedAt = Date()
     private var root: URL?
     private var serviceError: String?
+    private var checkingInterface = false
+    private var pendingInterfaceRoute: String?
+    private var pendingInterfaceSince: Date?
+    private var recoveredInterfaceRoutes = Set<String>()
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 2
@@ -227,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             status.stringValue = "本机 Agent 已连接 · 云端模型与记忆"
             progress.stopAnimation(nil)
             if !pageLoaded { loadChat() }
+            else { checkInterfaceConnection() }
         } else {
             progress.startAnimation(nil)
             status.stringValue = wasHealthy ? "正在重新连接本机 Agent…" : "正在启动本机 Agent…"
@@ -235,6 +240,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 showMessage(slow ? "本机 Agent 尚未就绪" : "连接你的 Mac 助理", slow ? "启动时间较长。可以重新连接，或从“助理”菜单打开日志文件夹排查。" : "正在启动 Mac 上的 OpenClaw，首次启动可能需要约一分钟。")
             }
             if !serviceStarted { serviceStarted = true; startService() }
+        }
+    }
+
+    private func checkInterfaceConnection() {
+        guard !checkingInterface, let route = webView.url, isLocal(route), route.path.hasPrefix("/openclaw/chat/") else { return }
+        checkingInterface = true
+        // OpenClaw 2026.11.6 can leave a newly created pane waiting for its
+        // connection after the backend accepted the turn. Observe only status
+        // and whether a draft exists; never inspect or resubmit chat content.
+        let probe = """
+        (() => {
+          const pending = !!document.querySelector('.chat-pane__connection-icon--busy');
+          const draft = [...document.querySelectorAll('textarea, [contenteditable="true"]')]
+            .some(el => (el.value || el.textContent || '').trim().length > 0);
+          return pending && !draft;
+        })()
+        """
+        webView.evaluateJavaScript(probe) { [weak self] result, error in
+            guard let self = self else { return }
+            self.checkingInterface = false
+            guard error == nil, self.webView.url?.path == route.path else { return }
+            guard result as? Bool == true else {
+                self.pendingInterfaceSince = nil; self.pendingInterfaceRoute = nil; return
+            }
+            if self.pendingInterfaceRoute != route.path {
+                self.pendingInterfaceRoute = route.path; self.pendingInterfaceSince = Date(); return
+            }
+            guard let since = self.pendingInterfaceSince, Date().timeIntervalSince(since) >= 12 else { return }
+            // Slug renames do not permit repeated recovery of the same session.
+            let key = route.path.range(of: "[a-f0-9]{32}$", options: .regularExpression).map { String(route.path[$0]) } ?? route.path
+            guard !self.recoveredInterfaceRoutes.contains(key) else { return }
+            self.recoveredInterfaceRoutes.insert(key)
+            self.saveRoute()
+            self.status.stringValue = "正在恢复会话连接…"
+            self.loadChat() // GET only. A task accepted by the Gateway keeps running.
         }
     }
 
