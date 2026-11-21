@@ -1,0 +1,8 @@
+{
+  "Version": 3,
+  "Meta": {"Duration": 6, "Fps": 24, "Loop": true, "AreBeziersRestricted": true, "CurveCount": 2, "TotalSegmentCount": 6, "TotalPointCount": 8, "UserDataCount": 0, "TotalUserDataSize": 0},
+  "Curves": [
+    {"Target": "Parameter", "Id": "ParamAngleX", "Segments": [0, 0, 0, 1.5, 2, 0, 3, 0, 0, 4.5, -2, 0, 6, 0]},
+    {"Target": "Parameter", "Id": "ParamBreath", "Segments": [0, 0, 0, 3, 1, 0, 6, 0]}
+  ]
+}

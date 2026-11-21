@@ -37,12 +37,13 @@ AnyLink.app → 127.0.0.1:18791 本机 OpenClaw → 本机工具
 ```bash
 cd /Users/yundongwu/self-program/anylink-agent
 node mac/configure-desktop.mjs
+npm run desktop:companion:install
 npm run desktop:build
 npm run desktop:install
 open ~/Applications/AnyLink.app
 ```
 
-源码在 `mac/desktop/App.swift`，图标由 `mac/desktop/Icon.swift` 的矢量绘图生成，版本和最低系统版本来自 `mac/desktop/version.json`。构建产物为 `artifacts/desktop/AnyLink.app`。构建脚本记录 Git 提交、检查 Info.plist、执行本地 ad-hoc 签名并验证签名。最低声明 macOS 14，当前构建仅包含构建机器的 CPU 架构。
+源码入口在 `mac/desktop/App.swift`，图标由 `mac/desktop/Icon.swift` 的矢量绘图生成，版本和最低系统版本来自 `mac/desktop/version.json`。构建产物为 `artifacts/desktop/AnyLink.app`。构建脚本记录 Git 提交、检查 Info.plist、执行本地 ad-hoc 签名并验证签名。当前 V0.4 最低声明 macOS 15，仅包含构建机器的 CPU 架构；桌面 Live2D 伙伴的本地素材准备与使用见[伙伴说明](08-desktop-companion.md)。
 
 从 V0.2 升级时先等待本机任务结束，再运行 `configure-desktop.mjs`。它只更新 UI basePath，保留凭据与其他设置；首次修改前在私密状态目录保存带时间戳的配置备份。Gateway 会按官方配置热更新机制重新加载。已经配置则无操作。新安装由配对步骤直接生成这一设置。
 

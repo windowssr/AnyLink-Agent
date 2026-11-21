@@ -8,11 +8,13 @@ Mac 上运行成熟 OpenClaw，自己服务器提供统一记忆和模型 API。
               └⇄ ywc 记忆 API ⇄ PostgreSQL
 ```
 
-当前版本 V0.3，Mac 使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行。Android、语音、虚拟形象和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
+当前服务版本 V0.3，Mac 桌面版本 V0.4，使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行；桌面新增正常比例的蓝色大肥鱼 Live2D 伙伴。Android、语音和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
 
 ## 在当前 Mac 使用
 
 双击 `~/Applications/AnyLink.app`，即可在独立 Mac 窗口中聊天、查看工具执行结果；菜单栏提供电脑控制、重新连接、工作区和日志入口。关闭窗口或退出桌面壳后，后台 Agent 继续运行。
+
+桌面伙伴可以拖动、单击举手、双击打开聊天；右键可选择举手、竖起手指、点头、大小和隐藏。工具栏“桌面伙伴”可重新定位角色。状态气泡读取本地 Agent 的只读运行状态，不产生另一条模型请求。角色和 Core 只安装在本机，商业发布需另行确认素材许可，详见[桌面伙伴说明](docs/implementation/08-desktop-companion.md)。
 
 在“电脑控制”中显式启用，并为 Peekaboo 开启 macOS 辅助功能和屏幕录制权限后，可以操作所选软件窗口、点击、输入、快捷键、滚动和拖拽。窗口截图与界面文字随任务经 ywc 发送给 Flash 理解；停止按钮可阻止后续控制。详情见[Mac 电脑控制说明](docs/implementation/07-mac-computer-control.md)。
 
@@ -22,6 +24,7 @@ Mac 上运行成熟 OpenClaw，自己服务器提供统一记忆和模型 API。
 node mac/configure-desktop.mjs
 node mac/install-control.mjs
 node mac/configure-control.mjs
+npm run desktop:companion:install
 npm run desktop:build
 npm run desktop:install
 open ~/Applications/AnyLink.app
@@ -90,6 +93,7 @@ npm run test:integration
 - [安装、常驻、凭据与运维](docs/implementation/04-edge-operations.md)
 - [Mac 桌面应用、构建与更新](docs/implementation/06-mac-desktop.md)
 - [Mac 电脑控制、权限与验收](docs/implementation/07-mac-computer-control.md)
+- [蓝色大肥鱼 Live2D 桌面伙伴](docs/implementation/08-desktop-companion.md)
 - [V0.2 真实验收记录](docs/implementation/05-edge-validation.md)
 - [当前产品设计](docs/product/README.md)
 - [修正后的 Mac 施工基线](docs/implementation/03-edge-mac-plan.md)

@@ -1,0 +1,140 @@
+{
+  "model": {
+    "repository": "YJackie-Li/DeepSeek-chan",
+    "commit": "824e03aa38c18c9eb2a9ee1344e3c8bed6671b1f",
+    "files": [
+      {
+        "path": "Animation/IDLE.motion3.json",
+        "blob": "87ec6d574c668eb7d8636f0380864726104e6b13",
+        "bytes": 35673
+      },
+      {
+        "path": "Animation/举手切默认手.motion3.json",
+        "blob": "24f39cebefd54f4b4d914ece1e02b4f846f86ab1",
+        "bytes": 1668
+      },
+      {
+        "path": "Animation/竖手指切出来动画.motion3.json",
+        "blob": "dc009a745b8ab5351901e902b648d65ce4ab6592",
+        "bytes": 2601
+      },
+      {
+        "path": "Animation/竖手指切回默认.motion3.json",
+        "blob": "31f484a4e92abadb27370ec328db3cb68be0ee32",
+        "bytes": 2257
+      },
+      {
+        "path": "Animation/默认手切举手.motion3.json",
+        "blob": "38cbe42215d68507a795aa073993566831d5b23d",
+        "bytes": 1881
+      },
+      {
+        "path": "Exp3/加载.exp3.json",
+        "blob": "df44a373d1e6525f1b55bffa0b09655b7cc5d49d",
+        "bytes": 206
+      },
+      {
+        "path": "Exp3/流冷汗.exp3.json",
+        "blob": "f65b2ef67148b9ad4fb8b4f2afcaa629fe7a288d",
+        "bytes": 207
+      },
+      {
+        "path": "Exp3/脸红.exp3.json",
+        "blob": "f9841bac9236b71affaf13f33f36140cc273a57e",
+        "bytes": 206
+      },
+      {
+        "path": "Exp3/＞＜.exp3.json",
+        "blob": "4fc334fe5846645601dadd6a2f608530dee3236d",
+        "bytes": 506
+      },
+      {
+        "path": "README.md",
+        "blob": "f536e027e6b7632248aa155d3ce56b62ae92f453",
+        "bytes": 4773
+      },
+      {
+        "path": "大肥鱼.4096/texture_00.png",
+        "blob": "91fe2a5db3c443a5bb50dadb784781c80e76eb17",
+        "bytes": 10462576
+      },
+      {
+        "path": "大肥鱼.4096/texture_01.png",
+        "blob": "aa5ad3931e2d8c6ff7278213886e363c5f078403",
+        "bytes": 13210527
+      },
+      {
+        "path": "大肥鱼.4096/texture_02.png",
+        "blob": "b0e5d78171b4474953d0839d51a5775bf6360ab4",
+        "bytes": 2264052
+      },
+      {
+        "path": "大肥鱼.4096/texture_03.png",
+        "blob": "aa23a7b79fdead25a967084d0b79c84d5b12114e",
+        "bytes": 18625369
+      },
+      {
+        "path": "大肥鱼.4096/texture_04.png",
+        "blob": "c541d50c6c1530456ddc00b8749b523d233dddd8",
+        "bytes": 1148818
+      },
+      {
+        "path": "大肥鱼.cdi3.json",
+        "blob": "12156dbe235bcecdfd7ac08d2fd3f5f5c4853be0",
+        "bytes": 53272
+      },
+      {
+        "path": "大肥鱼.moc3",
+        "blob": "d373e76f363271c6a438a917a39169fdc807cb35",
+        "bytes": 16498560
+      },
+      {
+        "path": "大肥鱼.model3.json",
+        "blob": "eb1c48971155862fb08f01cf84f19b2aef7d4656",
+        "bytes": 550
+      },
+      {
+        "path": "大肥鱼.physics3.json",
+        "blob": "adc921a92578b6232af888d06cd18a5aaa1717ab",
+        "bytes": 217421
+      }
+    ],
+    "credits": {
+      "art": "神宫凉子",
+      "live2d": "霓虹猫_NeonNeko"
+    },
+    "notice": "https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md",
+    "redistribute": false
+  },
+  "core": {
+    "repository": "xkk6663/dsh-live2d-mao",
+    "commit": "21b9db21d0abfc974fe88b155517563d155e9c51",
+    "path": "澪Agent应用/dist/live2d-pet/libs/live2dcubismcore.min.js",
+    "sha256": "25ae938cb4fe282ce189b357bcc97e603d1e1f7ec78bf04150d401c23cdc792f",
+    "license": "https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html"
+  },
+  "renderer": [
+    {
+      "package": "pixi.js",
+      "version": "6.5.10",
+      "tarball": "https://registry.npmjs.org/pixi.js/-/pixi.js-6.5.10.tgz",
+      "integrity": "sha512-Z2mjeoISml2iuVwT1e/BQwERYM2yKoiR08ZdGrg8y5JjeuVptfTrve4DbPMRN/kEDodesgQZGV/pFv0fE9Q2SA==",
+      "file": "pixi.min.js",
+      "sha256": "403f2f2ee8145fa17f60c5c89403056efe2680e5096ec2762036486914ed19c5"
+    },
+    {
+      "package": "pixi-live2d-display",
+      "version": "0.4.0",
+      "tarball": "https://registry.npmjs.org/pixi-live2d-display/-/pixi-live2d-display-0.4.0.tgz",
+      "integrity": "sha512-xeYC6y4Y0Bxe9ksWNlGFZC1rII/MPrzPQK7t1c3ubA8RhkOISIqHJl38fNumXqhGEs+yItmgDOkFT+9dsyGDjA==",
+      "file": "cubism4.min.js",
+      "sha256": "af1267e6d52759b245766c578d905bfa025b532d5c3cc727c370957c4409e21b"
+    }
+  ],
+  "compatibility": {
+    "file": "cubism4-colors.min.js",
+    "sha256": "dae09e1ec408fe8c747048202abd7dd825bdf00f4e21a706ce7266ca7fd71de3",
+    "source": "https://github.com/moeru-ai/airi/pull/3323",
+    "scope": "drawable multiply/screen colors; unmasked, masked, inverted masks"
+  }
+}

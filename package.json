@@ -16,6 +16,8 @@
     "desktop:build": "node mac/build-app.mjs",
     "desktop:install": "node mac/install-app.mjs",
     "desktop:control:install": "node mac/install-control.mjs",
+    "desktop:companion:install": "node mac/companion/install.mjs",
+    "test:companion": "node --test mac/companion/*.test.mjs && node mac/companion/asset-check.mjs",
     "test:mac-control": "node --test mac/control/*.test.mjs",
     "start": "node dist/server/index.js"
   },

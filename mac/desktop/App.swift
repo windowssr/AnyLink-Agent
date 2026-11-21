@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var startedAt = Date()
     private var root: URL?
     private var computer: MacControlCoordinator?
+    private var companion: CompanionCoordinator?
     private var serviceError: String?
     private var checkingInterface = false
     private var pendingInterfaceRoute: String?
@@ -57,6 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         buildMenu()
         buildWindow()
         buildStatusItem()
+        if let root {
+            do { companion = try CompanionCoordinator(root:root,openChat:{ [weak self] in self?.showWindow(nil) }) }
+            catch { status.stringValue = "桌面伙伴素材不可用，聊天仍可使用" }
+        }
         showWindow(nil)
         pollHealth()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
@@ -88,6 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         view.addItem(menuItem("重新连接", #selector(reconnect), "r"))
         view.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
         view.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
+        view.addItem(menuItem("显示／隐藏桌面伙伴", #selector(toggleCompanion)))
+        view.addItem(menuItem("定位桌面伙伴", #selector(revealCompanion)))
         view.addItem(menuItem("打开工作区", #selector(openWorkspace), "1"))
         view.addItem(menuItem("打开日志文件夹", #selector(openLogs)))
         view.addItem(menuItem("在浏览器打开", #selector(openBrowser)))
@@ -122,7 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         workspace.setAccessibilityLabel("打开工作区")
         let reload = NSButton(title: "重新连接", target: self, action: #selector(reconnect)); reload.bezelStyle = .rounded
         let control = NSButton(title: "电脑控制", target: self, action: #selector(openComputerControl)); control.bezelStyle = .rounded
-        for view in [progress, status, spacer, control, workspace, reload] { toolbar.addArrangedSubview(view) }
+        let companion = NSButton(title:"桌面伙伴",target:self,action:#selector(revealCompanion)); companion.bezelStyle = .rounded
+        for view in [progress, status, spacer, companion, control, workspace, reload] { toolbar.addArrangedSubview(view) }
         content.addSubview(toolbar)
 
         let config = WKWebViewConfiguration()
@@ -172,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         menu.addItem(menuItem("重新连接", #selector(reconnect)))
         menu.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
         menu.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
+        menu.addItem(menuItem("显示／隐藏桌面伙伴", #selector(toggleCompanion)))
+        menu.addItem(menuItem("定位桌面伙伴", #selector(revealCompanion)))
         menu.addItem(.separator())
         menu.addItem(menuItem("退出 AnyLink 窗口", #selector(quit)))
         statusItem.menu = menu
@@ -344,6 +354,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     @objc private func openWorkspace() { if let root = root { NSWorkspace.shared.open(root.appendingPathComponent("data/mac/workspace")) } }
     @objc private func openComputerControl() { computer?.showSettings() }
     @objc private func stopComputerControl() { computer?.stopControl() }
+    @objc private func toggleCompanion() { companion?.toggle() }
+    @objc private func revealCompanion() { companion?.reveal() }
     @objc private func openLogs() { if let root = root { NSWorkspace.shared.open(root.appendingPathComponent("data/mac/logs")) } }
     @objc private func openBrowser() {
         do {
@@ -363,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(nil); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationWillTerminate(_ notification: Notification) { saveRoute() }
+    func applicationWillTerminate(_ notification: Notification) { saveRoute(); companion?.stop() }
     func windowWillClose(_ notification: Notification) { saveRoute() }
 
     private func isLocal(_ url: URL) -> Bool {
