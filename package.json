@@ -13,6 +13,8 @@
     "check": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:integration": "node scripts/test-integration.mjs",
+    "desktop:build": "node mac/build-app.mjs",
+    "desktop:install": "node mac/install-app.mjs",
     "start": "node dist/server/index.js"
   },
   "dependencies": {

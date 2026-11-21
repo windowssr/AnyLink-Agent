@@ -26,7 +26,9 @@ node mac/start.mjs
 
 ## 交互
 
-本机聊天地址为 `http://127.0.0.1:18791/`。执行以下命令在默认浏览器打开带本机认证的页面，命令不会打印令牌：
+当前 Mac 也可直接双击 `~/Applications/AnyLink.app`，以原生独立窗口使用同一个本机 Agent。构建、更新与界面生命周期详见 [Mac 桌面应用说明](06-mac-desktop.md)。
+
+本机聊天地址为 `http://127.0.0.1:18791/openclaw/`。V0.2.1 使用独立的 `/openclaw` UI 路径，以支持深层聊天页面的直接加载和重连。执行以下命令在默认浏览器打开带本机认证的页面，命令不会打印令牌：
 
 ```bash
 node mac/cli.mjs open

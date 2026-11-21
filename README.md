@@ -12,12 +12,27 @@ Mac 上运行成熟 OpenClaw，自己服务器提供统一记忆和模型 API。
 
 ## 在当前 Mac 使用
 
+双击 `~/Applications/AnyLink.app`，即可在独立 Mac 窗口中聊天、查看工具执行结果；菜单栏提供重新连接、工作区和日志入口。桌面壳版本为 V0.2.1，复用 V0.2 的本机 Agent 与云端服务。关闭窗口或退出桌面壳后，后台 Agent 继续运行。
+
+重新构建与安装桌面壳：
+
+```bash
+node mac/configure-desktop.mjs
+npm run desktop:build
+npm run desktop:install
+open ~/Applications/AnyLink.app
+```
+
+应用读取当前工程已配置的本机连接，不在应用包中嵌入凭据。此包适用于已经完成本机安装的 Mac，迁移工程后需要重新构建。详见[Mac 桌面应用说明](docs/implementation/06-mac-desktop.md)。
+
+浏览器入口仍可使用：
+
 ```bash
 cd /Users/yundongwu/self-program/anylink-agent
 node mac/cli.mjs open
 ```
 
-此命令在默认浏览器打开经过本机认证的聊天界面，不打印令牌。地址为 <http://127.0.0.1:18791/>。若需要手动填写本地 Gateway Token，在自己的终端运行 `node mac/cli.mjs token`；不要把输出发到聊天或提交 Git。
+此命令在默认浏览器打开经过本机认证的聊天界面，不打印令牌。地址为 <http://127.0.0.1:18791/openclaw/>。若需要手动填写本地 Gateway Token，在自己的终端运行 `node mac/cli.mjs token`；不要把输出发到聊天或提交 Git。
 
 初始文件工作区为 `data/mac/workspace`。可以让 Agent 创建、读取和修改这里的文件。文件工具限定于工作区，进程命令沿用 OpenClaw allowlist / on-miss 审批；本阶段没有声称任意 GUI 操作已验证。
 
@@ -68,6 +83,7 @@ npm run test:integration
 集成测试必须连接独立 `anylink_test` 数据库，脚本拒绝其他数据库名。测试会重建测试库 schema，不能使用产品库。真实本机验收命令为 `node mac/acceptance.mjs`，会产生少量模型调用和带随机标识的验收文件 / 记忆。
 
 - [安装、常驻、凭据与运维](docs/implementation/04-edge-operations.md)
+- [Mac 桌面应用、构建与更新](docs/implementation/06-mac-desktop.md)
 - [V0.2 真实验收记录](docs/implementation/05-edge-validation.md)
 - [当前产品设计](docs/product/README.md)
 - [修正后的 Mac 施工基线](docs/implementation/03-edge-mac-plan.md)
