@@ -27,6 +27,8 @@ ssh ywc 'cat /opt/anylink-agent/secrets/owner-token'
 
 此处需要的是产品访问令牌，不是 DeepSeek Key。不要把任何真实凭据提交到仓库。
 
+登录后可以按这个顺序开始：在“设备”登记自己的 Mac 和 Android；在“对话”选择来源设备；发送“记住，我喜欢简洁的中文回复”，然后在“记忆”核对保存结果。全局事实可跨设备使用，设备事实绑定所选适用设备。创建任务时选择目标设备，当前任务会明确等待执行器接入。
+
 ## 本地开发
 
 需要 Node 22.12+（生产镜像 Node 24.22.3）、PostgreSQL 16 和已配置的 OpenClaw。复制 `.env.example` 到被忽略的 `.env`，填写本地开发配置。
@@ -38,7 +40,7 @@ npm run build
 node --env-file=.env dist/server/index.js
 ```
 
-开发界面可以另开终端运行 `npm run dev:web`，API 运行 `npm run dev` 前需在终端加载开发环境。数据库启动时自动执行版本 1 迁移；服务只允许一个活动运行实例。
+如需界面热更新，API 在一个终端运行 `APP_ORIGIN=http://127.0.0.1:5173 node --env-file=.env --import tsx --watch server/index.ts`，另一终端运行 `npm run dev:web`，使用 `http://127.0.0.1:5173`。origin 必须与浏览器地址一致，否则跨站写保护会拒绝登录和修改请求。数据库启动时自动执行版本 1 迁移；服务只允许一个活动运行实例。
 
 ## 检查与测试
 
@@ -68,6 +70,7 @@ bash scripts/rollback.sh ywc
 
 - [V0.1 实施与接口](docs/implementation/00-foundation.md)
 - [部署、秘密与回退](docs/implementation/01-operations.md)
+- [V0.1 实机验收记录](docs/implementation/02-validation.md)
 - [整体产品设计文档集](docs/product/README.md)
 
 后续：可信设备绑定、持久设备回执与执行器、虚拟形象、语音和主动联系。它们不计入当前版本的已实现能力。

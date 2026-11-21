@@ -92,6 +92,10 @@ try:
     assert deltas > 0
     passed('product API → OpenClaw → DeepSeek Flash with real SSE deltas')
 
+    _, _, result, _ = chat(cid, '我上一条让你回复的那四个字是什么？只回复那四个字。', android['id'], mac['id'])
+    assert '链路正常' in result['response_text']
+    passed('same-conversation history survives stable Gateway session routing')
+
     marker = 'AL_' + suffix
     rid, body, result, _ = chat(cid, f'请记住一条全局偏好：我的验收标识是 {marker}。请调用记忆保存工具保存，主题为验收标识-{suffix}，适用范围为全局。', android['id'])
     assert result['tool_rounds'] >= 1

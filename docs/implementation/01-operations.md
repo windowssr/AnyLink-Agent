@@ -17,6 +17,8 @@
 
 文件权限 0600，目录 0700。令牌与密码分别随机生成，不复用 DeepSeek Key。秘密不进入 Git、镜像、release.env、manifest 和日志。
 
+`postgres.env` 使用 `POSTGRES_DB=anylink`、`POSTGRES_USER=anylink` 和独立随机密码。`app.env` 的数据库地址指向 Compose 内的 `postgres:5432/anylink`；`GATEWAY_URL=http://openclaw:18789`，`APP_ORIGIN=http://127.0.0.1:3180`，`HOST=0.0.0.0`，`PORT=3180`。`OWNER_TOKEN` 与 owner-token 文件一致，`GATEWAY_TOKEN` 与 gateway.env 的 `OPENCLAW_GATEWAY_TOKEN` 一致。真实值只在服务器文件中配置。首次启动前，确保 PostgreSQL 数据目录为空且独属于本项目；后续发布必须保留这个目录。
+
 ## 发布
 
 1. 本地完成类型检查、构建和独立数据库集成测试，提交到 main。
@@ -30,6 +32,8 @@
 低内存服务器不编译 OpenClaw。若本机下载链路不稳定，允许服务器直接下载同一 digest 的官方预构建镜像；这不改变版本或构建源码。不要依赖未经验证的同名第三方镜像。
 
 默认部署包只包含产品镜像，上游固定镜像在服务器已有时复用，否则从官方 registry 拉取。需要完全离线部署时设置 `BUNDLE_UPSTREAM=1`，把上游镜像一并打包。当前服务器的 PostgreSQL 官方镜像已缓存，Gateway 使用官方 GHCR 下载。
+
+本机 containerd 与服务器 Docker 引擎可能分别以 OCI index 与平台 manifest 表示同一镜像，不能直接比较两端 `.Id`。发布以 `image-fingerprint.py` 校验平台、全部不可变 RootFS 层和运行配置。已缓存相同内容时只传校验清单中的发布文件并重新标记 commit 标签；内容变化时传完整镜像包并校验 SHA256。manifest 仍保留本机构建 ID 供追溯。
 
 Gateway 使用显式官方 CLI 入口，避免镜像的自动 doctor 修复适配器在非交互环境反复运行。运行期配置放在 UID 1000 可写的专属状态目录，发布文件仍不含秘密；启用单进程启动和编译缓存。此调整不修改 OpenClaw 源码或放宽其运行期权限。
 
@@ -61,3 +65,11 @@ OOM 或强制结束后，旧容器的 PID namespace 可能留下无法从新容�
 真实链路验证必须经过产品 API 和 OpenClaw，而非直接向 DeepSeek 发一条请求就宣布完成。验证文字流、多轮工具、跨新会话记忆、scope、更正、删除、任务等待、幂等和容器重建。
 
 测试数据使用明确前缀并在验收后定向清理。清理只按本次生成的实体 ID 和关联记录执行，不清空用户数据。
+
+每个新发布目录都包含校验过的 `live-smoke.py`。真实验收会产生少量模型费用和带随机后缀的设备、记忆、会话、任务，可在服务器执行：
+
+```bash
+ssh ywc 'python3 /opt/anylink-agent/current/live-smoke.py --report /opt/anylink-agent/backups/acceptance-live.json'
+```
+
+报告不含凭据，保留本次实体 ID 和幂等键以便检查持久化及定向清理。不要在已有验收事实尚未清理时同时运行多份脚本；测试专用的“验收标识”全局事实会影响后一次同题召回。

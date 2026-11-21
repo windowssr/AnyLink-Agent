@@ -7,7 +7,7 @@ short=$(basename "$folder")
 [[ "$short" =~ ^[a-f0-9]{12}$ ]] || { printf 'Invalid release ID\n' >&2; exit 1; }
 remote="/opt/anylink-agent/releases/$short"
 ssh -o BatchMode=yes "$host" "mkdir -p '$remote'"
-scp "$folder"/{compose.yaml,openclaw.json,release.env,remote-up.sh,image-fingerprint.py,manifest.json,SHA256SUMS} "$host:$remote/"
+scp "$folder"/{compose.yaml,openclaw.json,release.env,remote-up.sh,image-fingerprint.py,live-smoke.py,manifest.json,SHA256SUMS} "$host:$remote/"
 mode=$(ssh -o BatchMode=yes "$host" "python3 - '$remote' '$short'" <<'PY'
 import json,subprocess,sys
 from pathlib import Path
