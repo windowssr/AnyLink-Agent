@@ -12,6 +12,12 @@ mkdir -p "$base/data/postgres" "$base/data/openclaw" "$base/backups"
 chown 1000:1000 "$base/data/openclaw"
 compose=(docker compose --project-name anylink-agent --env-file "$release/release.env" -f "$release/compose.yaml")
 source "$release/release.env"
+python3 - "$release/manifest.json" "$APP_IMAGE" <<'PY'
+import json,subprocess,sys
+manifest=json.load(open(sys.argv[1]))
+actual=subprocess.check_output(['docker','image','inspect','--format','{{.Id}}',sys.argv[2]],text=True).strip()
+if actual!=manifest['app_image_id']:raise SystemExit('App image does not match release manifest')
+PY
 for image in "$OPENCLAW_IMAGE" "$POSTGRES_IMAGE"; do
   if ! docker image inspect "$image" >/dev/null 2>&1; then docker pull --platform linux/amd64 "$image"; fi
 done
@@ -19,7 +25,7 @@ if [ "$(docker inspect --format '{{.State.Running}}' anylink-agent-postgres-1 2>
   docker exec anylink-agent-postgres-1 pg_dump -U anylink -d anylink -Fc > "$base/backups/before-$(date -u +%Y%m%dT%H%M%SZ).dump"
 fi
 old=$(readlink -f "$base/current" 2>/dev/null || true)
-"${compose[@]}" stop app openclaw
+"${compose[@]}" stop -t 90 app openclaw
 install -m 600 -o 1000 -g 1000 "$release/openclaw.json" "$base/data/openclaw/openclaw.json"
 if ! "${compose[@]}" up -d --wait --wait-timeout 240; then
   if [ -n "$old" ] && [ "$old" != "$release" ]; then

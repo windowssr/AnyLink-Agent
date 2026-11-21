@@ -50,6 +50,12 @@ ssh ywc 'curl -fsS http://127.0.0.1:3180/readyz'
 
 V0.1 只有版本 1 初始化迁移。未来若有不兼容 schema，不能仅回退二进制；先明确迁移兼容性或进入受控恢复。恢复旧数据库后不得自动重发未确认请求。
 
+## 异常退出后的 Gateway 锁
+
+OOM 或强制结束后，旧容器的 PID namespace 可能留下无法从新容器自动核实的锁。先确认旧持有容器已经停止，再在当前容器运行 `node /app/openclaw.mjs gateway recover-lock --json`，检查记录，随后用该次返回的 fingerprint 执行 `gateway recover-lock --confirm FINGERPRINT --json`。
+
+不能直接删除锁文件，也不能仅依据心跳变旧就回收。正常发布给 Gateway 90 秒停机时间；如果锁记录已变化，官方确认命令会拒绝旧指纹，需要重新检查。
+
 ## 基础验收
 
 真实链路验证必须经过产品 API 和 OpenClaw，而非直接向 DeepSeek 发一条请求就宣布完成。验证文字流、多轮工具、跨新会话记忆、scope、更正、删除、任务等待、幂等和容器重建。

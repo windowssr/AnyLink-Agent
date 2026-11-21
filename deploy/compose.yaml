@@ -25,6 +25,7 @@ services:
     pull_policy: never
     restart: unless-stopped
     init: true
+    stop_grace_period: 90s
     env_file: /opt/anylink-agent/secrets/gateway.env
     environment:
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
