@@ -1,0 +1,74 @@
+name: anylink-agent
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE in release.env}
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    env_file: /opt/anylink-agent/secrets/postgres.env
+    volumes:
+      - /opt/anylink-agent/data/postgres:/var/lib/postgresql/data
+    networks: [backend]
+    mem_limit: 256m
+    cpus: 0.30
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U anylink -d anylink"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: &logging
+      driver: json-file
+      options: {max-size: 5m, max-file: '2'}
+  openclaw:
+    image: ${OPENCLAW_IMAGE:?Set OPENCLAW_IMAGE in release.env}
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    env_file: /opt/anylink-agent/secrets/gateway.env
+    environment:
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_NO_RESPAWN: '1'
+      NODE_COMPILE_CACHE: /home/node/.openclaw/compile-cache
+      NODE_OPTIONS: --max-old-space-size=512
+    volumes:
+      - /opt/anylink-agent/data/openclaw:/home/node/.openclaw
+    entrypoint: [node, /app/openclaw.mjs]
+    command: [gateway, --port, '18789', --bind, lan]
+    networks: [backend]
+    mem_limit: 768m
+    cpus: 0.75
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:18789/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      start_period: 90s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+  app:
+    image: ${APP_IMAGE:?Set APP_IMAGE in release.env}
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    env_file: /opt/anylink-agent/secrets/app.env
+    environment:
+      NODE_OPTIONS: --max-old-space-size=160
+    ports: ['127.0.0.1:3180:3180']
+    networks: [backend]
+    depends_on:
+      postgres: {condition: service_healthy}
+      openclaw: {condition: service_healthy}
+    mem_limit: 256m
+    cpus: 0.35
+    stop_grace_period: 25s
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3180/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+    logging: *logging
+networks:
+  backend: {}

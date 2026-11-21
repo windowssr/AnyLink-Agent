@@ -20,7 +20,7 @@
 ## 发布
 
 1. 本地完成类型检查、构建和独立数据库集成测试，提交到 main。
-2. build-release 在干净提交上构建 linux/amd64 产品镜像，准备固定上游镜像。
+2. build-release 在干净提交上构建 linux/amd64 产品镜像；生产依赖在本机按 lock 完整性校验后离线打包，拒绝宿主原生二进制。
 3. 生成镜像包、Compose、Gateway 配置、release.env、commit manifest 和 SHA256SUMS。
 4. deploy 经 SSH 传入 releases/commit，校验 hash，导入镜像。
 5. remote-up 在已有产品数据库运行时先 pg_dump，再更新本项目三个服务。
@@ -28,6 +28,10 @@
 7. 完成真实模型和持久化验收后，才创建并推送正式 tag。
 
 低内存服务器不编译 OpenClaw。若本机下载链路不稳定，允许服务器直接下载同一 digest 的官方预构建镜像；这不改变版本或构建源码。不要依赖未经验证的同名第三方镜像。
+
+默认部署包只包含产品镜像，上游固定镜像在服务器已有时复用，否则从官方 registry 拉取。需要完全离线部署时设置 `BUNDLE_UPSTREAM=1`，把上游镜像一并打包。当前服务器的 PostgreSQL 官方镜像已缓存，Gateway 使用官方 GHCR 下载。
+
+Gateway 使用显式官方 CLI 入口，避免镜像的自动 doctor 修复适配器在非交互环境反复运行。运行期配置放在 UID 1000 可写的专属状态目录，发布文件仍不含秘密；启用单进程启动和编译缓存。此调整不修改 OpenClaw 源码或放宽其运行期权限。
 
 ## 查看状态
 

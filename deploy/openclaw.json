@@ -1,0 +1,17 @@
+{
+  "gateway": {
+    "mode": "local", "bind": "lan", "port": 18789,
+    "auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },
+    "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "deepseek/deepseek-flash" },
+      "workspace": "/home/node/.openclaw/workspace",
+      "maxConcurrent": 1, "thinkingDefault": "off",
+      "compaction": { "memoryFlush": { "enabled": false } }
+    }
+  },
+  "tools": { "profile": "minimal", "deny": ["exec", "process", "read", "write", "edit", "apply_patch", "browser", "computer", "canvas", "nodes", "cron", "gateway", "message", "sessions_spawn", "sessions_send", "web_search", "web_fetch"] },
+  "plugins": { "slots": { "memory": "none" } }
+}
