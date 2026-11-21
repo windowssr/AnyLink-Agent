@@ -69,14 +69,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                     guard path.contains("/chat/main/") else { return nil }
                     return path.components(separatedBy:"/").last
                 }
-                companion?.openRecord = { [weak self] agent,id in self?.openConversationRecord(agent:agent,id:id,sessionKey:"agent:companion:anylink:buddy:"+id.lowercased()) }
                 companion?.openVoice = { [weak self] in self?.openVoice() }
                 companion?.interruptVoice = { [weak self] in self?.voice?.interruptOutput() }
+                companion?.onNotice = { [weak self] in self?.status.stringValue = $0 }
                 companion?.onSuspend = { [weak self] in self?.voice?.stop() }
             }
             catch { status.stringValue = "桌面伙伴素材不可用，聊天仍可使用" }
         }
-        showWindow(nil)
+        if companion?.isVisible != true { showWindow(nil) }
         pollHealth()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             DispatchQueue.main.async { self?.pollHealth() }
@@ -107,8 +107,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         view.addItem(menuItem("重新连接", #selector(reconnect), "r"))
         view.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
         view.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
-        view.addItem(menuItem("显示／隐藏桌面伙伴", #selector(toggleCompanion)))
-        view.addItem(menuItem("定位桌面伙伴", #selector(revealCompanion)))
         view.addItem(menuItem("语音聊天…", #selector(openVoice)))
         view.addItem(menuItem("停止说话与语音", #selector(stopVoice)))
         view.addItem(menuItem("打开工作区", #selector(openWorkspace), "1"))
@@ -145,9 +143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         workspace.setAccessibilityLabel("打开工作区")
         let reload = NSButton(title: "重新连接", target: self, action: #selector(reconnect)); reload.bezelStyle = .rounded
         let control = NSButton(title: "电脑控制", target: self, action: #selector(openComputerControl)); control.bezelStyle = .rounded
-        let companion = NSButton(title:"桌面伙伴",target:self,action:#selector(revealCompanion)); companion.bezelStyle = .rounded
         let voice = NSButton(title:"语音聊天",target:self,action:#selector(openVoice)); voice.bezelStyle = .rounded
-        for view in [progress, status, spacer, companion, voice, control, workspace, reload] { toolbar.addArrangedSubview(view) }
+        for view in [progress, status, spacer, voice, control, workspace, reload] { toolbar.addArrangedSubview(view) }
         content.addSubview(toolbar)
 
         let config = WKWebViewConfiguration()
@@ -197,8 +194,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         menu.addItem(menuItem("重新连接", #selector(reconnect)))
         menu.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
         menu.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
-        menu.addItem(menuItem("显示／隐藏桌面伙伴", #selector(toggleCompanion)))
-        menu.addItem(menuItem("定位桌面伙伴", #selector(revealCompanion)))
         menu.addItem(menuItem("语音聊天…", #selector(openVoice)))
         menu.addItem(menuItem("停止说话与语音", #selector(stopVoice)))
         menu.addItem(.separator())
@@ -432,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         alert.addButton(withTitle: "知道了"); alert.beginSheetModal(for: window)
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(nil); return true }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showMainChat(); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) { saveRoute(); companion?.stop() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

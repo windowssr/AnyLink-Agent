@@ -8,6 +8,7 @@ final class CompanionSpeech: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlaye
     private var generation = 0
     private(set) var speaking = false
     private(set) var utterances = 0
+    var hasOutput: Bool { speaking || neuralTask != nil || synth.isSpeaking }
     var onSpeaking: ((Bool) -> Void)?
     var onFailure: (() -> Void)?
     var profile: String? { NeuralSpeech.profile(root:root) }

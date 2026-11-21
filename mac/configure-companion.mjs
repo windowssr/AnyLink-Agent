@@ -28,7 +28,7 @@ config.plugins.entries['anylink-companion']={enabled:true,hooks:{allowConversati
 config.agents.entries??={main:{default:true}};
 // Migrate only this installer's temporary legacy roster; preserve other entries.
 if(config.agents.list){for(const {id,...value} of config.agents.list)config.agents.entries[id]??=value;delete config.agents.list;}
-config.agents.entries.companion={...config.agents.entries.companion,name:'大肥鱼 · 桌面伙伴',workspace,tools:{allow:['anylink_companion_expression']}};
+config.agents.entries.companion={...config.agents.entries.companion,name:'大肥鱼 · 桌面伙伴',workspace,tools:{allow:['anylink_companion_expression','anylink_companion_control']}};
 config.agents.ownership='explicit';config.agents.defaults.systemAgent??={agentId:'main'};
 for(const agent of Object.values(config.agents.entries))delete agent.default;
 if(fs.existsSync(identity)){
@@ -38,4 +38,4 @@ if(fs.existsSync(identity)){
 }
 const backup=file+'.before-companion-'+new Date().toISOString().replaceAll(/[:.]/g,'-');fs.copyFileSync(file,backup);fs.chmodSync(backup,0o600);
 const temp=file+'.companion-'+process.pid;fs.writeFileSync(temp,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});fs.renameSync(temp,file);
-console.log('Configured local companion persona and expression-only companion agent. Concurrency and cloud configuration retained.');
+console.log('Configured local companion persona and bounded desktop companion tools. Concurrency and cloud configuration retained.');

@@ -8,13 +8,13 @@ Mac 上运行成熟 OpenClaw，自己服务器提供统一记忆和模型 API。
               └⇄ ywc 记忆 API ⇄ PostgreSQL
 ```
 
-当前服务版本 V0.3，Mac 桌面版本 V0.5，使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行；正常比例的蓝色大肥鱼 Live2D 伙伴已加入聊天表情与动作、主动招呼、桌面漫游、中文播报及原生语音入口。Android 和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
+当前服务版本 V0.3，Mac 桌面版本 V0.6，使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行；正常比例的蓝色大肥鱼 Live2D 伙伴已加入聊天表情与动作、主动招呼、桌面漫游、中文播报及原生语音入口。Android 和设备间协作进入后续阶段。旧 V0.1 云端 Agent 已退役，历史状态保留。
 
 ## 在当前 Mac 使用
 
 双击 `~/Applications/AnyLink.app`，即可在独立 Mac 窗口中聊天、查看工具执行结果；菜单栏提供电脑控制、重新连接、工作区和日志入口。关闭窗口或退出桌面壳后，后台 Agent 继续运行。
 
-桌面伙伴可以拖动、缩放、自由漫游，聊天时按语气或模型选择做表情和动作，并用已选的“活泼甜妹”神经女声播报。右键“现在聊两句”可立即请求一次真实模型招呼；“主动找我聊天”“自由走动”“语音播报 · 活泼甜妹”和免打扰可分别控制。默认白天每 20–40 分钟择机搭话，任务忙碌、离开、睡眠、免打扰或 23:00–08:00 时暂停，连续两次未回应后等待用户重新交流。正常状态轮询不调用模型，主动招呼才发起单独的本机 Agent 回合。详情见[伙伴行为与语音](docs/implementation/09-companion-behavior-and-voice.md)。
+桌面伙伴移除对话气泡和右键设置菜单，默认开启主动搭话、自由漫游与“活泼甜妹”语音播报。启动时，大肥鱼从蓝色光门中出现并落到桌面位置；点击她打开主聊天。直接告诉她“变小一点”“走两步”“安静一小时”“躲起来／出来吧”，由本机 Agent 调用工具调整，无需用户寻找设置。默认主动招呼仍遵守夜间、任务忙碌、离开及免打扰边界，用户的对话偏好会保留。详情见[对话驱动的桌面伙伴](docs/implementation/10-conversation-first-companion.md)。
 
 工具栏“语音聊天”打开本地面板，点击“开始语音聊天”后才开启麦克风；结束或关闭面板即停止收音。本地中文识别使用 macOS 26 SpeechAnalyzer，文字经本机 OpenClaw → ywc → DeepSeek，原始音频不上传、不保存；回复文字经用户同意发送给微软在线语音服务；播放在本机，LLM 和记忆通路不变。文字聊天、伙伴播报和漫游仍支持 macOS 15。角色与 Core 的安装及许可见[素材说明](mac/companion/ASSET-NOTICE.md)。
 
@@ -101,6 +101,7 @@ npm run test:integration
 - [Mac 电脑控制、权限与验收](docs/implementation/07-mac-computer-control.md)
 - [蓝色大肥鱼 Live2D 桌面伙伴](docs/implementation/08-desktop-companion.md)
 - [聊天联动、主动陪伴、漫游与语音](docs/implementation/09-companion-behavior-and-voice.md)
+- [对话驱动的桌面伙伴与启动出场](docs/implementation/10-conversation-first-companion.md)
 - [V0.2 真实验收记录](docs/implementation/05-edge-validation.md)
 - [当前产品设计](docs/product/README.md)
 - [修正后的 Mac 施工基线](docs/implementation/03-edge-mac-plan.md)

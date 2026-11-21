@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {classify,cleanSpeech,emotions,gestures} from '../behavior.mjs';
+import {controlActions,sendControl,allowedControl,controlChannel} from '../control.mjs';
 
 export function createBridge(root,now=()=>Date.now()){
   const folder=path.join(root,'data/mac/companion'),outbox=path.join(folder,'events');
@@ -15,7 +16,7 @@ export function createBridge(root,now=()=>Date.now()){
     let lease;try{lease=JSON.parse(fs.readFileSync(path.join(folder,'presence.json'),'utf8'));}catch{return false;}
     if(lease.enabled!==true||!Number.isFinite(lease.expires_at)||lease.expires_at<now()||lease.expires_at>now()+90000)return false;
     if(!['main','companion'].includes(ctx.agentId??'main'))return false;
-    if(ctx.channel&&!['webchat','web','openai-http'].includes(ctx.channel))return false;
+    const channel=controlChannel(ctx);if(channel&&!['webchat','web','openai-http'].includes(channel))return false;
     const record={id:randomUUID(),type,created_at:now(),expires_at:now()+120000,agentId:ctx.agentId??'main',sessionId:ctx.sessionId??'',sessionKey:ctx.sessionKey??'',runId:ctx.runId??'',...extra};
     fs.mkdirSync(outbox,{recursive:true,mode:0o700});
     const file=path.join(outbox,`${now()}-${record.id}.json`);
@@ -34,7 +35,7 @@ export default {
       const prompt=event.currentUserMessage??event.prompt??'';
       if(ctx.runId){turns.set(ctx.runId,{prompt:prompt.slice(0,1600),text:'',explicit:false});if(turns.size>80)turns.delete(turns.keys().next().value);}
       bridge.emit('user',ctx,{...classify(prompt)});
-      return {appendSystemContext:persona,...(ctx.agentId==='companion'?{toolsAllow:['anylink_companion_expression']}: {})};
+      return {appendSystemContext:persona,...(ctx.agentId==='companion'?{toolsAllow:['anylink_companion_expression','anylink_companion_control']}: {})};
     });
     api.on('llm_output',(event,ctx)=>{
       const turn=turns.get(ctx.runId??event.runId);if(turn)turn.text=(event.assistantTexts??[]).filter(text=>typeof text==='string').join('\n').slice(-6000);
@@ -49,7 +50,7 @@ export default {
       bridge.emit('reply',ctx,{text,caption:text.slice(0,100),...(turn?.expression??classify((turn?.prompt??'')+'\n'+text)),explicit_expression:turn?.explicit??false});
     });
     api.on('before_tool_call',(event,ctx)=>{
-      if(ctx.agentId==='companion'&&event.toolName!=='anylink_companion_expression')return {block:true,blockReason:'主动陪伴会话只允许表情动作；任务请在正常助理会话提出。'};
+      if(ctx.agentId==='companion'&&event.toolName!=='anylink_companion_expression'&&!(event.toolName==='anylink_companion_control'&&allowedControl(ctx,event.params??{})))return {block:true,blockReason:'主动陪伴只能表达、查看自己的状态和散步，不能更改主人的偏好或执行设备任务。'};
     });
     api.registerTool(ctx=>({
       name:'anylink_companion_expression',label:'表达桌面伙伴情绪',
@@ -62,5 +63,14 @@ export default {
         return {content:[{type:'text',text:JSON.stringify({queued:delivered,desktop_only:true})}]};
       },
     }),{names:['anylink_companion_expression'],workspaceAccess:false});
+    api.registerTool(ctx=>({
+      name:'anylink_companion_control',label:'管理自己的桌面形象',
+      description:'通过本机应用管理大肥鱼：查看状态、散步、摸头回应、大小、位置、显隐、重载、安静时长、主动聊天与语音偏好、打开聊天或语音及角色来源。主动聊天、自由行走、语音默认开启；只有主人明确要求时才关闭。设置要实际调用工具并依据回执回复。walk 可能排到当前回复播完后；未知结果不可自动重试。',
+      parameters:{type:'object',properties:{action:{type:'string',enum:controlActions},roaming:{type:'boolean'},proactive:{type:'boolean'},read_aloud:{type:'boolean'},minutes:{type:'integer',minimum:0,maximum:720,description:'quiet 的分钟数；0 恢复'},scale:{type:'number',enum:[0.8,1,1.25],description:'0.8=小号，1=标准大小，1.25=大号；恢复标准大小时必须使用1'}},required:['action'],additionalProperties:false},
+      async execute(id,parameters){
+        const result=await sendControl(root,ctx,id,parameters);
+        return {content:[{type:'text',text:JSON.stringify(result)}]};
+      },
+    }),{names:['anylink_companion_control'],workspaceAccess:false});
   },
 };

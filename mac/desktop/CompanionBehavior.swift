@@ -40,3 +40,17 @@ struct CompanionWalk {
     }
     func finished(at now: Double) -> Bool { now >= started+duration }
 }
+
+struct CompanionEntrance {
+    let from: CGRect, to: CGRect, started: Double, reducedMotion: Bool
+    var duration: Double { reducedMotion ? 0.25 : 3.2 }
+    private func ease(_ value: Double) -> Double { let t = min(1,max(0,value)); return t*t*(3-2*t) }
+    func appearance(at now: Double) -> Double { ease((now-started)/(reducedMotion ? 0.25 : 1.5)) }
+    func portal(at now: Double) -> Bool { !reducedMotion && now-started<1.85 }
+    func frame(at now: Double) -> CGRect {
+        let t = reducedMotion ? 1 : ease((now-started-1.8)/1.4)
+        return CGRect(x:from.minX+(to.minX-from.minX)*t,y:from.minY+(to.minY-from.minY)*t,width:from.width+(to.width-from.width)*t,height:from.height+(to.height-from.height)*t)
+    }
+    func phase(at now: Double) -> String { now>=started+duration ? "finished" : (now-started<1.8 ? "emerging" : "settling") }
+    func finished(at now: Double) -> Bool { now>=started+duration }
+}

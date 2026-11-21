@@ -23,7 +23,7 @@ run(process.execPath,['mac/companion/asset-check.mjs']);
 fs.rmSync(app,{recursive:true,force:true});
 for(const dir of [resources,binaries,cache])fs.mkdirSync(dir,{recursive:true});
 const compilerArgs=['-swift-version','5','-O','-module-cache-path',cache,'-target',`${architecture}-apple-macosx${version.minimumMacOS}`];
-run('/usr/bin/xcrun',['swiftc',...compilerArgs,'-parse-as-library',...['App','MacControl','LocalGatewayClient','CompanionState','CompanionBehavior','NeuralSpeech','CompanionSpeech','CompanionConversation','CompanionRenderer','CompanionView','Companion','VoiceCore','VoiceAudio','VoiceGateway','Voice'].map(name=>'mac/desktop/'+name+'.swift'),'-o',path.join(binaries,'AnyLink'),'-framework','AppKit','-framework','WebKit','-framework','AVFoundation','-framework','Speech']);
+run('/usr/bin/xcrun',['swiftc',...compilerArgs,'-parse-as-library',...['App','MacControl','LocalGatewayClient','CompanionState','CompanionBehavior','CompanionControl','NeuralSpeech','CompanionSpeech','CompanionConversation','CompanionRenderer','CompanionView','Companion','VoiceCore','VoiceAudio','VoiceGateway','Voice'].map(name=>'mac/desktop/'+name+'.swift'),'-o',path.join(binaries,'AnyLink'),'-framework','AppKit','-framework','WebKit','-framework','AVFoundation','-framework','Speech']);
 const companionResources=path.join(resources,'CompanionRenderer');fs.mkdirSync(companionResources,{recursive:true});
 fs.cpSync(path.join(root,'mac/companion/web'),companionResources,{recursive:true});
 fs.cpSync(path.join(root,'mac/companion/vendor'),path.join(companionResources,'vendor'),{recursive:true});

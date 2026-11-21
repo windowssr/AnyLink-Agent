@@ -35,8 +35,13 @@
   window.anylinkAvatar = {
     update(value) {
       if (!value || !allowedMoods.has(value.mood)) return;
-      input = {mood:value.mood,emotion:emotions.has(value.emotion)?value.emotion:'neutral',x:Number.isFinite(value.x)?value.x:-1,y:Number.isFinite(value.y)?value.y:-1,reducedMotion:!!value.reducedMotion,speaking:!!value.speaking,walking:!!value.walking,direction:value.direction===-1?-1:1};
+      input = {mood:value.mood,emotion:emotions.has(value.emotion)?value.emotion:'neutral',x:Number.isFinite(value.x)?value.x:-1,y:Number.isFinite(value.y)?value.y:-1,reducedMotion:!!value.reducedMotion,speaking:!!value.speaking,walking:!!value.walking,direction:value.direction===-1?-1:1,entrance:Number.isFinite(value.entrance)?Math.max(0,Math.min(1,value.entrance)):1,portal:!!value.portal};
       if (!ready) return;
+      const appearing=input.entrance;
+      app.view.style.opacity=String(appearing);
+      app.view.style.transform=input.reducedMotion?'none':`translateY(${(1-appearing)*20}%) scale(${0.68+appearing*0.32})`;
+      document.body.classList.toggle('entering',input.portal&&!input.reducedMotion);
+      document.body.classList.toggle('reduced',input.reducedMotion);
       const expressionKey = input.mood+':'+input.emotion;
       if (expressionKey !== lastMood) {
         lastMood = expressionKey; resetExpression();

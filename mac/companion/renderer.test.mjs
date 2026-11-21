@@ -9,8 +9,9 @@ test('frequent native pointer updates do not accumulate animation ticker registr
     get autoUpdate(){return autoUpdate;},set autoUpdate(value){registrations++;autoUpdate=value;},
     internalModel:{on:noOp,coreModel:{getParameterIndex:()=>0,getParameterCount:()=>1},focusController:{focus:noOp},motionManager:{expressionManager:{resetExpression:noOp}}},expression:noOp};
   const window={webkit:{messageHandlers:{anylinkAvatar:{postMessage:value=>messages.push(value)}}},addEventListener:noOp};
-  const context={window,innerWidth:280,innerHeight:402,devicePixelRatio:2,performance,document:{body:{append:noOp}},setTimeout,
-    PIXI:{Application:class{view={};stage={addChild:noOp};ticker={add:noOp};},Ticker:{shared:{}},UPDATE_PRIORITY:{LOW:-25},live2d:{Live2DModel:{from:async()=>model}}}};
+  const canvas={style:{}},classes=new Set();
+  const context={window,innerWidth:280,innerHeight:402,devicePixelRatio:2,performance,document:{body:{append:noOp,classList:{toggle:(key,on)=>on?classes.add(key):classes.delete(key)}}},setTimeout,
+    PIXI:{Application:class{view=canvas;stage={addChild:noOp};ticker={add:noOp};},Ticker:{shared:{}},UPDATE_PRIORITY:{LOW:-25},live2d:{Live2DModel:{from:async()=>model}}}};
   vm.runInNewContext(await fs.readFile(new URL('./web/app.js',import.meta.url),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
   assert.ok(messages.some(value=>value.type==='ready'));
@@ -22,4 +23,8 @@ test('frequent native pointer updates do not accumulate animation ticker registr
   for(let i=0;i<1000;i++)update(false);
   assert.equal(registrations,2);assert.equal(model.autoUpdate,true);
   assert.equal(context.PIXI.Ticker.shared.maxFPS,24);
+  window.anylinkAvatar.update({mood:'idle',entrance:0.4,portal:true,reducedMotion:false});
+  assert.equal(canvas.style.opacity,'0.4');assert.ok(classes.has('entering'));
+  window.anylinkAvatar.update({mood:'idle',entrance:1,portal:false,reducedMotion:true});
+  assert.equal(canvas.style.opacity,'1');assert.equal(canvas.style.transform,'none');assert.ok(!classes.has('entering'));
 });

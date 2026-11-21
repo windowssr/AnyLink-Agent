@@ -13,6 +13,13 @@ import CoreGraphics
         let event = try! JSONDecoder().decode(CompanionProjection.self,from:data)
         precondition(event.valid(now:2000,started:900));precondition(!event.valid(now:2000,started:1100));precondition(!event.valid(now:6000,started:900))
         precondition(CompanionPolicy.cleanSpeech("你好。```js\nsecret\n``` 再见。") == "你好。 再见。")
-        print("PASS: 18 proactive policy, stale event, speech sanitation and bounded walk checks")
+        let entrance = CompanionEntrance(from:CGRect(x:0,y:0,width:420,height:600),to:CGRect(x:-1000,y:40,width:280,height:440),started:10,reducedMotion:false)
+        precondition(entrance.appearance(at:10) == 0 && entrance.appearance(at:12) == 1)
+        precondition(entrance.frame(at:10) == entrance.from && entrance.frame(at:20) == entrance.to)
+        precondition(entrance.portal(at:10) && !entrance.portal(at:12))
+        precondition(entrance.phase(at:12) == "settling" && entrance.finished(at:14))
+        let reduced = CompanionEntrance(from:entrance.from,to:entrance.to,started:0,reducedMotion:true)
+        precondition(reduced.frame(at:0) == reduced.to && !reduced.portal(at:0) && reduced.finished(at:0.25))
+        print("PASS: proactive policy, stale projection, bounded walk, entrance phases and reduced-motion placement")
     }
 }

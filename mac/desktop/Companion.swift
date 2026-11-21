@@ -10,7 +10,11 @@ final class CompanionCoordinator: NSObject {
     private let panel: NSPanel, view: CompanionView, root: URL
     private let openChat: () -> Void
     private let speech: CompanionSpeech, conversation: CompanionConversation
-    var currentSession: (() -> String?)?, openRecord: ((String,String) -> Void)?, openVoice: (() -> Void)?
+    private let control: CompanionControlServer
+    var onNotice: ((String) -> Void)?
+    private var entrancePending = true, entrance: CompanionEntrance?
+    private var requestedWalkUntil = Date.distantPast, controlCommands = 0
+    var currentSession: (() -> String?)?, openVoice: (() -> Void)?
     var interruptVoice: (() -> Void)?
     var onSuspend: (() -> Void)?
     private var animation: Timer?, poll: Timer?, journal: Timer?, refreshTask: Task<Void,Never>?
@@ -24,7 +28,7 @@ final class CompanionCoordinator: NSObject {
     private var expressionUntil = Date.distantPast
     private var recentTopic: String?, recentTopicUntil = Date.distantPast
     private var seen = Set<String>(), relevantRuns = Set<String>(), leaseAt = Date.distantPast
-    private var recordSession: String?, chatEvents = 0, proactiveReplies = 0
+    private var chatEvents = 0, proactiveReplies = 0
     private let started = Date().timeIntervalSince1970*1000
     private let defaults = UserDefaults.standard
     private var roam: Bool { defaults.object(forKey:"companion.roam") == nil || defaults.bool(forKey:"companion.roam") }
@@ -33,35 +37,33 @@ final class CompanionCoordinator: NSObject {
     private var snoozed: Bool { Date().timeIntervalSince1970 < defaults.double(forKey:"companion.snoozeUntil") }
     var isVisible: Bool { panel.isVisible }
     init(root: URL,openChat: @escaping () -> Void) throws {
-        self.root = root; self.openChat = openChat; conversation = CompanionConversation(root:root); speech = CompanionSpeech(root:root)
+        self.root = root; self.openChat = openChat; conversation = CompanionConversation(root:root); speech = CompanionSpeech(root:root); control = CompanionControlServer(root:root)
         view = CompanionView(root:root)
-        panel = CompanionPanel(contentRect:NSRect(x:0,y:0,width:280,height:520),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
+        panel = CompanionPanel(contentRect:NSRect(x:0,y:0,width:280,height:440),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
         panel.title = "AnyLink 桌面伙伴"; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
         panel.level = .floating; panel.hidesOnDeactivate = false; panel.isReleasedWhenClosed = false; panel.becomesKeyOnlyIfNeeded = true
         panel.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary,.stationary,.ignoresCycle]
         panel.contentView = view; panel.isMovableByWindowBackground = false
         super.init()
-        if defaults.string(forKey:"companion.requestState") != nil { recordSession = conversation.key.components(separatedBy:":").last }
-        view.onOpenChat = { [weak self] in self?.showChat() }
-        view.onTap = { [weak self] in self?.pet() }
+        view.onOpenChat = { [weak self] in self?.stopSpeaking(); self?.openChat() }
         view.onMoved = { [weak self] in self?.walk = nil; self?.settle(save:true); self?.nextWalk = Date().addingTimeInterval(40) }
-        view.onDragStart = { [weak self] in self?.walk = nil }
-        view.onMenu = { [weak self] in self?.walk = nil; self?.touchedAt = Date(); self?.nextWalk = Date().addingTimeInterval(35); return self?.menu() ?? NSMenu() }
+        view.onDragStart = { [weak self] in self?.walk = nil; self?.requestedWalkUntil = .distantPast }
         view.onStopSpeech = { [weak self] in self?.stopSpeaking() }
-        view.renderer.onChange = { [weak self] in self?.view.needsDisplay = true; self?.publishSnapshot() }
+        view.renderer.onChange = { [weak self] in self?.rendererChanged() }
         speech.onSpeaking = { [weak self] speaking in
             guard let self else { return }; self.view.speaking = speaking || self.voiceSpeaking
             if speaking { self.walk = nil }; self.publishSnapshot()
         }
-        speech.onFailure = { [weak self] in self?.view.showMessage("甜妹声音暂时没连上，文字回复还在聊天里。",seconds:12); self?.publishSnapshot() }
+        speech.onFailure = { [weak self] in self?.onNotice?("甜妹声音暂时没连上，文字回复还在聊天里。"); self?.publishSnapshot() }
         conversation.onText = { [weak self] text in
             guard let self,!self.stopped,!self.sleeping else { return }
-            self.recordSession = self.conversation.key.components(separatedBy:":").last
             self.proactiveReplies += 1
             self.present(text,emotion:Date()<self.expressionUntil ? self.view.emotion : .happy,gesture:Date()<self.expressionUntil ? "none" : "nod",speak:true)
         }
-        conversation.onFailure = { [weak self] in self?.view.showMessage("这次招呼的结果未确认，我不会自动重发。",seconds:15); self?.publishSnapshot() }
+        conversation.onFailure = { [weak self] in self?.onNotice?("这次招呼的结果未确认，我不会自动重发。"); self?.publishSnapshot() }
         conversation.onBusy = { [weak self] busy in if busy { self?.walk = nil }; self?.publishSnapshot() }
+        installConversationDefaults()
+        control.onCommand = { [weak self] in self?.apply($0) ?? ["status":"desktop_unavailable","applied":false] }; control.start()
         setScale(defaults.double(forKey:"companion.scale"),save:false)
         if defaults.object(forKey:"companion.x") != nil {
             panel.setFrameOrigin(NSPoint(x:defaults.double(forKey:"companion.x"),y:defaults.double(forKey:"companion.y")))
@@ -77,7 +79,7 @@ final class CompanionCoordinator: NSObject {
         if defaults.object(forKey:"companion.visible") == nil || defaults.bool(forKey:"companion.visible") { show() }
     }
     func show() {
-        stopped = false; defaults.set(true,forKey:"companion.visible"); settle(save:false); panel.orderFrontRegardless(); view.renderer.start(); writeLease()
+        stopped = false; defaults.set(true,forKey:"companion.visible"); settle(save:false); if entrancePending { panel.alphaValue = 0 }; panel.orderFrontRegardless(); view.renderer.start(); writeLease()
         if animation == nil { animation = Timer.scheduledTimer(withTimeInterval:1.0/24,repeats:true) { [weak self] _ in Task { @MainActor in self?.animate() } } }
         if poll == nil { poll = Timer.scheduledTimer(withTimeInterval:4,repeats:true) { [weak self] _ in Task { @MainActor in self?.refresh() } } }
         if journal == nil { journal = Timer.scheduledTimer(withTimeInterval:0.3,repeats:true) { [weak self] _ in Task { @MainActor in self?.readEvents() } } }
@@ -86,15 +88,15 @@ final class CompanionCoordinator: NSObject {
     func reveal() { show(); panel.makeKeyAndOrderFront(nil) }
     func hide() { defaults.set(false,forKey:"companion.visible"); stopPresentation() }
     private func stopPresentation() {
-        stopped = true; walk = nil; panel.orderOut(nil); view.renderer.stop(); speech.stop(); conversation.stop(); writeLease()
+        stopped = true; walk = nil; requestedWalkUntil = .distantPast; finishEntrance(); panel.orderOut(nil); view.renderer.stop(); speech.stop(); conversation.stop(); writeLease()
         animation?.invalidate(); animation = nil; poll?.invalidate(); poll = nil; journal?.invalidate(); journal = nil
         refreshEpoch &+= 1; refreshTask?.cancel(); refreshTask = nil; client?.disconnect(); connected = false; inFlight = false
         clearEvents(); publishSnapshot()
     }
     func toggle() { if panel.isVisible { hide() } else { show() } }
-    func stop() { stopPresentation() }
-    private func suspend() { sleeping = true; walk = nil; speech.stop(); conversation.stop(); onSuspend?(); view.renderer.stop(); writeLease(); publishSnapshot() }
-    private func resume() { sleeping = false; nextProactive = Date().addingTimeInterval(1200); nextWalk = Date().addingTimeInterval(30); if !stopped && panel.isVisible { view.renderer.start() }; writeLease(); publishSnapshot() }
+    func stop() { control.stop(); stopPresentation() }
+    private func suspend() { sleeping = true; finishEntrance(); control.pause(true); requestedWalkUntil = .distantPast; walk = nil; speech.stop(); conversation.stop(); onSuspend?(); view.renderer.stop(); writeLease(); publishSnapshot() }
+    private func resume() { sleeping = false; control.pause(false); nextProactive = Date().addingTimeInterval(1200); nextWalk = Date().addingTimeInterval(30); if !stopped && panel.isVisible { view.renderer.start() }; writeLease(); publishSnapshot() }
     func setVoiceActivity(running: Bool,speaking: Bool) {
         voiceActive = running; voiceSpeaking = speaking
         if running { speech.stop(); walk = nil }
@@ -104,27 +106,28 @@ final class CompanionCoordinator: NSObject {
     private func animate() {
         guard !sleeping else { return }
         let now = Date(), previous = view.mood
+        if entrancePending || entrance != nil { animateEntrance(); return }
         if now > temporaryUntil { view.mood = state == .idle && now.timeIntervalSince(touchedAt)>180 ? .sleepy : state }
         if now > emotionUntil { view.emotion = .neutral }
         if let current = walk {
-            if view.dragging || (view.pointerInside && now>ignoreHoverUntil) || state != .idle || speech.speaking || voiceActive || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { walk = nil }
+            if view.dragging || (view.pointerInside && now>ignoreHoverUntil) || state != .idle || speech.hasOutput || voiceActive || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { walk = nil }
             else { panel.setFrameOrigin(current.position(at:ProcessInfo.processInfo.systemUptime)); if current.finished(at:ProcessInfo.processInfo.systemUptime) { walk = nil; publishSnapshot() } }
         }
         view.walking = walk != nil; view.walkDirection = walk?.direction ?? 1
         view.animate(time:ProcessInfo.processInfo.systemUptime)
         if now.timeIntervalSince(leaseAt)>10 { writeLease(); scheduleCompanionship(); publishSnapshot() }
-        if roam && now > nextWalk && state == .idle && !conversation.pending && !voiceActive && !speech.speaking && !snoozed && now.timeIntervalSince(touchedAt)>12 && !away { startWalk(manual:false) }
+        if now<requestedWalkUntil && state == .idle && !speech.hasOutput && !voiceActive && !conversation.pending { startWalk(manual:true); if walk != nil { requestedWalkUntil = .distantPast } }
+        if roam && now > nextWalk && state == .idle && !conversation.pending && !voiceActive && !speech.hasOutput && !snoozed && now.timeIntervalSince(touchedAt)>12 && !away { startWalk(manual:false) }
         if previous != view.mood { publishSnapshot() }
     }
     private var away: Bool { CGEventSource.secondsSinceLastEventType(.combinedSessionState,eventType:.null)>300 }
     private func pet() {
-        if speech.speaking { stopSpeaking(); return }
         touchedAt = Date(); nextWalk = Date().addingTimeInterval(40); temporaryUntil = Date().addingTimeInterval(3); view.mood = .happy
         defaults.set(0,forKey:"companion.unanswered"); nextProactive = Date().addingTimeInterval(Double.random(in:1200...2400))
-        present("嘿，收到你的摸摸啦。要不要和我聊两句？",emotion:.happy,gesture:"wave",speak:true)
+        view.emotion = .happy; emotionUntil = Date().addingTimeInterval(12); view.renderer.action("wave")
     }
     private func present(_ text: String,emotion: CompanionEmotion,gesture: String,speak: Bool) {
-        view.showMessage(String(text.prefix(110)),seconds:25); view.emotion = emotion; emotionUntil = Date().addingTimeInterval(12)
+        view.emotion = emotion; emotionUntil = Date().addingTimeInterval(12)
         if gesture != "none" { view.renderer.action(gesture) }
         if speak && readAloud && !voiceActive && !snoozed { speech.speak(text) }
         publishSnapshot()
@@ -151,7 +154,6 @@ final class CompanionCoordinator: NSObject {
             } ?? false
             guard own || voice || selected || (!event.runId.isEmpty && relevantRuns.contains(event.runId)) else { continue }
             if !event.runId.isEmpty { relevantRuns.insert(event.runId) }
-            if own { recordSession = conversation.key.components(separatedBy:":").last }
             chatEvents += 1
             switch event.type {
             case "user":
@@ -183,21 +185,21 @@ final class CompanionCoordinator: NSObject {
         let now = Date(),day = String(Calendar.current.startOfDay(for:Date()).timeIntervalSince1970)
         if defaults.string(forKey:"companion.day") != day { defaults.set(day,forKey:"companion.day"); defaults.set(0,forKey:"companion.daily") }
         guard now > nextProactive,defaults.integer(forKey:"companion.unanswered")<2 else { return }
-        let allowed = CompanionPolicy.canInitiate(enabled:proactive,quiet:CompanionPolicy.quiet(hour:Calendar.current.component(.hour,from:now)),away:away,busy:state != .idle || conversation.pending,speaking:speech.speaking || voiceActive,paused:snoozed,lastAttempt:defaults.double(forKey:"companion.lastAttempt"),now:now.timeIntervalSince1970,daily:defaults.integer(forKey:"companion.daily"))
+        let allowed = CompanionPolicy.canInitiate(enabled:proactive,quiet:CompanionPolicy.quiet(hour:Calendar.current.component(.hour,from:now)),away:away,busy:state != .idle || conversation.pending,speaking:speech.hasOutput || voiceActive,paused:snoozed,lastAttempt:defaults.double(forKey:"companion.lastAttempt"),now:now.timeIntervalSince1970,daily:defaults.integer(forKey:"companion.daily"))
         if allowed { initiate(manual:false) }
     }
     private func initiate(manual: Bool) {
-        guard !stopped,!sleeping,!voiceActive,!conversation.pending,state == .idle else { if manual { view.showMessage("等当前这件事忙完，我们再聊两句。",seconds:10) }; return }
+        guard !stopped,!sleeping,!voiceActive,!conversation.pending,state == .idle else { if manual { onNotice?("等当前这件事忙完，我们再聊两句。") }; return }
         // Persist before submission; a lost result never retries on launch/wake.
         defaults.set(Date().timeIntervalSince1970,forKey:"companion.lastAttempt")
         nextProactive = Date().addingTimeInterval(Double.random(in:1200...2400)); walk = nil
         if manual { defaults.set(0,forKey:"companion.unanswered") }
         else { defaults.set(defaults.integer(forKey:"companion.daily")+1,forKey:"companion.daily"); defaults.set(defaults.integer(forKey:"companion.unanswered")+1,forKey:"companion.unanswered") }
-        view.showMessage("让我想想，和你聊点什么…",seconds:15); conversation.initiate(manual:manual,recentContext:Date()<recentTopicUntil ? recentTopic : nil); publishSnapshot()
+        conversation.initiate(manual:manual,recentContext:Date()<recentTopicUntil ? recentTopic : nil); publishSnapshot()
     }
     private func startWalk(manual: Bool) {
         nextWalk = Date().addingTimeInterval(Double.random(in:40...80))
-        guard walk == nil,!view.dragging,!sleeping,!NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,!voiceActive,!speech.speaking,!conversation.pending,state == .idle else { return }
+        guard walk == nil,!view.dragging,!sleeping,!NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,!voiceActive,!speech.hasOutput,!conversation.pending,state == .idle else { return }
         if !manual && view.pointerInside { return }
         guard let screen = CompanionGeometry.screen(for:panel.frame,among:NSScreen.screens.map(\.visibleFrame)) else { return }
         let start = panel.frame.origin,roomLeft = start.x-screen.minX,roomRight = screen.maxX-panel.frame.maxX
@@ -234,46 +236,81 @@ final class CompanionCoordinator: NSObject {
     }
     private func setScale(_ scale: Double,save: Bool) {
         let value = [0.8,1,1.25].contains(scale) ? scale : 1
-        let origin = panel.frame.origin; panel.setFrame(NSRect(x:origin.x,y:origin.y,width:280*value,height:520*value),display:true)
+        let origin = panel.frame.origin; panel.setFrame(NSRect(x:origin.x,y:origin.y,width:280*value,height:440*value),display:true)
         if save { defaults.set(value,forKey:"companion.scale"); walk = nil; settle(save:true) }
     }
-    private func menu() -> NSMenu {
-        let menu = NSMenu()
-        func item(_ title: String,_ action: Selector,_ tag: Int = 0,_ checked: Bool = false) -> NSMenuItem { let item = NSMenuItem(title:title,action:action,keyEquivalent:""); item.target = self; item.tag = tag; item.state = checked ? .on : .off; return item }
-        menu.addItem(item("打开 AnyLink 聊天",#selector(open)))
-        menu.addItem(item("现在聊两句",#selector(chatNow))); menu.addItem(item("语音聊天…",#selector(voiceMenu)))
-        menu.addItem(item("停止说话",#selector(stopSpeechMenu))); menu.addItem(item("摸摸头",#selector(touch)))
-        menu.addItem(item("走两步",#selector(walkNow))); menu.addItem(item("自由走动",#selector(toggleRoam),0,roam))
-        menu.addItem(item("主动找我聊天",#selector(toggleProactive),0,proactive)); menu.addItem(item("语音播报 · "+speech.label,#selector(toggleReadAloud),0,readAloud))
-        menu.addItem(item(snoozed ? "结束免打扰" : "安静陪伴一小时",#selector(snooze)))
-        menu.addItem(.separator()); menu.addItem(item("抬手致意",#selector(gesture(_:)),1)); menu.addItem(item("竖起手指",#selector(gesture(_:)),2)); menu.addItem(item("点点头",#selector(gesture(_:)),3))
-        let size = NSMenu(); for (title,tag) in [("小",80),("标准",100),("大",125)] { size.addItem(item(title,#selector(resize(_:)),tag,abs(panel.frame.width-280*Double(tag)/100)<1)) }
-        let sizing = NSMenuItem(title:"形象大小",action:nil,keyEquivalent:""); sizing.submenu = size; menu.addItem(sizing)
-        menu.addItem(item("移回屏幕右下角",#selector(resetPosition))); menu.addItem(item("重新加载形象",#selector(reloadAvatar))); menu.addItem(item("角色来源与使用须知",#selector(credits)))
-        menu.addItem(.separator()); menu.addItem(item("隐藏桌面伙伴",#selector(hideMenu))); return menu
+    private func installConversationDefaults() {
+        guard !defaults.bool(forKey:"companion.conversationDefaults.v0.6") else { return }
+        for key in ["roam","proactive","readAloud","visible"] { defaults.set(true,forKey:"companion."+key) }
+        defaults.set(0,forKey:"companion.snoozeUntil"); defaults.set(true,forKey:"companion.conversationDefaults.v0.6")
     }
-    private func showChat() { if let id = recordSession { openRecord?("companion",id) } else { openChat() } }
-    @objc private func open() { openChat() }
-    @objc private func chatNow() { initiate(manual:true) }
-    @objc private func voiceMenu() { openVoice?() }
-    @objc private func stopSpeechMenu() { stopSpeaking() }
-    @objc private func touch() { pet() }
-    @objc private func walkNow() { startWalk(manual:true) }
-    @objc private func toggleRoam() { defaults.set(!roam,forKey:"companion.roam"); walk = nil; nextWalk = Date().addingTimeInterval(8); publishSnapshot() }
-    @objc private func toggleProactive() { defaults.set(!proactive,forKey:"companion.proactive"); publishSnapshot() }
-    @objc private func toggleReadAloud() { defaults.set(!readAloud,forKey:"companion.readAloud"); if !readAloud { stopSpeaking() }; publishSnapshot() }
-    @objc private func snooze() { defaults.set(snoozed ? 0 : Date().addingTimeInterval(3600).timeIntervalSince1970,forKey:"companion.snoozeUntil"); speech.stop(); walk = nil; publishSnapshot() }
-    @objc private func gesture(_ sender: NSMenuItem) { view.renderer.action([1:"wave",2:"point",3:"nod"][sender.tag] ?? "nod") }
-    @objc private func credits() { if let url = URL(string:"https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md") { NSWorkspace.shared.open(url) } }
-    @objc private func reloadAvatar() { view.renderer.stop(); if panel.isVisible { view.renderer.start() } }
-    @objc private func resize(_ sender: NSMenuItem) { setScale(Double(sender.tag)/100,save:true) }
-    @objc private func hideMenu() { hide() }
-    @objc private func resetPosition() { walk = nil; if let screen = NSScreen.main { panel.setFrameOrigin(NSPoint(x:screen.visibleFrame.maxX-panel.frame.width-22,y:screen.visibleFrame.minY+16)); settle(save:true) } }
+    private func rendererChanged() {
+        if entrancePending && view.renderer.ready { beginEntrance() }
+        if entrancePending && ["load_failed","assets_missing"].contains(view.renderer.status) { finishEntrance(); onNotice?("形象加载失败，请检查本机素材。"); openChat() }
+        publishSnapshot()
+    }
+    private func beginEntrance() {
+        guard entrancePending,let screen = CompanionGeometry.screen(for:panel.frame,among:NSScreen.screens.map(\.visibleFrame)) else { finishEntrance(); return }
+        let target = panel.frame,reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let height = min(600,screen.height-36),width = min(420,screen.width-36)
+        let origin = NSRect(x:screen.midX-width/2,y:screen.midY-height/2,width:width,height:height)
+        entrance = CompanionEntrance(from:reduced ? target : origin,to:target,started:ProcessInfo.processInfo.systemUptime,reducedMotion:reduced)
+        entrancePending = false; view.interactionBlocked = true; view.entrance = 0; view.portal = !reduced
+        panel.setFrame(reduced ? target : origin,display:true); panel.alphaValue = 1; animateEntrance()
+    }
+    private func animateEntrance() {
+        guard let entrance else { return }
+        let time = ProcessInfo.processInfo.systemUptime
+        view.entrance = entrance.appearance(at:time); view.portal = entrance.portal(at:time)
+        panel.setFrame(entrance.frame(at:time),display:true); view.animate(time:time); publishSnapshot()
+        if entrance.finished(at:time) { finishEntrance(); view.renderer.action("wave") }
+    }
+    private func finishEntrance() {
+        if let entrance { panel.setFrame(entrance.to,display:true) }
+        entrance = nil; entrancePending = false; view.entrance = 1; view.portal = false; view.interactionBlocked = false; panel.alphaValue = 1
+        nextWalk = Date().addingTimeInterval(20); publishSnapshot()
+    }
+    private func settings() -> [String:Any] {
+        ["visible":panel.isVisible,"roaming":roam,"proactive":proactive,"read_aloud":readAloud,"quiet_until":defaults.double(forKey:"companion.snoozeUntil"),"scale":[0.8,1,1.25].contains(defaults.double(forKey:"companion.scale")) ? defaults.double(forKey:"companion.scale") : 1,"renderer":view.renderer.status,"voice":speech.label,"reduced_motion":NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,"walking":walk != nil,"walk_queued":Date()<requestedWalkUntil]
+    }
+    private func apply(_ command: CompanionCommand) -> [String:Any] {
+        guard command.valid else { return ["status":"invalid","applied":false] }
+        controlCommands += 1
+        if command.action == "status" { return ["status":"ok","applied":true,"state":settings()] }
+        finishEntrance()
+        var status = "applied",applied = true
+        switch command.action {
+        case "configure":
+            if let value = command.roaming { defaults.set(value,forKey:"companion.roam"); if !value { walk = nil } }
+            if let value = command.proactive { defaults.set(value,forKey:"companion.proactive"); nextProactive = Date().addingTimeInterval(1200) }
+            if let value = command.read_aloud { defaults.set(value,forKey:"companion.readAloud"); if !value { stopSpeaking() } }
+        case "quiet":
+            defaults.set(command.minutes == 0 ? 0 : Date().addingTimeInterval(Double(command.minutes!)*60).timeIntervalSince1970,forKey:"companion.snoozeUntil")
+            stopSpeaking(); walk = nil; requestedWalkUntil = .distantPast; nextProactive = Date().addingTimeInterval(1200)
+        case "walk":
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || sleeping || !panel.isVisible { status = "unavailable"; applied = false }
+            else { requestedWalkUntil = Date().addingTimeInterval(90); status = "queued" }
+        case "pet": pet()
+        case "resize": setScale(command.scale!,save:true)
+        case "reset_position": resetPosition()
+        case "reload": view.renderer.stop(); if panel.isVisible { view.renderer.start() }
+        case "show": show()
+        case "hide": hide()
+        case "open_chat": openChat()
+        case "open_voice": openVoice?()
+        case "stop_speaking": stopSpeaking()
+        case "chat_now": initiate(manual:true); applied = conversation.pending; status = applied ? "queued" : "busy"
+        case "credits": if let url = URL(string:"https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md") { NSWorkspace.shared.open(url) }
+        default: status = "invalid"; applied = false
+        }
+        publishSnapshot(); return ["status":status,"applied":applied,"state":settings()]
+    }
+    private func resetPosition() { walk = nil; if let screen = NSScreen.main { panel.setFrameOrigin(NSPoint(x:screen.visibleFrame.maxX-panel.frame.width-22,y:screen.visibleFrame.minY+16)); settle(save:true) } }
     private func saveJSON(_ value: [String:Any],name: String) {
         let file = root.appendingPathComponent("data/mac/desktop").appendingPathComponent(name).standardizedFileURL
         do { try FileManager.default.createDirectory(at:file.deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700]); try JSONSerialization.data(withJSONObject:value).write(to:file,options:.atomic); try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path) } catch {}
     }
     private func publishSnapshot() {
-        saveJSON(["visible":panel.isVisible,"mood":view.mood.rawValue,"emotion":view.emotion.rawValue,"agent_state":state.rawValue,"active_sessions":activeKeys.count,"renderer":view.renderer.status,"last_action":view.renderer.lastAction,"walking":walk != nil,"roaming_enabled":roam,"proactive_enabled":proactive,"read_aloud":readAloud,"speaking":speech.speaking || voiceSpeaking,"voice_active":voiceActive,"speech_utterances":speech.utterances,"voice_available":speech.profile != nil || speech.voice != nil,"voice_locale":"zh-CN","voice_profile":speech.profile ?? "system","voice_label":speech.label,"chat_events":chatEvents,"proactive_replies":proactiveReplies,"proactive_pending":conversation.pending,"snoozed":snoozed,"status_client_read_only":true,"read_only":false,"frame":["x":panel.frame.minX,"y":panel.frame.minY,"width":panel.frame.width,"height":panel.frame.height],"updated_at":Date().timeIntervalSince1970],name:"companion-state.json")
+        saveJSON(["bubble_visible":false,"context_menu":false,"control_commands":controlCommands,"entrance_phase":entrancePending ? "loading" : (entrance?.phase(at:ProcessInfo.processInfo.systemUptime) ?? "finished"),"visible":panel.isVisible,"mood":view.mood.rawValue,"emotion":view.emotion.rawValue,"agent_state":state.rawValue,"active_sessions":activeKeys.count,"renderer":view.renderer.status,"last_action":view.renderer.lastAction,"walking":walk != nil,"roaming_enabled":roam,"proactive_enabled":proactive,"read_aloud":readAloud,"speaking":speech.speaking || voiceSpeaking,"voice_active":voiceActive,"speech_utterances":speech.utterances,"voice_available":speech.profile != nil || speech.voice != nil,"voice_locale":"zh-CN","voice_profile":speech.profile ?? "system","voice_label":speech.label,"chat_events":chatEvents,"proactive_replies":proactiveReplies,"proactive_pending":conversation.pending,"snoozed":snoozed,"status_client_read_only":true,"read_only":false,"frame":["x":panel.frame.minX,"y":panel.frame.minY,"width":panel.frame.width,"height":panel.frame.height],"updated_at":Date().timeIntervalSince1970],name:"companion-state.json")
     }
 }
