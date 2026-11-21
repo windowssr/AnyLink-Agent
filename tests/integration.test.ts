@@ -78,7 +78,7 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
       const r=await model('broken',true);assert.equal((await instance.db.query('SELECT state FROM model_requests WHERE id=$1',[r.headers['x-anylink-request-id']])).rows[0].state,'submission_unknown');assert.equal(calls,before+2);
     });
     await t.test('per-device concurrency admission prevents a second inference',async()=>{
-      const pending=model('hold');while(!hold)await new Promise(r=>setTimeout(r,10));const before=calls;
+      const pending=model('hold');for(let i=0;i<1000&&!hold;i++)await new Promise(r=>setTimeout(r,10));assert.ok(hold,'The controlled upstream was never reached');const before=calls;
       assert.equal((await model('second')).statusCode,429);assert.equal(calls,before);hold!();await pending;
     });
     await t.test('credential revocation blocks model and memory, owner remains valid',async()=>{

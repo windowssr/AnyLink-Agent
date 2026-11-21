@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { once } from 'node:events';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ApiError,type Db,transaction } from './db.js';
@@ -27,7 +26,12 @@ export function registerModelProxy(app:FastifyInstance,db:Db,config:Config) {
     active.set(id,controller);
     const timer=setTimeout(()=>controller.abort(),120000);
     const close=()=>{if(!reply.raw.writableEnded)controller.abort();};reply.raw.on('close',close);
-    let state='submission_unknown',errorCode:string|null=null,usage:any=null;
+    let state='submission_unknown',errorCode:string|null=null,usage:any=null,persisted=false;
+    const persist=async()=>{
+      const count=(n:unknown)=>Number.isSafeInteger(n)&&Number(n)>=0?Number(n):null;
+      await db.query('UPDATE model_requests SET state=$2,error_code=$3,prompt_tokens=$4,completion_tokens=$5,finished_at=now() WHERE id=$1',[id,state,errorCode,count(usage?.prompt_tokens),count(usage?.completion_tokens)]);
+      persisted=true;
+    };
     try {
       const body={...input,max_tokens:input.max_tokens??input.max_completion_tokens??4096};
       delete body.max_completion_tokens;
@@ -35,11 +39,11 @@ export function registerModelProxy(app:FastifyInstance,db:Db,config:Config) {
         method:'POST',headers:{Authorization:`Bearer ${config.deepseekApiKey}`,'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal,
       });
       if(!upstream.ok) {
-        await upstream.body?.cancel();state='rejected';errorCode=`PROVIDER_HTTP_${upstream.status}`;
+        await upstream.body?.cancel();state='rejected';errorCode=`PROVIDER_HTTP_${upstream.status}`;await persist();
         return reply.code(upstream.status).send({error:{message:'模型提供商拒绝本次请求',type:'upstream_error',code:errorCode},request_id:id});
       }
       if(!input.stream) {
-        const result=await upstream.json() as any;usage=result.usage;state='completed';return reply.header('X-AnyLink-Request-Id',id).send(result);
+        const result=await upstream.json() as any;usage=result.usage;state='completed';await persist();return reply.header('X-AnyLink-Request-Id',id).send(result);
       }
       if(!upstream.body)throw new Error('EMPTY_PROVIDER_STREAM');
       reply.hijack();reply.raw.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store','X-Accel-Buffering':'no','X-AnyLink-Request-Id':id});
@@ -50,18 +54,25 @@ export function registerModelProxy(app:FastifyInstance,db:Db,config:Config) {
           lines+=decoder.decode(chunk.value,{stream:true});
           let end:number;while((end=lines.indexOf('\n'))>=0){const line=lines.slice(0,end).trim();lines=lines.slice(end+1);if(line==='data: [DONE]')done=true;else if(line.startsWith('data: ')){try{const data=JSON.parse(line.slice(6));if(data.usage)usage=data.usage;}catch{}}}
           if(lines.length>1048576)throw new Error('PROVIDER_EVENT_TOO_LARGE');
-          if(!reply.raw.write(chunk.value))await Promise.race([once(reply.raw,'drain'),once(reply.raw,'close').then(()=>{throw new Error('CLIENT_DISCONNECTED');})]);
+          // Release inference admission before the harness sees DONE and starts its next tool round.
+          if(done){state='completed';await persist();}
+          if(!reply.raw.write(chunk.value))await new Promise<void>((resolve,reject)=>{
+            const clean=()=>{reply.raw.off('drain',drain);reply.raw.off('close',closed);};
+            const drain=()=>{clean();resolve();};const closed=()=>{clean();reject(new Error('CLIENT_DISCONNECTED'));};
+            reply.raw.once('drain',drain);reply.raw.once('close',closed);
+          });
+          if(done){await reader.cancel().catch(()=>{});break;}
         }
       }finally{reader.releaseLock();}
-      state=done?'completed':'submission_unknown';if(!done)errorCode='PROVIDER_STREAM_INTERRUPTED';reply.raw.end();
+      state=done?'completed':'submission_unknown';if(!done)errorCode='PROVIDER_STREAM_INTERRUPTED';if(!persisted)await persist();reply.raw.end();
     } catch {
+      if(!persisted)state='submission_unknown';
       errorCode=controller.signal.aborted?'MODEL_INTERRUPTED':'MODEL_TRANSPORT_UNKNOWN';
       if(!reply.raw.headersSent&&!reply.raw.destroyed)reply.code(502).send({error:{message:'模型响应未确认；代理没有自动重发',type:'upstream_error',code:errorCode},request_id:id});
       else if(!reply.raw.destroyed)reply.raw.destroy();
     } finally {
       clearTimeout(timer);reply.raw.off('close',close);active.delete(id);
-      const count=(n:unknown)=>Number.isSafeInteger(n)&&Number(n)>=0?Number(n):null;
-      await db.query('UPDATE model_requests SET state=$2,error_code=$3,prompt_tokens=$4,completion_tokens=$5,finished_at=now() WHERE id=$1',[id,state,errorCode,count(usage?.prompt_tokens),count(usage?.completion_tokens)]).catch(()=>{});
+      if(!persisted)await persist().catch(()=>{});
     }
   });
   app.addHook('preClose',async()=>{for(const controller of active.values())controller.abort();});
