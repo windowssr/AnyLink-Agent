@@ -21,6 +21,7 @@ export async function downloadPinned({url,sha256,sha1,bytes},target) {
   }
   const settled=await Promise.allSettled(Array.from({length:count},async(_,i)=>{
     const start=i*chunkSize,end=Math.min(bytes-1,start+chunkSize-1),size=end-start+1,file=target+'.part-'+i;chunks[i]=file;
+    let lastFailure;
     for(let attempt=0;attempt<8;attempt++){
       const have=fs.existsSync(file)?fs.statSync(file).size:0;
       if(have===size)return;
@@ -32,15 +33,18 @@ export async function downloadPinned({url,sha256,sha1,bytes},target) {
       });
       const response=fs.existsSync(headers)?fs.readFileSync(headers,'utf8'):'';
       const range=[...response.matchAll(/content-range:\s*bytes\s+(\d+)-(\d+)\/(\d+)/ig)].at(-1);
+      const status=[...response.matchAll(/^HTTP\/[^ ]+ (\d+)/gm)].at(-1)?.[1];
+      lastFailure=`range ${i+1}/${count}, curl=${code}, HTTP=${status??'unavailable'}`;
       if(range&&+range[1]===start+have&&+range[3]===bytes&&fs.existsSync(temporary)){
         const received=fs.readFileSync(temporary);if(received.length>size-have)throw new Error('Oversized official download range');
         fs.appendFileSync(file,received);
       }
       for(const p of [temporary,headers])if(fs.existsSync(p))fs.rmSync(p);
+      if(status==='429')throw new Error('Artifact repository returned HTTP429; partial downloads preserved. Use the documented official mirror or retry after the repository limit expires.');
       if(fs.existsSync(file)&&fs.statSync(file).size===size){console.log(`Official artifact range ${i+1}/${count} ready`);return;}
       if(code===0)throw new Error('Download endpoint did not return the requested byte range');
     }
-    throw new Error('Partial artifact download preserved; rerun to resume');
+    throw new Error('Partial artifact download preserved ('+lastFailure+'); rerun to resume');
   }));
   // Wait for every admitted range to settle before reporting a failure; leaving
   // child transfers behind could race the next resumable installation.

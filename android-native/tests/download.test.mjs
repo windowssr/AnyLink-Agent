@@ -7,16 +7,19 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {downloadPinned} from '../scripts/download.mjs';
 const bytes=Buffer.from(Array.from({length:120000},(_,i)=>i%251));
-async function fixture(run){
+async function fixture(run,rateLimited=false){
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-pinned-download-'));
+  let requests=0;
   const server=http.createServer((req,res)=>{
+    requests++;
+    if(rateLimited){res.writeHead(429,{'Retry-After':'86400'}).end('limited');return;}
     const match=/^bytes=(\d+)-(\d+)$/.exec(req.headers.range??'');
     if(!match){res.writeHead(416).end();return;}
     const start=Number(match[1]),end=Number(match[2]);
     res.writeHead(206,{'Content-Range':`bytes ${start}-${end}/${bytes.length}`,'Content-Length':end-start+1});res.end(bytes.subarray(start,end+1));
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  try{await run(dir,'http://127.0.0.1:'+server.address().port+'/artifact.zip');}
+  try{await run(dir,'http://127.0.0.1:'+server.address().port+'/artifact.zip',()=>requests);}
   finally{await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});}
 }
 test('pinned transfer resumes an untrusted prefix, validates the complete published digest and removes parts',async()=>fixture(async(dir,url)=>{
@@ -30,3 +33,9 @@ test('Google SDK SHA1 metadata is verified and a wrong published checksum is ref
   assert.deepEqual(fs.readFileSync(target),bytes);
   await assert.rejects(downloadPinned({url,bytes:bytes.length,sha256:'0'.repeat(64)},path.join(dir,'refused.zip')),/checksum mismatch/);
 }));
+test('repository rate limits preserve partial data and stop repeated requests',async()=>fixture(async(dir,url,count)=>{
+  const target=path.join(dir,'artifact.zip'),prefix=bytes.subarray(0,27000);fs.writeFileSync(target,prefix);
+  await assert.rejects(downloadPinned({url,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')},target),/HTTP429/);
+  assert.deepEqual(fs.readFileSync(target),prefix);
+  assert.ok(count()<=6,'A rate limit must not trigger an immediate retry burst');
+},true));

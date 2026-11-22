@@ -69,3 +69,5 @@ node android-native/scripts/configure-preview.mjs --apply
 `node android-native/scripts/acceptance.mjs` 通过本机 Gateway 验证真实模型、只读搜索、明确写记忆、新会话召回和官方语音合成。脚本仅创建唯一标记的验收事实并在结束时软删除，保留既有审计，不修改主人事实；报告和音频在忽略的 `artifacts/android-native/`。这不能代替真机语音、GPU、节点操作与后台测试。
 
 预览配置回退：先确认没有正在执行的任务，再将上面的首次备份复制回 `data/mac/openclaw/openclaw.json`，使用正式 CLI 校验，等待热重载。不要清空 Mac 状态、会话、云记忆或数据库。关闭原生预览不会影响旧 uni-app 工程，`android/` 保留为历史参考，后续 Android 主线在本目录。
+
+本次环境的 Maven Central 主端点返回了要求约24小时后重试的 HTTP429。构建使用 [Google 官方 Maven Central 镜像](https://docs.cloud.google.com/docs/buildpacks/java#google_cloud_hosted_maven_central_mirror)，包版本保持上游固定值，JVM 框架与 POM 仍校验相同发布 SHA-256。下载器遇到限流会停止该端点的重试并保留已有分段。

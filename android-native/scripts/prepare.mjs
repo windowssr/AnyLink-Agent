@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {root, home, source, lock, node} from './layout.mjs';
+import {root, home, source, lock, node, tools} from './layout.mjs';
 const run=(args,options={})=>execFileSync('git',args,{cwd:source,encoding:'utf8',...options});
 const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 if(!fs.existsSync(path.join(source,'.git'))){
@@ -43,6 +43,10 @@ fs.writeFileSync(path.join(source,gradle),build);prepared[gradle]=hash(path.join
 // Shared/benchmark/watch modules are configured by the official root build too;
 // keep their SDK tool choice consistent instead of admitting another auto-install.
 for(const module of ['wear-shared','wear','benchmark'])patch(`apps/android/${module}/build.gradle.kts`,'compileSdk = 37','compileSdk = 37\n  buildToolsVersion = "37.0.0"');
+const settingsPath='apps/android/settings.gradle.kts';
+const settings=run(['show','HEAD:'+settingsPath]);
+if(settings.split('mavenCentral()').length!==3)throw new Error('Pinned Maven repository context changed');
+publish(settingsPath,Buffer.from(settings.replaceAll('mavenCentral()',`maven { url = uri(${JSON.stringify(tools.mavenCentralUrl)}) }`)));
 patch('apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt','{ ShellNavigation() }','{ ShellNavigation(activeTab = Tab.Chat) }');
 patch('apps/android/gradle/wrapper/gradle-wrapper.properties','networkTimeout=10000','networkTimeout=60000');
 // AGP 9.5 and Gradle 9.7 officially support JDK17. Reuse the installed JDK,
@@ -113,8 +117,18 @@ fs.cpSync(model,path.join(assets,'model'),{recursive:true});
 for(const [from,name] of [['data/mac/companion/runtime/live2dcubismcore.min.js','live2dcubismcore.min.js'],['mac/companion/vendor/pixi.min.js','pixi.min.js'],['mac/companion/vendor/cubism4-colors.min.js','cubism4-colors.min.js']])fs.copyFileSync(path.join(root,from),path.join(assets,name));
 const resource=path.join(source,'apps/android/app/src/main/res/drawable/anylink_avatar.png');fs.mkdirSync(path.dirname(resource),{recursive:true});fs.copyFileSync(path.join(root,'data/mac/branding/avatar.png'),resource);
 const debug=path.join(source,'apps/android/app/src/debug/res');
+patch('apps/android/app/src/debug/res/values/strings.xml','OpenClaw Dev','大肥鱼 · AnyLink');
+const brandXml='<?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">大肥鱼 · AnyLink</string></resources>\n';
+// The upstream debug source set already declares the default app_name. Replace
+// that declaration; declaring it in another debug XML produces duplicate resources.
+const oldDefaultBrand=path.join(debug,'values/anylink_brand.xml');
+if(fs.existsSync(oldDefaultBrand)){
+  if(fs.readFileSync(oldDefaultBrand,'utf8')!==brandXml)throw new Error('Preserving unrelated default brand resources');
+  fs.unlinkSync(oldDefaultBrand);
+}
 for(const name of fs.readdirSync(path.join(source,'apps/android/app/src/main/res')).filter(n=>/^values(?:-|$)/.test(n))){
-  const folder=path.join(debug,name);fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(path.join(folder,'anylink_brand.xml'),'<?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">大肥鱼 · AnyLink</string></resources>\n');
+  if(name==='values')continue;
+  publish(`apps/android/app/src/debug/res/${name}/anylink_brand.xml`,Buffer.from(brandXml));
 }
 for(const name of ['ic_launcher.xml','ic_launcher_round.xml']){
   const folder=path.join(debug,'mipmap-anydpi-v26');fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(path.join(folder,name),'<?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@android:color/white"/><foreground android:drawable="@drawable/anylink_avatar"/></adaptive-icon>\n');

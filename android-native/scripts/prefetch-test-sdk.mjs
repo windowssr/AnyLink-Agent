@@ -12,7 +12,7 @@ await downloadPinned(spec,jar);
 const pom=jar.replace(/\.jar$/,'.pom');
 if(!fs.existsSync(pom)||createHash('sha256').update(fs.readFileSync(pom)).digest('hex')!==spec.pomSha256){
   const temporary=pom+'.downloading';
-  execFileSync('/usr/bin/curl',['--fail','--location','--silent','--show-error','--connect-timeout','15','--max-time','120','--retry','3','--output',temporary,spec.url.replace(/\.jar$/,'.pom')],{stdio:'inherit'});
+  execFileSync('/usr/bin/curl',['--fail','--location','--silent','--show-error','--connect-timeout','10','--max-time','30','--output',temporary,spec.url.replace(/\.jar$/,'.pom')],{stdio:'inherit',timeout:40000});
   if(createHash('sha256').update(fs.readFileSync(temporary)).digest('hex')!==spec.pomSha256)throw new Error('Official test SDK POM checksum mismatch');
   fs.renameSync(temporary,pom);
 }
