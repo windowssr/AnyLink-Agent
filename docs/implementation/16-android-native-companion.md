@@ -49,3 +49,7 @@ Node 回归覆盖设备记忆并发隔离、无效身份退化、否定写入意
 电脑视觉验收检查了 390×844 视口的半身构图、倾听/思考/工作/播报等状态和文字/结果展开。原生 Kotlin 编译、JVM 回归、APK 检查与硬件验证单独记录，不以这个浏览器预览代替。
 
 手机工具配置额外检查了上游策略：coding profile 默认不含 nodes / mobile_ui，因此仅为 Android Agent 设置显式 profile 与 9 项工具白名单，Mac 的 coding profile 和全局禁止项保留。真实 Agent 已调用 nodes.status，收到空节点列表并如实报告未连接手机，未申请配对/权限、未执行手机操作。
+
+Google SDK、Gradle 和必需构建工具已安装在项目目录，没有安装 Android Studio 或模拟器。原生 Kotlin / Java 严格编译通过，10 项 JVM 回归全部通过、无跳过：3 项表现与问题作用域、4 项 native Talk / 权限返回会话绑定、3 项分享 / 助手输入 / 当前问题展开。界面测试使用官方 CompletedWork 场景，保留真实 ChatScreen、ViewModel 与 Gateway 问题事件；结果和 JUnit 原始报告保存在 `artifacts/android-native/native-tests.json`、`artifacts/android-native/junit/`。
+
+预览版本为 `0.2.0-preview.1`，安装包使用独立包名 `com.anylink.agent.debug`，保留官方 `ai.openclaw.app.MainActivity` 启动入口。APK 检查脚本核对最低 / 目标系统、应用名称、调试签名、完整源码提交、人物资源和解压后的凭据扫描，结果写入 `artifacts/android-native/apk-inspection.json`。电脑上的 JVM / 构图与网关联调不代替手机安装、WebView GPU、麦克风、播放、打断、后台和节点操作验收。

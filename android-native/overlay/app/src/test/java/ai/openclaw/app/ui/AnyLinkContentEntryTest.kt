@@ -54,10 +54,10 @@ class AnyLinkContentEntryTest {
     NativeStringResources.install(app)
     app.chatShareDraftQueue.clear()
     val prefs = SecurePrefs(app, app.getSharedPreferences("anylink-entry-${UUID.randomUUID()}", Context.MODE_PRIVATE))
-    // Chat's upstream screenshot fixture intentionally contains an unanswered
-    // question. Use the no-question fixture to test explicit entry from a closed
-    // sheet; actual questions correctly open the sheet in the product.
-    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Browser)
+    // Start from completed native work: no pending question and no embedded
+    // browser. Browser's fixture exercises ControlUiWebView compatibility,
+    // which is unrelated to importing content from the companion surface.
+    AndroidScreenshotFixture.configure(AndroidScreenshotScene.CompletedWork)
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     originalRuntime = app.peekRuntime()
     bindNodeRuntimeTestFixture(app, runtime)
@@ -65,7 +65,7 @@ class AnyLinkContentEntryTest {
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
     viewModel = MainViewModel(app, prefs, SavedStateHandle())
     store.put("anylink-content-entry", viewModel)
-    viewModel.enterScreenshotFixtureMode(AndroidScreenshotScene.Browser)
+    viewModel.enterScreenshotFixtureMode(AndroidScreenshotScene.CompletedWork)
     compose.setContent {
       ClawDesignTheme {
         UnifiedChatShellScreen(viewModel, true, {}, {}, {}, {})
