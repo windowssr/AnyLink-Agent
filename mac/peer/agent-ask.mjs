@@ -47,14 +47,14 @@ export function createAgentAskHandler({client, gatewayToken, gatewayUrl = GATEWA
     async execute(input, {task, signal}) {
       const {instruction, context} = askInput(input);
       const {device, agent} = await names(task.source_device_id, task.source_agent_id).catch(() => ({device: '其他设备', agent: '未知 Agent'}));
-      const sessionKey = `anylink-task-${task.id}`;
+      const sessionKey = `agent:remote:anylink-task-${task.id}`;
       const content = `【跨设备任务 ${task.id}】来自 ${device}（${agent}）\n${instruction}` + (context ? `\n\n补充信息：\n${context}` : '');
       const combined = AbortSignal.any([signal, AbortSignal.timeout(300000)]);
       let response;
       try {
         response = await fetchImpl(`${gatewayUrl}/v1/chat/completions`, {
           method: 'POST', redirect: 'error', signal: combined,
-          headers: {'content-type': 'application/json', authorization: `Bearer ${gatewayToken}`, 'x-openclaw-session-key': sessionKey},
+          headers: {'content-type': 'application/json', authorization: `Bearer ${gatewayToken}`, 'x-openclaw-agent-id': 'remote', 'x-openclaw-session-key': sessionKey},
           body: JSON.stringify({model: 'openclaw/remote', stream: false, messages: [{role: 'user', content}]}),
         });
       } catch (error) {

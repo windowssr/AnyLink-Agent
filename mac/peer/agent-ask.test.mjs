@@ -19,7 +19,7 @@ test('agent.ask posts the remote agent request with resolved names and session k
   let seen;
   const url = await gateway(t, (req, res) => {
     let body = ''; req.on('data', c => body += c); req.on('end', () => {
-      seen = {url: req.url, auth: req.headers.authorization, session: req.headers['x-openclaw-session-key'], body: JSON.parse(body)};
+      seen = {url: req.url, auth: req.headers.authorization, session: req.headers['x-openclaw-session-key'], agent: req.headers['x-openclaw-agent-id'], body: JSON.parse(body)};
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({choices: [{message: {content: '已把报告整理到下载目录'}}]}));
     });
@@ -27,12 +27,12 @@ test('agent.ask posts the remote agent request with resolved names and session k
   const ask = createAgentAskHandler({client, gatewayToken: 'gw-secret', gatewayUrl: url});
   const result = await ask.execute({instruction: '把桌面的报告整理一下', context: '尽量简单'}, {task, signal: new AbortController().signal});
   assert.equal(seen.url, '/v1/chat/completions'); assert.equal(seen.auth, 'Bearer gw-secret');
-  assert.equal(seen.session, 'anylink-task-task-1');
+  assert.equal(seen.session, 'agent:remote:anylink-task-task-1'); assert.equal(seen.agent, 'remote');
   assert.equal(seen.body.model, 'openclaw/remote'); assert.equal(seen.body.stream, false);
   const content = seen.body.messages[0].content;
   assert.ok(content.includes('【跨设备任务 task-1】来自 我的手机（未知 Agent）'));
   assert.ok(content.includes('把桌面的报告整理一下') && content.includes('补充信息'));
-  assert.equal(result.reply, '已把报告整理到下载目录'); assert.equal(result.truncated, false); assert.equal(result.session_key, 'anylink-task-task-1');
+  assert.equal(result.reply, '已把报告整理到下载目录'); assert.equal(result.truncated, false); assert.equal(result.session_key, 'agent:remote:anylink-task-task-1');
 });
 
 test('agent.ask rejects bad input and gateway 4xx as definite failures', async t => {
