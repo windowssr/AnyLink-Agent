@@ -47,3 +47,5 @@ Node 回归覆盖设备记忆并发隔离、无效身份退化、否定写入意
 首轮语音联调发现该固定 Gateway 必须显式配置 `talk.provider`，仅配置共享 TTS 不足以启动 `talk.speak`。配置修正后独立复测通过，正式回执 provider=microsoft，返回 audio/mpeg、23,616 字节。一次短句合成约 5.4 秒；未验证手机端收音、回声和开口打断，也不承诺零延迟。
 
 电脑视觉验收检查了 390×844 视口的半身构图、倾听/思考/工作/播报等状态和文字/结果展开。原生 Kotlin 编译、JVM 回归、APK 检查与硬件验证单独记录，不以这个浏览器预览代替。
+
+手机工具配置额外检查了上游策略：coding profile 默认不含 nodes / mobile_ui，因此仅为 Android Agent 设置显式 profile 与 9 项工具白名单，Mac 的 coding profile 和全局禁止项保留。真实 Agent 已调用 nodes.status，收到空节点列表并如实报告未连接手机，未申请配对/权限、未执行手机操作。

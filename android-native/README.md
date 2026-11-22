@@ -46,7 +46,7 @@ node android-native/scripts/inspect-apk.mjs
 
 当前 APK 目标：`artifacts/android-native/AnyLink-Android-0.2.0-preview.1.apk`。使用独立 applicationId `com.anylink.agent.debug` 和本机调试签名，可与官方 App 并存。未签发布版、未上传商店；后续正式签名需要稳定的私有密钥。人物素材沿用本机私有资源，未加入 Git；分发与商业用途须另行核实角色及模型授权，详见原有 `mac/companion/ASSET-NOTICE.md`。
 
-官方原生图表资源仍使用上游 Vite 8.3.4、Pele 1.6.0 和 DOMPurify 3.4.17，通过独立 npm lockfile 构建。Gradle 仅替换该构建命令的入口，不改渲染器、沙箱和清理逻辑。JVM 回归的 Maven 缓存和 Java 用户目录也限制在项目 `data/android-native/`。
+官方原生图表资源仍使用上游 Vite 8.3.4、Pele 1.6.0 和 DOMPurify 3.4.17，通过独立 npm lockfile 构建。Gradle 仅替换该构建命令的入口，不改渲染器、沙箱和清理逻辑。JVM 回归的 Maven 缓存和 Java 用户目录也限制在项目 `data/android-native/`。测试固定使用 Robolectric 4.17 的 Android 14 / API 34 框架 JAR，预取约 151 MB，并校验 Maven 发布的 SHA-256；这不安装或启动模拟器，也不改变 App 的 Android 12 最低要求。
 
 `prepare.mjs` 复用已安装且版本核对一致的 `esbuild` / `typebox` 运行官方协议和本地化生成器；首次全新电脑需先按 Mac 工程说明安装固定运行时及私有人物资源。
 

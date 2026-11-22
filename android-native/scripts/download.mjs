@@ -21,7 +21,7 @@ export async function downloadPinned({url,sha256,sha1,bytes},target) {
   }
   const settled=await Promise.allSettled(Array.from({length:count},async(_,i)=>{
     const start=i*chunkSize,end=Math.min(bytes-1,start+chunkSize-1),size=end-start+1,file=target+'.part-'+i;chunks[i]=file;
-    for(let attempt=0;attempt<4;attempt++){
+    for(let attempt=0;attempt<8;attempt++){
       const have=fs.existsSync(file)?fs.statSync(file).size:0;
       if(have===size)return;
       if(have>size)throw new Error('Invalid partial download size');
