@@ -49,7 +49,10 @@ class AnyLinkContentEntryTest {
     NativeStringResources.install(app)
     app.chatShareDraftQueue.clear()
     val prefs = SecurePrefs(app, app.getSharedPreferences("anylink-entry-${UUID.randomUUID()}", Context.MODE_PRIVATE))
-    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Chat)
+    // Chat's upstream screenshot fixture intentionally contains an unanswered
+    // question. Use the no-question fixture to test explicit entry from a closed
+    // sheet; actual questions correctly open the sheet in the product.
+    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Browser)
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     originalRuntime = app.peekRuntime()
     bindNodeRuntimeTestFixture(app, runtime)
@@ -57,7 +60,7 @@ class AnyLinkContentEntryTest {
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
     viewModel = MainViewModel(app, prefs, SavedStateHandle())
     store.put("anylink-content-entry", viewModel)
-    viewModel.enterScreenshotFixtureMode(AndroidScreenshotScene.Chat)
+    viewModel.enterScreenshotFixtureMode(AndroidScreenshotScene.Browser)
     compose.setContent {
       ClawDesignTheme {
         UnifiedChatShellScreen(viewModel, true, {}, {}, {}, {})
@@ -74,7 +77,7 @@ class AnyLinkContentEntryTest {
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, animatorScale)
   }
 
-  @Test fun `assistant prompt opens the original composer from an idle portrait`() {
+  @Test fun `assistant prompt opens the original composer from a portrait`() {
     compose.onNodeWithText("回到大肥鱼身边").assertDoesNotExist()
     compose.runOnIdle {
       viewModel.handleAssistantLaunch(AssistantLaunchRequest("app_action", "Review this assistant prompt", false))
