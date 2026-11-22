@@ -2,7 +2,7 @@
 
 Android 必须有自己的交互入口、Agent 运行与原生工具适配，再连接同一云端模型 / 记忆服务。只把手机做成云端 Agent 遥控器，不符合当前目标。
 
-Android V0.1 已开始施工：HBuilderX / uni-app Vue 3 工程位于 `android/`，使用 Pi Agent core 1.6.0 在设备端管理会话、工具循环与回执。已完成本地演示、统一记忆 / 模型接口适配及 Web、App 资源编译。当前按主人选择只交付工程和电脑预览，尚未生成签名 APK 或进行真机验收，见 [Android 施工记录](../implementation/12-android-foundation.md)。
+Android V0.1 已开始施工：HBuilderX / uni-app Vue 3 工程位于 `android/`，使用 Pi Agent core 1.6.0 在设备端管理会话、工具循环与回执。已完成本地演示、Web 与 App 资源编译，并用独立 Android 预览凭据通过真实 Flash、本地工具循环、全局记忆跨端共享、设备事实隔离和记忆更正 / 删除验收。当前按主人选择交付工程和电脑预览，尚未生成签名 APK 或进行真机验收，见 [Android 施工记录](../implementation/12-android-foundation.md)。
 
 官方 OpenClaw Android companion 是连接外部 Gateway 的 node，不能作为手机本地完整 harness 的证明；Mac 使用 OpenClaw，Android 使用 Pi 核心，二者访问同一记忆和模型服务。
 
