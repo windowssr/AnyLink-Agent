@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import plugin,{createBridge} from './plugin/index.mjs';
+import plugin,{createBridge,projectToolResult} from './plugin/index.mjs';
 import {classify,cleanSpeech} from './behavior.mjs';
 
 test('chat tone and speech cleaning handle comfort, celebrations and code',()=>{
@@ -11,6 +11,15 @@ test('chat tone and speech cleaning handle comfort, celebrations and code',()=>{
   assert.equal(classify('恭喜，你考试通过了！').emotion,'excited');
   assert.equal(classify('为什么尾巴会动？').gesture,'point');
   assert.equal(cleanSpeech('你好。```js\nconsole.log(123)\n``` [详情](https://example.com)'),'你好。 详情');
+});
+test('native result projection accepts typed search receipts, excludes arbitrary tool output and bounds paths',()=>{
+  assert.deepEqual(projectToolResult({toolName:'exec',result:{content:[{text:'secret output'}]}}),{toolName:'exec',toolCallId:'',failed:false});
+  const event={toolName:'anylink_mac_search_files',toolCallId:'one',result:{details:{query:'proof',read_only:true,name_only:true,partial:true,matches:[{name:'proof.txt',path:'/tmp/proof.txt'},{name:'bad',path:'relative.txt'}]}}};
+  const result=projectToolResult(event);assert.equal(result.search.matches.length,1);assert.equal(result.search.partial,true);
+  assert.equal(projectToolResult({...event,error:'failed'}).search,undefined);
+  assert.equal(projectToolResult({...event,result:{content:[{text:JSON.stringify(event.result.details)}]}}).search,undefined,'Model text is not evidence');
+  event.result.details.matches=Array.from({length:50},(_,i)=>({name:'long'+i,path:'/'+('a'.repeat(2000))+i}));
+  const bounded=projectToolResult(event);assert.ok(Buffer.byteLength(JSON.stringify(bounded))<=18000);assert.ok(bounded.search.matches.length<30);
 });
 test('desktop projection requires a finite live lease, isolates channels and prunes expired text',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-companion-'));let time=1000000;

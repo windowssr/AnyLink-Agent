@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                     return path.components(separatedBy:"/").last
                 }
                 companion?.openVoice = { [weak self] in self?.openVoice() }
+                companion?.openRecord = { [weak self] identifier,key in self?.openConversationRecord(agent:"main",id:identifier,sessionKey:key) }
                 companion?.interruptVoice = { [weak self] in self?.voice?.interruptOutput() }
                 companion?.onNotice = { [weak self] in self?.status.stringValue = $0 }
                 companion?.onSuspend = { [weak self] in self?.voice?.stop() }
@@ -94,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let appMenu = NSMenu()
         appMenu.addItem(menuItem("关于 AnyLink", #selector(about)))
         appMenu.addItem(.separator())
-        appMenu.addItem(menuItem("显示 AnyLink", #selector(showWindow(_:)), "0"))
+        appMenu.addItem(menuItem("打开完整工作台", #selector(showWindow(_:)), "0"))
         appMenu.addItem(.separator())
         appMenu.addItem(menuItem("退出 AnyLink 窗口", #selector(quit), "q"))
         let appItem = NSMenuItem(); appItem.submenu = appMenu; main.addItem(appItem)
@@ -104,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         }
         let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: ""); editItem.submenu = edit; main.addItem(editItem)
         let view = NSMenu(title: "助理")
+        view.addItem(menuItem("叫大肥鱼", #selector(callCompanion)))
         view.addItem(menuItem("重新连接", #selector(reconnect), "r"))
         view.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
         view.addItem(menuItem("停止电脑控制", #selector(stopComputerControl)))
@@ -189,7 +191,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         statusItem.button?.image = NSImage(systemSymbolName: "link", accessibilityDescription: "AnyLink")
         statusItem.button?.toolTip = "AnyLink · 本机助理"
         let menu = NSMenu()
-        menu.addItem(menuItem("显示 AnyLink", #selector(showWindow(_:))))
+        menu.addItem(menuItem("叫大肥鱼", #selector(callCompanion)))
+        menu.addItem(menuItem("打开完整工作台", #selector(showWindow(_:))))
         menu.addItem(menuItem("打开工作区", #selector(openWorkspace)))
         menu.addItem(menuItem("重新连接", #selector(reconnect)))
         menu.addItem(menuItem("电脑控制与权限…", #selector(openComputerControl)))
@@ -264,8 +267,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             wasHealthy = true
             status.stringValue = "本机 Agent 已连接 · 云端模型与记忆"
             progress.stopAnimation(nil)
-            if !pageLoaded { loadChat() }
-            else { checkInterfaceConnection() }
+            // A resident character does not need to bootstrap the full Web UI.
+            // Load it only when explicitly requested, avoiding hidden sockets,
+            // catalog requests and transcript work during native interactions.
+            if window.isVisible {
+                if !pageLoaded { loadChat() }
+                else { checkInterfaceConnection() }
+            }
         } else {
             progress.startAnimation(nil)
             status.stringValue = wasHealthy ? "正在重新连接本机 Agent…" : "正在启动本机 Agent…"
@@ -358,6 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     @objc private func showWindow(_ sender: Any?) {
+        if wasHealthy && !pageLoaded { loadChat() }
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     @objc private func reconnect() {
@@ -373,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     @objc private func stopComputerControl() { computer?.stopControl() }
     @objc private func toggleCompanion() { companion?.toggle() }
     @objc private func revealCompanion() { companion?.reveal() }
+    @objc private func callCompanion() { companion?.engage() }
     private func showMainChat() {
         if webView.url?.path.contains("/chat/main/") == true { showWindow(nil); return }
         if let value = UserDefaults.standard.string(forKey:"lastMainChatRoute"),let url = URL(string:value),isLocal(url),let id = url.path.components(separatedBy:"/").last { openConversationRecord(agent:"main",id:id); return }
@@ -427,7 +437,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         alert.addButton(withTitle: "知道了"); alert.beginSheetModal(for: window)
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showMainChat(); return true }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let companion { companion.engage() } else { showMainChat() }; return true
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) { saveRoute(); companion?.stop() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

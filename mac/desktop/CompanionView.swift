@@ -7,17 +7,19 @@ final class CompanionView: NSView {
     var speaking = false, walking = false
     var entrance = 1.0, portal = false, interactionBlocked = false
     var walkDirection = 1.0
+    var activity = "resting", lookDirection = 0.0
     var onDragStart: (() -> Void)?, onStopSpeech: (() -> Void)?
     var pointerInside: Bool { window.map { $0.frame.contains(NSEvent.mouseLocation) } ?? false }
     var mood: CompanionMood = .idle { didSet { if mood != oldValue { needsDisplay = true; updateAccessibility() } } }
-    var onOpenChat: (() -> Void)?, onMoved: (() -> Void)?
+    var onEngage: (() -> Void)?, onMoved: (() -> Void)?
     private var press: NSPoint?, original: NSPoint?, dragged = false
     private(set) var dragging = false
     init(root: URL) {
         renderer = CompanionRenderer(root:root); super.init(frame:.zero)
         addSubview(renderer.webView)
         setAccessibilityElement(true); setAccessibilityRole(.button); updateAccessibility()
-        setAccessibilityHelp("点击大肥鱼打开对话；直接告诉她想做什么。拖动可以移动形象，Esc 停止说话。")
+        setAccessibilityIdentifier("anylink.companion.avatar")
+        setAccessibilityHelp("点击叫大肥鱼，在她身边交代事情。拖动可以移动形象，Esc 停止说话。")
     }
     required init?(coder: NSCoder) { return nil }
     override func layout() { super.layout(); renderer.webView.frame = bounds }
@@ -27,7 +29,7 @@ final class CompanionView: NSView {
         guard let window else { return }
         let point = convert(window.convertPoint(fromScreen:NSEvent.mouseLocation),from:nil)
         let body = renderer.webView.frame
-        renderer.update(mood:mood,x:Double(point.x),y:Double(body.height-point.y),reducedMotion:NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,emotion:emotion,speaking:speaking,walking:walking,direction:walkDirection,entrance:entrance,portal:portal)
+        renderer.update(mood:mood,x:Double(point.x),y:Double(body.height-point.y),reducedMotion:NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,emotion:emotion,speaking:speaking,walking:walking,direction:walkDirection,entrance:entrance,portal:portal,activity:activity,look:lookDirection)
         let interactive = !interactionBlocked && (dragging || (body.contains(point) && renderer.hit))
         if window.ignoresMouseEvents == interactive { window.ignoresMouseEvents = !interactive }
     }
@@ -45,10 +47,10 @@ final class CompanionView: NSView {
     override func mouseUp(with event: NSEvent) {
         dragging = false; NSCursor.pop()
         if dragged { onMoved?() }
-        else { onOpenChat?() }
+        else { onEngage?() }
         press = nil; original = nil
     }
     override func rightMouseDown(with event: NSEvent) { /* Conversation replaces the context menu. */ }
     override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onStopSpeech?() } else { super.keyDown(with:event) } }
-    override func accessibilityPerformPress() -> Bool { onOpenChat?(); return true }
+    override func accessibilityPerformPress() -> Bool { onEngage?(); return true }
 }

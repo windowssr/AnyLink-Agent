@@ -25,7 +25,8 @@
     "test:voice:input": "PYTHONPYCACHEPREFIX=artifacts/python-cache python3 mac/voice/test_synthesize.py",
     "desktop:branding": "node mac/branding/install.mjs",
     "desktop:peer:configure": "node mac/peer/configure.mjs",
-    "test:peer": "node --test mac/peer/*.test.mjs"
+    "test:peer": "node --test mac/peer/*.test.mjs",
+    "test:mac-interaction": "node mac/test-interaction.mjs"
   },
   "dependencies": {
     "@fastify/static": "10.1.12",

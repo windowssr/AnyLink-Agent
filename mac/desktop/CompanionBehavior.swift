@@ -3,6 +3,14 @@ import CoreGraphics
 
 enum CompanionEmotion: String, CaseIterable, Decodable { case neutral, happy, excited, comfort, curious, apologetic }
 
+struct CompanionFileResult: Decodable, Equatable {
+    let name: String, path: String
+}
+struct CompanionSearchResult: Decodable {
+    let query: String, read_only: Bool, name_only: Bool, partial: Bool
+    let matches: [CompanionFileResult]
+}
+
 struct CompanionProjection: Decodable {
     let id: String, type: String
     let created_at: Double, expires_at: Double
@@ -10,8 +18,10 @@ struct CompanionProjection: Decodable {
     let emotion: CompanionEmotion?
     let gesture: String?, text: String?, caption: String?
     let explicit_expression: Bool?
+    let toolName: String?, toolCallId: String?, failed: Bool?
+    let search: CompanionSearchResult?
     func valid(now: Double,started: Double) -> Bool {
-        ["user","reply","expression","error"].contains(type) && created_at >= started && created_at <= now+5000 && expires_at >= now && expires_at-created_at <= 120000
+        ["user","reply","expression","error","tool_start","tool_result"].contains(type) && created_at >= started && created_at <= now+5000 && expires_at >= now && expires_at-created_at <= 120000
     }
 }
 

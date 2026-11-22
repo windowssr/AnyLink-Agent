@@ -86,7 +86,7 @@ final class VoiceGateway {
             let connection = socket
             Task { do {
                 let hello = try await call("connect",[
-                    "minProtocol":4,"maxProtocol":4,"client":["id":"openclaw-macos","displayName":"AnyLink Voice","version":"0.6.0","platform":"macos","deviceFamily":"mac","mode":"ui"],
+                    "minProtocol":4,"maxProtocol":4,"client":["id":"openclaw-macos","displayName":"AnyLink Desktop Interaction","version":"0.7.0","platform":"macos","deviceFamily":"mac","mode":"ui"],
                     "role":"operator","scopes":scopes,"caps":["chat-only-assistant-text","session-scoped-events"],"auth":["token":token],"locale":"zh-CN",
                     "device":["id":id,"publicKey":base64(publicKey),"signature":base64(try key.signature(for:Data(signed.utf8))),"signedAt":ts,"nonce":nonce]
                 ],requiresReady:false)

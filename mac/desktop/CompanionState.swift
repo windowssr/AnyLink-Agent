@@ -59,3 +59,13 @@ enum CompanionGeometry {
     }
 }
 private extension CGRect { var area: CGFloat { isNull ? 0 : width*height } }
+
+enum CompanionSurfaceGeometry {
+    static func placement(beside avatar: CGRect,size: CGSize,in screen: CGRect) -> CGRect {
+        let gap: CGFloat = 10, margin: CGFloat = 12
+        let left = avatar.minX-size.width-gap, right = avatar.maxX+gap
+        let x = left>=screen.minX+margin ? left : (right+size.width<=screen.maxX-margin ? right : screen.midX-size.width/2)
+        let frame = CGRect(x:x,y:avatar.minY+min(avatar.height*0.25,100),width:min(size.width,screen.width-margin*2),height:min(size.height,screen.height-margin*2))
+        return CompanionGeometry.contain(frame,in:screen.insetBy(dx:margin,dy:margin))
+    }
+}

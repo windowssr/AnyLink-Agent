@@ -19,6 +19,13 @@ import CoreGraphics
         let right = CompanionGeometry.contain(CGRect(x:1900,y:1000,width:224,height:320),in:CGRect(x:0,y:24,width:1920,height:1056))
         precondition(right.maxX == 1920 && right.maxY == 1080)
         precondition(CompanionGeometry.screen(for:CGRect(x:-1000,y:0,width:224,height:320),among:[display,CGRect(x:0,y:0,width:1920,height:1080)]) == display)
+        let cardSize = CGSize(width:384,height:406)
+        let besideRight = CompanionSurfaceGeometry.placement(beside:CGRect(x:1600,y:0,width:280,height:440),size:cardSize,in:CGRect(x:0,y:0,width:1920,height:1080))
+        precondition(besideRight.maxX<1600 && besideRight.minY>=12)
+        let besideLeft = CompanionSurfaceGeometry.placement(beside:CGRect(x:-1900,y:0,width:280,height:440),size:cardSize,in:display)
+        precondition(besideLeft.minX > -1620 && besideLeft.maxX<=display.maxX-12)
+        let above = CompanionSurfaceGeometry.placement(beside:CGRect(x:900,y:850,width:280,height:440),size:cardSize,in:CGRect(x:0,y:0,width:1920,height:1080))
+        precondition(above.maxY<=1068 && above.minY>=12)
         print("PASS: 12 companion state, privacy projection and multi-display geometry checks")
     }
 }

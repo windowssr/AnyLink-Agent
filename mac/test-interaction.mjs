@@ -1,0 +1,10 @@
+import {execFileSync} from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+if(process.platform!=='darwin')throw new Error('Run native interaction tests on macOS.');
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),output=path.join(root,'artifacts/desktop');
+fs.mkdirSync(output,{recursive:true});
+const real=process.argv.includes('--real'),test=real?'CompanionInteractionAcceptance':'CompanionInteractionTests',binary=path.join(output,real?'interaction-acceptance':'interaction-tests');
+execFileSync('/usr/bin/xcrun',['swiftc','-swift-version','5','-module-cache-path',path.join(output,'swift-module-cache'),'-parse-as-library',...['VoiceGateway','CompanionState','CompanionBehavior','CompanionInteraction'].map(name=>'mac/desktop/'+name+'.swift'),'mac/tests/'+test+'.swift','-o',binary],{cwd:root,stdio:'inherit'});
+execFileSync(binary,[],{cwd:root,stdio:'inherit'});

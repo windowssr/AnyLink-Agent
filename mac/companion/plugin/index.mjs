@@ -25,6 +25,20 @@ export function createBridge(root,now=()=>Date.now()){
   return {emit,prune};
 }
 
+export function projectToolResult(event){
+  const failed=!!event.error||event.result?.isError===true;
+  const projection={toolName:event.toolName,toolCallId:event.toolCallId??'',failed};
+  // Expose only this tool's typed metadata. Shell output, file contents and
+  // arbitrary tool arguments never enter the avatar projection directory.
+  if(event.toolName!=='anylink_mac_search_files'||failed)return projection;
+  const result=event.result?.details;
+  if(result?.read_only!==true||result?.name_only!==true||!Array.isArray(result.matches))return projection;
+  projection.search={query:String(result.query??'').slice(0,120),read_only:true,name_only:true,partial:result.partial===true,matches:result.matches.slice(0,30).filter(file=>typeof file.name==='string'&&typeof file.path==='string'&&path.isAbsolute(file.path)&&!file.path.includes('\0')).map(file=>({name:file.name.slice(0,255),path:file.path.slice(0,2048)}))};
+  // Keep each projection within the native reader's bounded envelope.
+  while(Buffer.byteLength(JSON.stringify(projection))>18000&&projection.search.matches.length){projection.search.matches.pop();projection.search.partial=true;}
+  return projection;
+}
+
 export default {
   id:'anylink-companion',name:'AnyLink Desktop Companion',
   register(api){
@@ -35,7 +49,8 @@ export default {
       const prompt=event.currentUserMessage??event.prompt??'';
       if(ctx.runId){turns.set(ctx.runId,{prompt:prompt.slice(0,1600),text:'',explicit:false});if(turns.size>80)turns.delete(turns.keys().next().value);}
       bridge.emit('user',ctx,{...classify(prompt)});
-      return {appendSystemContext:persona,...(ctx.agentId==='companion'?{toolsAllow:['anylink_companion_expression','anylink_companion_control']}: {})};
+      const desktop=ctx.sessionKey?.startsWith('agent:main:anylink:desktop:')?'\n当前通过桌面人物身边的轻量交互接待主人。简短自然地回复；找本机文件优先使用 anylink_mac_search_files，真实结构化结果会显示在人物身边。不要为了接待而打开完整聊天窗口。遇到失败或审批要明确说明，不能用表演代替执行。':'';
+      return {appendSystemContext:persona+desktop,...(ctx.agentId==='companion'?{toolsAllow:['anylink_companion_expression','anylink_companion_control']}: {})};
     });
     api.on('llm_output',(event,ctx)=>{
       const turn=turns.get(ctx.runId??event.runId);if(turn)turn.text=(event.assistantTexts??[]).filter(text=>typeof text==='string').join('\n').slice(-6000);
@@ -51,6 +66,10 @@ export default {
     });
     api.on('before_tool_call',(event,ctx)=>{
       if(ctx.agentId==='companion'&&event.toolName!=='anylink_companion_expression'&&!(event.toolName==='anylink_companion_control'&&allowedControl(ctx,event.params??{})))return {block:true,blockReason:'主动陪伴只能表达、查看自己的状态和散步，不能更改主人的偏好或执行设备任务。'};
+      if(ctx.sessionKey?.startsWith('agent:main:anylink:desktop:'))bridge.emit('tool_start',ctx,{toolName:event.toolName,toolCallId:event.toolCallId??ctx.toolCallId??''});
+    });
+    api.on('after_tool_call',(event,ctx)=>{
+      if(ctx.sessionKey?.startsWith('agent:main:anylink:desktop:'))bridge.emit('tool_result',ctx,projectToolResult({...event,toolCallId:event.toolCallId??ctx.toolCallId}));
     });
     api.registerTool(ctx=>({
       name:'anylink_companion_expression',label:'表达桌面伙伴情绪',
