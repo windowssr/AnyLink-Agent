@@ -40,7 +40,7 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
   async function mutate(req:FastifyRequest,scope:string,body:unknown,fn:Parameters<typeof idempotent>[4]) {
     return (await idempotent(db,scope,key(req),body,fn)).value;
   }
-  app.get('/healthz',async()=>({ok:true,service:'anylink-agent',version:'0.4.0',role:'memory-model-and-task-relay'}));
+  app.get('/healthz',async()=>({ok:true,service:'anylink-agent',version:'0.4.1',role:'memory-model-and-task-relay'}));
   app.get('/readyz',async(_req,reply)=>{
     let database=false;try{await db.query('SELECT 1');database=true;}catch{}
     const provider_configured=!!config.deepseekApiKey;
@@ -60,7 +60,7 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
   app.post('/v1/auth/logout',async(req,reply)=>{
     await db.query('DELETE FROM auth_sessions WHERE token_hash=$1',[hash(tokenFromCookie(req)??'')]);reply.header('Set-Cookie','anylink_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');return {ok:true};
   });
-  app.get('/v1/status',async()=>({version:'0.4.0',assistant:'AnyLink',model:'deepseek-flash',cloud_agent:false,execution_enabled:false,owner_id:OWNER_ID}));
+  app.get('/v1/status',async()=>({version:'0.4.1',assistant:'AnyLink',model:'deepseek-flash',cloud_agent:false,execution_enabled:false,owner_id:OWNER_ID}));
   app.get('/v1/devices',async()=>({items:(await db.query(`SELECT d.*,c.id AS credential_id,c.created_at AS bound_at,c.last_used_at FROM devices d LEFT JOIN edge_credentials c ON c.device_id=d.id AND c.revoked_at IS NULL WHERE d.owner_id=$1 ORDER BY d.created_at`,[OWNER_ID])).rows}));
   app.post('/v1/devices',async req=>{const v=deviceSchema.parse(req.body);return mutate(req,'devices:create',v,c=>createDevice(c,v));});
   registerCredentialRoutes(app,db);registerModelProxy(app,db,config);registerLink(app,db);
@@ -84,7 +84,7 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
   }
   app.get('/v1/model-requests',async()=>({items:(await db.query('SELECT id,device_id,model,state,prompt_tokens,completion_tokens,error_code,created_at,finished_at FROM model_requests ORDER BY created_at DESC LIMIT 50')).rows}));
   // Keep historical records, but no cloud sessions, tool loop or runnable task endpoint.
-  for(const path of ['/v1/conversations','/v1/conversations/*','/v1/requests/*','/v1/tasks','/v1/tasks/*'])app.all(path,async(_req,reply)=>reply.code(410).send({error:{code:'EDGE_AGENT_REQUIRED',message:'请在 Mac 本地 OpenClaw 交互；云端只提供记忆和模型服务'}}));
+  for(const path of ['/v1/conversations','/v1/conversations/*','/v1/requests/*','/v1/tasks','/v1/tasks/*'])app.all(path,async(_req,reply)=>reply.code(410).send({error:{code:'EDGE_AGENT_REQUIRED',message:'请在当前设备的 Agent 交互；云端提供统一记忆、模型代理和跨设备任务中继'}}));
   const webRoot=resolve('dist/web');if(existsSync(webRoot))await app.register(staticPlugin,{root:webRoot,prefix:'/',index:['index.html']});
   app.setNotFoundHandler((_req,reply)=>reply.code(404).send({error:{code:'NOT_FOUND',message:'接口或页面不存在'}}));
   app.addHook('onClose',async()=>{await db.end();});return {app,db};

@@ -1,3 +1,5 @@
+> Historical draft, superseded by [v0.8.1-preview.1](release-v0.8.1-preview.1.md). Its Mac-dependent Android preview is not the current product connection flow.
+
 # AnyLink v0.8.0-preview.1
 
 AnyLink is now published as a harness-independent protocol and SDK, with OpenClaw-based reference clients.

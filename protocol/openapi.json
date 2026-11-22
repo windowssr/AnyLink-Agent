@@ -43,6 +43,37 @@
         }
       }
     },
+    "/edge/v1/link/peers": {
+      "get": {
+        "summary": "Discover only owner-granted targets and capabilities; last_seen_at is not worker presence",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Capability not granted"
+          },
+          "404": {
+            "description": "Not visible to this device"
+          },
+          "409": {
+            "description": "Revision, idempotency or terminal-state conflict"
+          }
+        }
+      }
+    },
     "/edge/v1/link/capabilities": {
       "post": {
         "summary": "Replace this device capability manifest",

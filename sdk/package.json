@@ -1,6 +1,6 @@
 {
   "name": "@anylink-agent/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Harness-independent memory, model and device task protocol client for AnyLink",
   "type": "module",
   "license": "MIT",

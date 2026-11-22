@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
 import {root,home,source,sdk,output,environment,lock,tools} from './layout.mjs';
+const live=process.argv.includes('--live'),testing=process.argv.includes('--test')||live;
 const prepare=!process.argv.includes('--no-prepare');
 if(prepare)execFileSync(process.execPath,[path.join(home,'scripts/prepare.mjs')],{stdio:'inherit'});
 fs.mkdirSync(output,{recursive:true});
 const env=environment(),agent=process.env.ANYLINK_AGENT_ID??'anylink-android-preview';
-if(process.argv.includes('--test')){
+if(testing){
   const testHome=path.join(root,'data/android-native/test-user'),maven=path.join(root,'data/android-native/maven-cache');
   fs.mkdirSync(testHome,{recursive:true});fs.mkdirSync(maven,{recursive:true});
   env.JAVA_TOOL_OPTIONS+=` -Duser.home="${testHome}" -Dmaven.repo.local="${maven}"`;
@@ -18,12 +19,13 @@ const app=path.join(source,'apps/android'),version=JSON.parse(fs.readFileSync(pa
 const revision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
 const privateCharacter=process.env.ANYLINK_CHARACTER_MODE==='private';
 if(JSON.parse(fs.readFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/character-mode.json'))).private_character!==privateCharacter)throw new Error('Prepared character mode differs from requested distribution; prepare again');
-fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,agent_context:agent,private_character:privateCharacter},null,2)+'\n');
-const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=2002','-PANYLINK_AGENT_ID='+agent];
+fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,agent_context:agent,private_character:privateCharacter,architecture:'device-agent',gateway_required:false},null,2)+'\n');
+const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=3001','-PANYLINK_AGENT_ID='+agent];
 if(process.argv.includes('--dependencies'))args.push('help');
-else if(process.argv.includes('--test'))args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.ui.AnyLinkPresenceTest','--tests','ai.openclaw.app.ui.AnyLinkNativeTalkTest','--tests','ai.openclaw.app.ui.AnyLinkContentEntryTest');
+else if(live)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkLiveTest');
+else if(testing)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkAgentTest','--tests','ai.openclaw.app.anylink.AnyLinkCloudUiTest');
 else args.push(':app:assembleThirdPartyDebug');
-const logPath=path.join(output,process.argv.includes('--test')?'test.log':'build.log'),log=fs.openSync(logPath,'w');
+const logPath=path.join(output,live?'live.log':testing?'test.log':'build.log'),log=fs.openSync(logPath,'w');
 console.log('Building pinned official Android source with AnyLink UI; log: '+path.relative(root,logPath));
 await new Promise((resolve,reject)=>{
   const installation=path.join(root,'data/android-native/gradle-distribution/gradle-'+tools.gradle.version);
@@ -31,9 +33,12 @@ await new Promise((resolve,reject)=>{
   const child=verified?spawn(path.join(installation,'bin/gradle'),args.slice(1),{cwd:app,env,stdio:['ignore',log,log]}):spawn('/bin/sh',args,{cwd:app,env,stdio:['ignore',log,log]});
   child.on('error',reject);child.on('exit',code=>code===0?resolve():reject(new Error('Android Gradle task failed; inspect '+path.relative(root,logPath))));
 });fs.closeSync(log);
-if(!process.argv.includes('--test')&&!process.argv.includes('--dependencies')){
-  const dir=path.join(app,'app/build/outputs/apk/thirdParty/debug'),name=fs.readdirSync(dir).find(n=>n.endsWith('.apk'));
+if(!testing&&!process.argv.includes('--dependencies')){
+  const dir=path.join(app,'app/build/outputs/apk/thirdParty/debug');
+  const metadata=JSON.parse(fs.readFileSync(path.join(dir,'output-metadata.json'),'utf8'));
+  if(metadata.elements.length!==1||metadata.elements[0].versionName!==version)throw new Error('APK output metadata does not match the selected version');
+  const name=metadata.elements[0].outputFile;
   if(!name)throw new Error('No built APK was produced');
   const target=path.join(output,'AnyLink-Android-'+version+'.apk');fs.copyFileSync(path.join(dir,name),target);
-  console.log('Built '+target+' (private debug signature; not an official OpenClaw distribution).');
+  console.log('Built '+target+' (development debug signature; independent on-device Agent).');
 }

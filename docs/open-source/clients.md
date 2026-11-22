@@ -1,6 +1,6 @@
 # Reference client setup / 参考客户端安装
 
-The clients demonstrate companion interaction and host execution. They currently use OpenClaw transport, while the generic protocol/SDK is a separate integration surface. Download the asset-free public binaries from the tagged GitHub Release and verify `SHA256SUMS` first.
+The clients demonstrate companion interaction and host execution. Each device connects to the AnyLink server. The Mac uses a local OpenClaw harness; Android 0.3+ owns its Agent loop on the phone. The generic protocol/SDK is also usable without either reference client. Download the asset-free public binaries from the tagged GitHub Release and verify `SHA256SUMS` first.
 
 ## macOS
 
@@ -24,6 +24,8 @@ node mac/connect.mjs --server http://127.0.0.1:3180 \
 # --server http://127.0.0.1:3181 --ssh-host YOUR_SSH_ALIAS
 node mac/configure-desktop.mjs
 node mac/configure-control.mjs
+# Optional cloud read-only search: defaults to this Agent workspace only.
+node mac/peer/configure-link.mjs
 node mac/start.mjs
 ```
 
@@ -42,26 +44,25 @@ The model is fetched from its pinned source into ignored local data, not include
 
 ## Android
 
-Install the public APK on Android 12+ through your normal trusted-package workflow. It uses `com.anylink.agent.debug`, a preview/debug signature, and original placeholder artwork. No cloud/device/Gateway credential is embedded. The official OpenClaw connection flow pairs the phone with your own Mac Gateway.
+Install the public APK on Android 12+. It uses `com.anylink.agent.debug`, a preview/debug signature, and original placeholder artwork. The launcher is `ai.openclaw.app.anylink.AnyLinkActivity`; it never starts or connects to an OpenClaw Gateway.
 
-For local USB testing after enabling USB debugging:
+Register a separate Android device in your server's owner console and save its one-time credential JSON. In the phone's **Server connection** panel, enter your server's HTTPS root URL and import that JSON. The app verifies protocol and device identity before storing the credential with Android Keystore encryption. No provider key is sent to the phone. No Mac pairing or device-specific rebuild is needed.
 
-```bash
-adb reverse tcp:18791 tcp:18791
-```
+The phone owns conversation history, streamed model/tool rounds and SQLite operation receipts. Current phone tools are device information, private AnyLink notes, shared memory and granted cross-device tasks. General control of other phone apps is not implemented by this cutover. With the Mac offline, phone chat and phone tools continue; only Mac-directed tasks remain queued.
 
-Configure the forwarded endpoint in the app's connection screen and complete pairing and relevant permissions yourself. Keep the Mac online: it hosts this reference Agent. The phone's system speech-recognition service must support the language you want to use. Microphone, playback, interruption, GPU, background behavior and phone-node operations have not yet been verified on a physical phone for this preview.
-
-Before pairing, prepare the reference Android agent on your Mac. Register a **separate Android logical device** in the owner console and save its credential JSON as `secrets/android-preview-connection.json`. Add a `server` field containing the same AnyLink base URL used by the Mac connection; this is logical context routing, not proof of hardware pairing. Then run:
+For USB **development** testing, forward the server service rather than a Mac Gateway:
 
 ```bash
-node android-native/scripts/configure-preview.mjs
-node android-native/scripts/configure-preview.mjs --apply
-# Optional: explicitly enable Microsoft synthesis, which sends synthesis text there:
-# node android-native/scripts/configure-preview.mjs --apply --consent-microsoft
+ssh -N -L 3180:127.0.0.1:3180 YOUR_SERVER_ALIAS
+adb reverse tcp:3180 tcp:3180
+# App server URL: http://127.0.0.1:3180, with the phone's own credential JSON.
 ```
 
-The helper works without a private avatar, preserves existing user persona text, and validates with the pinned official OpenClaw CLI before replacing configuration. It retains a backup. Existing explicitly configured Microsoft speech is preserved; new installations do not silently opt in. For expression tools, run `node mac/configure-companion.mjs`; for the optional paired, read-only Mac file search, review the allowed roots and run `node mac/peer/configure.mjs` after preparing the Android credential. Those reference adapters retain their own local policies.
+A normal remote install uses an operator-provided HTTPS endpoint directly and does not depend on that development Mac. The existing production Compose remains loopback-only; setting up a reachable HTTPS endpoint is a deployment prerequisite, not something the APK can invent.
+
+Speech uses Android recognition and TTS services, preferring on-device recognition when available. The system provider may process audio/text online. Explicit Stop and tapping Speak interrupt current playback/model work; hands-free full-duplex barge-in, voice quality and latency are not promised. Physical phone microphone, playback, GPU and lifecycle behavior remain unverified.
+
+Mac file search uses `mac/peer/link-worker.mjs`: it advertises `files.search` through AnyLink, reads the existing Mac-owned root policy, and keeps its own durable SDK execution journal. Missing local policy opens no folders. `node mac/peer/configure-link.mjs` prepares a workspace-only policy or preserves an existing one; use `--workspace YOUR_DIRECTORY` only for a fresh policy. Grant source-phone → target-Mac → `files.search` using `scripts/grant-capability.mjs`; no direct phone-to-Mac address is configured. `mac/start.mjs` supervises that worker alongside the local Gateway.
 
 The public build does not currently have a character-import UI. To use a permitted model on Android, configure it privately in the checkout and build locally with `ANYLINK_CHARACTER_MODE=private node android-native/scripts/build.mjs`. That private build must not be uploaded or mirrored without the author's distribution permission. The default build is asset-free, and the public inspector rejects a private-character package. See [Android engineering instructions](../../android-native/README.md) for the pinned toolchain and source.
 

@@ -1,3 +1,5 @@
+// Historical 0.2.x Gateway companion helper; not the current Android connection path.
+if(!process.argv.includes('--legacy-gateway-preview'))throw new Error('Android 0.3+ connects directly to AnyLink. See android-native/README.md. Historical migration only: --legacy-gateway-preview');
 import fs from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';

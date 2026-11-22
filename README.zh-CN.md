@@ -1,12 +1,12 @@
 <p align="center"><img src="docs/assets/banner.svg" alt="AnyLink Agent — 通用协议与 SDK" width="100%"></p>
 
-<p align="center"><a href="README.md">English</a> · <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.0-preview.1">下载安装包</a> · <a href="sdk/README.zh-CN.md">SDK</a> · <a href="protocol/README.zh-CN.md">接入协议</a> · <a href="LICENSE">MIT</a></p>
+<p align="center"><a href="README.md">English</a> · <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.1-preview.1">下载安装包</a> · <a href="sdk/README.zh-CN.md">SDK</a> · <a href="protocol/README.zh-CN.md">接入协议</a> · <a href="LICENSE">MIT</a></p>
 
 # AnyLink Agent
 
 **把你的 Agent 接到更多设备，让记忆共享，让执行留在宿主。**
 
-AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协议和 JavaScript／TypeScript SDK。它不绑定某一个 Agent 框架：你可以接入自己的应用、自动化系统、Codex 适配器或其他 Agent。仓库中的 Mac／Android OpenClaw 改版是参考客户端。
+AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协议和 JavaScript／TypeScript SDK。它不绑定某一个 Agent 框架：你可以接入自己的应用、自动化系统、Codex 适配器或其他 Agent。每台设备自己管理会话和工具循环，统一连接云端；仓库中的 Mac OpenClaw 与 Android 原生本地 Agent 是参考实现。
 
 ## 已实现
 
@@ -14,21 +14,25 @@ AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协
 - **设备任务通路**：主人明确授予“来源设备 → 目标设备 → 能力”，目标宿主领取任务、本机执行、回传持久回执。
 - **失败语义**：幂等写入、revision 条件、持久执行 journal、未知结果显式报告；不会自动重跑未知模型请求或外部操作。
 - **自部署服务**：TypeScript、Fastify、PostgreSQL；云端不运行 Agent 工具循环。
-- **参考客户端**：Mac `.app` 的聊天、电脑控制和桌面伙伴；官方 OpenClaw Android 改版的聊天、Talk 与形象状态。语音、取消和手机操作仍需各自系统权限与真机验证。
+- **参考客户端**：Mac `.app` 的聊天、电脑控制和桌面伙伴；Android 手机上的本地 Agent、私有便笺、统一记忆、跨设备任务与形象状态。系统语音与权限仍需真机验证。
 
 <img src="docs/assets/architecture.svg" alt="应用、AnyLink SDK、云端中继和宿主适配器的架构" width="100%">
 
-通用协议和 SDK 已能独立接入项目。当前下载的 Mac／Android 软件仍使用 OpenClaw 传输，尚不是通用 AnyLink 手机控制器。Codex 示例启动独立的只读 CLI 任务，不操控现有桌面聊天；后续可通过受支持的会话／app-server 接口扩展。
+**Android 0.3+ 只连接 AnyLink 服务器，不连接 Mac Gateway。** Mac 关机时，手机仍能聊天、使用本机工具和共同记忆；交给 Mac 的任务经云端排队、领取和返回。Android 0.2.x 为历史 companion 预览，连接方式已退出产品主线。Codex 示例仍是独立只读 CLI 任务，不操控现有桌面聊天。
 
 ## 下载安装包
 
-当前公开版本为 **v0.8.0-preview.1**。资源、源码提交和 SHA-256 一起保存在 [GitHub Releases](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.0-preview.1)：
+当前公开版本为 **v0.8.1-preview.1**。资源、源码提交和 SHA-256 一起保存在 [GitHub Releases](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.1-preview.1)：
 
-- [Android APK](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/AnyLink-Android-0.2.0-preview.2.apk)：Android 12+，开发预览签名。
-- [Mac App](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/AnyLink-macOS-arm64-0.8.0-preview.zip)：Apple Silicon、macOS 15+；是连接已配置工程的桌面壳，首次启动选择你自己的项目目录。语音输入要求 macOS 26。预览包采用 ad-hoc 签名，未公证，安装方式见[参考客户端说明](docs/open-source/clients.md)。
-- [SDK 安装包](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/anylink-agent-sdk-0.1.0.tgz)：可安装到自己的 Node／TypeScript 项目，尚未发布 npm 注册表。
+- [Android APK](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/AnyLink-Android-0.3.0-preview.1.apk)：Android 12+，开发预览签名。
+- [Mac App](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/AnyLink-macOS-arm64-0.8.1-preview.zip)：Apple Silicon、macOS 15+；是连接已配置工程的桌面壳，首次启动选择你自己的项目目录。语音输入要求 macOS 26。预览包采用 ad-hoc 签名，未公证，安装方式见[参考客户端说明](docs/open-source/clients.md)。
+- [SDK 安装包](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz)：可安装到自己的 Node／TypeScript 项目，尚未发布 npm 注册表。
 
 公开包**不包含大肥鱼模型、纹理、派生头像或 Live2D Cubism Core**。默认使用原创代码绘制的占位形象。第三方模型须自行从作者来源获取，并遵守各自许可；MIT 不授予角色或模型再分发权。
+
+## 手机如何连接
+
+在服务器管理页注册本手机，生成设备凭据 JSON。在 App 的“服务器连接”中填写 **AnyLink HTTPS 地址**并导入 JSON，验证身份后即可使用；不需要 Mac 的地址、OpenClaw Token 或配对。服务器负责调用模型，手机自己完成工具循环。远程使用需要部署者提供可达的 HTTPS 入口，USB／SSH 只用于开发调试。详见[客户端连接说明](docs/open-source/clients.md)。
 
 ## 展示
 
@@ -36,10 +40,14 @@ AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协
 
 左：公开版的原创占位形象。右：本机自行配置第三方模型后的效果。两图均为**电脑浏览器构图预览，不是真机截图**。右侧 DeepSeek-chan／大肥鱼原画及拆分：**神宫凉子**；Live2D：**霓虹猫_NeonNeko**；[模型来源与使用须知](https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md)。
 
+原生服务器连接页的 UI 测试渲染图（不是真机截图）：
+
+<img src="docs/assets/android-server-connection.png" alt="Android AnyLink server connection" width="300">
+
 ## 先把 SDK 接进自己的项目
 
 ```bash
-npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/anylink-agent-sdk-0.1.0.tgz
+npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz
 ```
 
 ```js
@@ -99,7 +107,7 @@ TEST_DATABASE_URL=postgresql://USER:PASS@127.0.0.1:5432/anylink_test npm run tes
 
 服务是**单主人参考部署**。逻辑设备处于同一主人信任域，默认上下文选择不等于多租户数据隔离，也不证明物理设备已配对。执行还受能力授权与宿主本地策略控制。取消是协作请求，外部副作用不能承诺绝对“恰好一次”。服务器可读取记忆、任务和转发的模型内容。
 
-当前没有通用 Android SDK、通用手机客户端连接层、Codex 现有桌面会话控制或端到端实时语音承诺。APK 的收音、播放、打断、GPU 和手机节点操作仍待真机验收。详见[安全边界](SECURITY.md)。
+Android 原生 Agent 已接通通用云端协议；尚未发布独立 Kotlin SDK。手机工具当前限于基础状态、私有便笺、统一记忆与跨设备任务，尚不能通用控制其他 App。没有 Codex 现有桌面会话控制或端到端实时语音承诺；APK 的收音、播放、GPU 和后台生命周期仍待真机验收。详见[安全边界](SECURITY.md)。
 
 ## 开源与双仓库维护
 

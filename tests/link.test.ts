@@ -7,6 +7,7 @@ import path from 'node:path';
 import {createApp} from '../server/app.js';
 import {AnyLinkClient,AnyLinkError} from '../sdk/src/client.mjs';
 import {AnyLinkWorker} from '../sdk/src/worker.mjs';
+import {createMacLinkWorker} from '../mac/peer/link-worker.mjs';
 const url=process.env.TEST_DATABASE_URL;
 test('AnyLink SDK over real HTTP: grants, task delivery and durable results',{skip:!url},async t=>{
   assert.equal(new URL(url!).pathname,'/anylink_test');
@@ -41,9 +42,15 @@ test('AnyLink SDK over real HTTP: grants, task delivery and durable results',{sk
       assert.equal(m.source_device_id,source.id);await source.client.deleteMemory(m.id,m.revision);
     });
     await t.test('both explicit target registration and owner grant are required',async()=>{
+      assert.deepEqual((await source.client.peers()).items,[]);
       await assert.rejects(source.client.createTask(input),(e:unknown)=>e instanceof AnyLinkError&&e.status===403);
       await target.client.registerCapabilities([{name:'text.reverse',description:'Read-only text transform'}]);await grant(true);
       await assert.rejects(stranger.client.createTask(input),(e:unknown)=>e instanceof AnyLinkError&&e.status===403);
+      assert.deepEqual((await stranger.client.peers()).items,[]);
+      const peers=(await source.client.peers()).items;
+      assert.equal(peers.length,1);assert.equal(peers[0].id,target.id);
+      assert.deepEqual(peers[0].capabilities.map(c=>c.name),['text.reverse']);
+      await grant(false);assert.deepEqual((await source.client.peers()).items,[]);await grant(true);
     });
     await t.test('empty polling does not grow the mutation journal and a key is consumed only on admission',async()=>{
       const key=randomUUID(),scope=target.id+':link:claim';
@@ -91,6 +98,18 @@ test('AnyLink SDK over real HTTP: grants, task delivery and durable results',{sk
       assert.equal((await target.client.claimTask()).task,null);assert.equal((await source.client.task(task.id)).state,'running');
       await target.client.completeTask(task.id,{state:'unknown',error:{code:'HOST_INSPECTION_REQUIRED',message:'Inspect the host before deciding whether any new task is safe'}});
       assert.equal((await source.client.task(task.id)).state,'unknown');
+    });
+    await t.test('Mac reference worker returns a real read-only file receipt through the cloud protocol',async()=>{
+      const roots=path.join(folder,'mac-workspace');fs.mkdirSync(roots);fs.writeFileSync(path.join(roots,'anylink-report.txt'),'content must remain unchanged');
+      const policyFile=path.join(folder,'mac-policy.json');fs.writeFileSync(policyFile,JSON.stringify({device_id:target.id,roots:[{id:'workspace',label:'Test workspace',path:roots}]}));
+      const macWorker=createMacLinkWorker({connection:{server:baseUrl,token:target.token,device_id:target.id},policyFile,journalPath:path.join(folder,'mac-link.sqlite')});
+      try{
+        await macWorker.advertise();await owner('/v1/link/grants',{source_device_id:source.id,target_device_id:target.id,capability:'files.search',enabled:true});
+        const task=await source.client.createTask({target_device_id:target.id,capability:'files.search',input:{query:'anylink-report',scope:'workspace'}});
+        await macWorker.runNext();const receipt=await source.client.task(task.id);
+        assert.equal(receipt.state,'succeeded');assert.equal((receipt.result!.output!.matches as any[])[0].name,'anylink-report.txt');
+        assert.equal(fs.readFileSync(path.join(roots,'anylink-report.txt'),'utf8'),'content must remain unchanged');
+      }finally{macWorker.close();await target.client.registerCapabilities([{name:'text.reverse',description:'Read-only text transform'}]);}
     });
     await t.test('revoked grants and revoked senders stop new claims',async()=>{
       const task=await source.client.createTask(input);await grant(false);assert.equal((await target.client.claimTask()).task,null);

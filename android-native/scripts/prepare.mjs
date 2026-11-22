@@ -40,6 +40,17 @@ if(!build.includes('"ANYLINK_AGENT_ID"'))throw new Error('Cannot add the configu
 const mermaidCommand='commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")';
 if(build.split(mermaidCommand).length!==2)throw new Error('Pinned Mermaid build context changed');
 build=build.replace(mermaidCommand,`commandLine(${JSON.stringify(node)}, ${JSON.stringify(path.join(home,'scripts/build-mermaid.mjs'))})\n    inputs.file(${JSON.stringify(path.join(home,'renderer/package-lock.json'))})\n    inputs.file(${JSON.stringify(path.join(home,'scripts/build-mermaid.mjs'))})`);
+// The reference keeps the pinned Android build machinery, not the retired
+// Gateway companion runtime. Explicit source sets prevent dormant node/voice
+// entry points and their unrelated tests from entering the product artifact.
+build += `
+android.sourceSets.configureEach {
+  java.directories.clear()
+  kotlin.directories.clear()
+}
+android.sourceSets.getByName("main").kotlin.directories.add("src/anylink/java")
+android.sourceSets.getByName("test").kotlin.directories.add("src/anylinkTest/java")
+`;
 fs.writeFileSync(path.join(source,gradle),build);prepared[gradle]=hash(path.join(source,gradle));
 // Shared/benchmark/watch modules are configured by the official root build too;
 // keep their SDK tool choice consistent instead of admitting another auto-install.
@@ -48,68 +59,26 @@ const settingsPath='apps/android/settings.gradle.kts';
 const settings=run(['show','HEAD:'+settingsPath]);
 if(settings.split('mavenCentral()').length!==3)throw new Error('Pinned Maven repository context changed');
 publish(settingsPath,Buffer.from(settings.replaceAll('mavenCentral()',`maven { url = uri(${JSON.stringify(tools.mavenCentralUrl)}) }`)));
-patch('apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt','{ ShellNavigation() }','{ ShellNavigation(activeTab = Tab.Chat) }');
 patch('apps/android/gradle/wrapper/gradle-wrapper.properties','networkTimeout=10000','networkTimeout=60000');
-// AGP 9.5 and Gradle 9.7 officially support JDK17. Reuse the installed JDK,
-// rather than downloading the upstream contributor preference for JDK21.
 publish('apps/android/gradle/gradle-daemon-jvm.properties',Buffer.from('toolchainVersion=17\n'));
-const runtimePath='apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt';
-let runtime=run(['show','HEAD:'+runtimePath]);
-for(const [from,to] of [
-  ['selectedChatAgentId\n            ?: defaultAgentId.takeIf',
-    'selectedChatAgentId\n            ?: BuildConfig.ANYLINK_AGENT_ID.takeIf { id -> selectable.any { it.id == id } }\n            ?: defaultAgentId.takeIf'],
-  ['  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)',
-    `  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
-
-  /** A granted microphone request must bind both visible Chat and Talk under the live Gateway owner. */
-  internal fun startAnyLinkTalk(): Boolean =
-    synchronized(gatewayDataScopeLock) {
-      val agentId = BuildConfig.ANYLINK_AGENT_ID
-      if (
-        !operatorConnected || !_isForeground.value || gatewayConnectionHandoff.value.pending ||
-        !hasRecordAudioPermission() || gatewayAgents.value.selectableAgents().none { it.id == agentId }
-      ) return@synchronized false
-      // Talk owns the node-main conversation. Do not restore an older selected chat
-      // asynchronously after presenting that conversation to the user.
-      setTalkModeEnabled(false)
-      retirePendingChatSelection()
-      selectedChatAgentId = agentId
-      prepareMainSessionKey(agentId, MainSessionUpdate.Select)
-      setTalkModeEnabled(true)
-      true
-    }`],
-]){if(runtime.split(from).length!==2)throw new Error('Pinned runtime context changed');runtime=runtime.replace(from,to);}
-publish(runtimePath,Buffer.from(runtime));
-const viewModelPath='apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt';
-let viewModel=run(['show','HEAD:'+viewModelPath]);
-for(const [from,to] of [
-  ['import ai.openclaw.app.i18n.NativeText','import ai.openclaw.app.i18n.NativeText\nimport ai.openclaw.app.i18n.nativeText'],
-  ['  fun setTalkModeEnabled(enabled: Boolean): Unit = ensureRuntime().setTalkModeEnabled(enabled)',
-    `  fun setTalkModeEnabled(enabled: Boolean): Unit = ensureRuntime().setTalkModeEnabled(enabled)
-
-  internal fun startAnyLinkTalk() {
-    if (!ensureRuntime().startAnyLinkTalk()) {
-      showTalkSetupMessage(nativeText("Connect to a Gateway with the configured Android agent and allow Microphone access before starting Talk."))
-    }
-  }`],
-]){if(viewModel.split(from).length!==2)throw new Error('Pinned ViewModel context changed');viewModel=viewModel.replace(from,to);}
-publish(viewModelPath,Buffer.from(viewModel));
-const talkPath='apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatRealtimeTalk.kt';
-let talk=run(['show','HEAD:'+talkPath]);
-for(const [from,to] of [
-  ['requiresSetup: Boolean,\n): ChatRealtimeTalkLaunch','requiresSetup: Boolean,\n  nativeSpeech: Boolean = false,\n): ChatRealtimeTalkLaunch'],
-  ['requiresSetup -> ChatRealtimeTalkLaunch.ShowSetupMessage','requiresSetup && !nativeSpeech -> ChatRealtimeTalkLaunch.ShowSetupMessage'],
-  ['fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> Unit','fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel, nativeSpeech: Boolean = false): () -> Unit'],
-  ['if (currentTalkSetup.requiresSetup) {','if (!nativeSpeech && currentTalkSetup.requiresSetup) {'],
-  ['requiresSetup = talkSetupReadiness.realtimeTalk.requiresSetup,','requiresSetup = talkSetupReadiness.realtimeTalk.requiresSetup,\n        nativeSpeech = nativeSpeech,'],
-]){if(talk.split(from).length!==2)throw new Error('Pinned native speech launcher context changed');talk=talk.replace(from,to);}
-if(talk.split('viewModel.setTalkModeEnabled(true)').length!==3)throw new Error('Pinned Talk start callers changed');
-talk=talk.replaceAll('viewModel.setTalkModeEnabled(true)','startTalk()');
-talk=talk.replace('  val requestMicPermission =',
-  '  val startTalk = { if (nativeSpeech) viewModel.startAnyLinkTalk() else viewModel.setTalkModeEnabled(true) }\n  val requestMicPermission =');
-publish(talkPath,Buffer.from(talk));
 function walk(dir){return fs.readdirSync(dir,{withFileTypes:true}).flatMap(item=>item.isDirectory()?walk(path.join(dir,item.name)):[path.join(dir,item.name)]);}
-for(const file of walk(path.join(home,'overlay'))){const relative=path.relative(path.join(home,'overlay'),file);publish('apps/android/'+relative,fs.readFileSync(file));}
+for(const file of walk(path.join(home,'overlay'))){
+  const relative=path.relative(path.join(home,'overlay'),file).replace('app/src/main/java/','app/src/anylink/java/').replace('app/src/test/java/','app/src/anylinkTest/java/');
+  publish('apps/android/'+relative,fs.readFileSync(file));
+}
+for(const relative of ['ai/openclaw/app/ui/SystemAnimations.kt','ai/openclaw/app/AndroidLicenseNotices.kt']) {
+  publish('apps/android/app/src/anylink/java/'+relative,Buffer.from(run(['show','HEAD:apps/android/app/src/main/java/'+relative])));
+}
+
+// Complete cutover: remove or restore files produced by the retired Gateway UI adapter.
+for(const [relative,expected] of Object.entries(prior)) {
+  if(prepared[relative])continue;
+  const target=path.join(source,relative);
+  if(!fs.existsSync(target))continue;
+  if(hash(target)!==expected)throw new Error('Preserving unrelated edits in retired adapter '+relative);
+  let baseline;try{baseline=run(['show','HEAD:'+relative],{stdio:['ignore','pipe','ignore']});}catch{}
+  if(baseline!==undefined)fs.writeFileSync(target,baseline);else fs.unlinkSync(target);
+}
 const assets=path.join(source,'apps/android/app/src/main/assets/anylink');fs.mkdirSync(assets,{recursive:true});
 fs.copyFileSync(path.join(root,'LICENSE'),path.join(assets,'AnyLink-LICENSE.txt'));
 fs.copyFileSync(path.join(home,'licenses/OpenClaw-MIT.txt'),path.join(assets,'OpenClaw-MIT.txt'));
@@ -160,4 +129,4 @@ const link=path.join(source,'node_modules');if(!fs.existsSync(link))fs.symlinkSy
 fs.writeFileSync(priorFile,JSON.stringify(prepared,null,2)+'\n',{mode:0o600});
 execFileSync(node,[path.join(source,'scripts/prepare-native-protocol.mjs'),'--language','kotlin'],{cwd:source,stdio:'inherit'});
 execFileSync(node,[path.join(source,'scripts/android-app-i18n.ts'),'generate'],{cwd:source,stdio:'inherit'});
-console.log('Prepared pinned official Android app with AnyLink portrait UI. No model or Gateway credentials copied.');
+console.log('Prepared independent AnyLink Android Agent on the pinned native UI build. No Gateway or model credentials copied.');

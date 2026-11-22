@@ -55,3 +55,7 @@ SDK 不自动重试模型或未知请求。保留执行 journal：已完成的�
 [OpenAPI](openapi.json) 从服务器 schema 生成，`npm run protocol:check` 检查漂移。其他语言可以直接实现 HTTP 客户端；宿主接口是能力名加 `execute(input, {task, signal})`。形象、语音、会话和审批事件放在各自适配层。
 
 当前附带的 Android／Mac 软件仍使用 OpenClaw 参考传输，尚未改造成通用手机控制器。Codex 示例启动独立的只读 CLI 任务；控制现有桌面会话需要单独对接受支持的 app-server／会话接口。MCP 可以给 Agent 提供记忆和工具，单独安装 MCP 工具不会自动产生手机到 Agent 的入站控制通路。
+
+## 各设备独立运行
+
+每台设备连接 AnyLink 服务器，并在本机管理 Agent 会话和工具循环。Android 0.3+ 不再连接 Mac Gateway。`client.peers()`／`GET /edge/v1/link/peers` 只发现已授权给当前来源设备的目标能力；`last_seen_at` 是凭据活动，不是 Worker 在线保证。其他项目可独立实现该 HTTP 协议，无需 OpenClaw 或参考形象界面。

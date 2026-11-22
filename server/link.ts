@@ -34,6 +34,17 @@ export function registerLink(app:FastifyInstance,db:Db){
     return row;
   }
   app.get('/edge/v1/link/protocol',async()=>({protocol:'anylink',version:'1.0',delivery:'at-most-once-claim',requeue:false,capabilities:['memory','model','tasks']}));
+  // Discovery exposes only capabilities explicitly granted to this source.
+  // last_seen_at is credential activity, never a promise that a worker is online.
+  app.get('/edge/v1/link/peers',async req=>({items:(await db.query(`SELECT d.id,d.name,d.platform,a.capabilities,
+    array_agg(DISTINCT g.capability) AS granted_capabilities,max(e.last_used_at) AS last_seen_at
+    FROM link_grants g JOIN devices d ON d.id=g.target_device_id
+    JOIN link_capabilities a ON a.device_id=d.id
+    JOIN edge_credentials e ON e.device_id=d.id AND e.revoked_at IS NULL
+    WHERE g.source_device_id=$1 AND g.enabled
+    GROUP BY d.id,a.capabilities ORDER BY d.name,d.id`,[who(req)])).rows.map(row=>({...row,
+      capabilities:row.capabilities.filter((c:{name:string})=>row.granted_capabilities.includes(c.name)),
+    }))}));
   app.post('/v1/link/grants',async req=>{
     const body=grantSchema.parse(req.body);
     return (await idempotent(db,'owner:link:grant',key(req),body,async c=>{

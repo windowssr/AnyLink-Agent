@@ -2,10 +2,10 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大肥鱼 · 原生 Android 形象预览</title><link rel="stylesheet" href="./preview.css"></head>
 <body>
-  <aside class="preview-note">原生 Android 界面预览 · 这里演示形象与状态，语音在手机 App 中运行</aside>
+  <aside class="preview-note">Android 本地 Agent · 统一连接 AnyLink 服务器 · 此页仅演示形象与状态</aside>
   <main class="phone">
     <iframe id="portrait" src="./avatar/portrait.html" title="大肥鱼半身形象"></iframe>
-    <header><div><h1>大肥鱼</h1><span>今天也一起吧。</span></div><span class="presence"><i></i>我在</span></header>
+    <header><div><h1>大肥鱼</h1><span>手机独立运行，不依赖 Mac。</span></div><span class="presence"><i></i>我在</span></header>
     <div class="bottom-fade"></div>
     <section class="voice-panel"><div class="state"><span id="state-light"></span><span id="state-label">想聊什么，或想让我做点什么？</span></div><div id="waveform" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div><div class="controls"><button id="text-button" aria-label="文字输入">⌨</button><button id="voice-button">演示倾听</button><button id="results-button" aria-label="结果与记录">≡</button></div><p>聊天，或者交给我一件事。</p></section>
     <section id="results" hidden><button id="close-results" aria-label="收起结果">×</button><h2>处理结果</h2><p>这里会显示同一位 Agent 返回的真实任务结果。</p><span>电脑预览未执行任务</span></section>

@@ -1,5 +1,6 @@
 # 通用接入层与开源发布
 
+> 历史 v0.8.0 施工记录。Android Gateway companion 已由 [v0.8.1 独立设备架构](19-independent-device-agents.md)取代；当前版本、连接和能力以根 README 为准。
 当前主定位为 AnyLink 协议／SDK，OpenClaw Mac／Android 是参考客户端。协议版本 v1，SDK 0.1.0，参考服务 0.4.0，Mac 0.8.0，Android 0.2.0-preview.2；首个公开资源集合为 v0.8.0-preview.1。
 
 ## 执行通路

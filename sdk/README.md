@@ -7,7 +7,7 @@ A dependency-free JavaScript/TypeScript client for AnyLink memory, model passthr
 ## Install
 
 ```bash
-npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/anylink-agent-sdk-0.1.0.tgz
+npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz
 # From a checkout instead:
 npm install ./sdk
 ```
@@ -114,3 +114,7 @@ The [read-only Codex adapter](examples/codex-read-only.mjs) demonstrates one hos
 One logical device has one capability manifest. Parallel workers for the same identity must share their journal and handler set. The Codex example uses a filesystem read-only sandbox; MCP/plugin/connector policy remains operator configured.
 
 A handler exception can occur after an external effect completed. The worker therefore reports unknown by default; an exception is not proof that retrying is safe.
+
+## Device-local reference architecture
+
+Each device connects to the AnyLink server and owns its Agent conversation and tool loop. Android 0.3+ no longer connects to a Mac Gateway. `client.peers()` / `GET /edge/v1/link/peers` discovers only targets and capabilities granted to the authenticated source; `last_seen_at` is credential activity, not a worker-online guarantee. Other hosts can implement the same HTTP contract without OpenClaw or the reference UI.

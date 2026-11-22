@@ -7,7 +7,7 @@
 ## 安装
 
 ```bash
-npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/anylink-agent-sdk-0.1.0.tgz
+npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz
 # 或在项目 checkout 中安装：
 npm install ./sdk
 ```
@@ -96,3 +96,7 @@ AnyLink 只搬运结构化任务，不把一句提示词当作执行任意命令
 一个逻辑设备应对应同一能力清单；同一身份并行运行的 Worker 需要共享 journal 和处理器集合。Codex 示例的只读限制指文件系统，MCP／插件和连接器权限仍由操作者配置。
 
 处理器抛异常也可能发生在外部动作完成之后，因此 Worker 默认报告 unknown；应用必须核对副作用，不能把异常当成安全重试的依据。
+
+## 各设备独立运行
+
+每台设备连接 AnyLink 服务器，并在本机管理 Agent 会话和工具循环。Android 0.3+ 不再连接 Mac Gateway。`client.peers()`／`GET /edge/v1/link/peers` 只发现已授权给当前来源设备的目标能力；`last_seen_at` 是凭据活动，不是 Worker 在线保证。其他项目可独立实现该 HTTP 协议，无需 OpenClaw 或参考形象界面。

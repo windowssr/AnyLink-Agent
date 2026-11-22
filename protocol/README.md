@@ -57,3 +57,7 @@ The SDK exposes uncertain transport outcomes and does not automatically replay r
 The [OpenAPI contract](openapi.json) is generated from server schemas with `npm run protocol:generate`; `npm run protocol:check` detects drift. HTTP callers can implement Kotlin, Swift, Python or other language bindings. The SDK's host interface is simply a capability name and `execute(input, {task, signal})`. UI, avatars, speech recognition and harness-specific session/approval events belong in adapters.
 
 The shipped Android/Mac applications currently use the OpenClaw reference transport. They are not yet a generic AnyLink mobile controller. The Codex example starts a separate read-only CLI turn; controlling an existing desktop conversation requires a dedicated supported [app-server](https://learn.chatgpt.com/docs/app-server)/session adapter. MCP can expose memory/tools to an agent, but installing an MCP tool alone does not create inbound remote control.
+
+## Device-local reference architecture
+
+Each device connects to the AnyLink server and owns its Agent conversation and tool loop. Android 0.3+ no longer connects to a Mac Gateway. `client.peers()` / `GET /edge/v1/link/peers` discovers only targets and capabilities granted to the authenticated source; `last_seen_at` is credential activity, not a worker-online guarantee. Other hosts can implement the same HTTP contract without OpenClaw or the reference UI.

@@ -12,9 +12,10 @@ function route(url,method,{schema,owner=false,key=false,summary,response}={}){
   if(method==='delete')params.push({name:'If-Match',in:'header',required:true,schema:{type:'string',description:'Current memory revision'}});
   paths[url]??={};paths[url][method]={summary,security:[{[owner?'ownerSession':'deviceBearer']:[]}],parameters:params,...(schema?{requestBody:{required:true,content:{'application/json':{schema:{$ref:'#/components/schemas/'+schema}}}}}:{}),responses:{'200':{description:'Successful operation',...(response?{content:{'application/json':{schema:{$ref:'#/components/schemas/'+response}}}}:{})},'400':{description:'Invalid input'},'401':{description:'Invalid or revoked credential'},'403':{description:'Capability not granted'},'404':{description:'Not visible to this device'},'409':{description:'Revision, idempotency or terminal-state conflict'}}};
 }
-for(const name of ['protocol','capabilities','tasks','tasks/{id}','tasks/claim','tasks/{id}/result','tasks/{id}/cancel']){
+for(const name of ['protocol','peers','capabilities','tasks','tasks/{id}','tasks/claim','tasks/{id}/result','tasks/{id}/cancel']){
  const prefix='/edge/v1/link/';
  if(name==='protocol')route(prefix+name,'get',{summary:'Negotiate AnyLink protocol and delivery semantics'});
+ if(name==='peers')route(prefix+name,'get',{summary:'Discover only owner-granted targets and capabilities; last_seen_at is not worker presence'});
  if(name==='capabilities')route(prefix+name,'post',{schema:'Capabilities',key:true,summary:'Replace this device capability manifest'});
  if(name==='tasks'){route(prefix+name,'get',{summary:'List this device tasks (role=source|target, optional state; newest 100)'});route(prefix+name,'post',{schema:'TaskInput',key:true,summary:'Create a task under an explicit owner grant',response:'Task'});}
  if(name==='tasks/{id}')route(prefix+name,'get',{summary:'Read a source or target task',response:'Task'});

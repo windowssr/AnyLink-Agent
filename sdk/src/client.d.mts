@@ -12,6 +12,7 @@ export class AnyLinkClient {
  readonly baseUrl:string;
  constructor(options:{baseUrl:string;token:string;fetch?:typeof fetch;timeoutMs?:number});
  protocol(options?:RequestOptions):Promise<{protocol:'anylink';version:'1.0';delivery:string;requeue:false;capabilities:string[]}>;
+ peers(options?:RequestOptions):Promise<{items:{id:string;name:string;platform:string;capabilities:Capability[];granted_capabilities:string[];last_seen_at:string|null}[]}>;
  identity(options?:RequestOptions):Promise<{device:{id:string;name:string;platform:string};scopes:string[]}>;
  context(options?:RequestOptions):Promise<{device_id:string;global:Memory[];device:Memory[];directory:Payload}>;
  searchMemories(query?:{q?:string;scope?:'global'|'device';device_id?:string},options?:RequestOptions):Promise<{items:Memory[]}>;

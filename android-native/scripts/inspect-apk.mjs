@@ -9,12 +9,17 @@ const apk=path.join(output,'AnyLink-Android-'+version+'.apk');
 const buildTools=path.join(sdk,'build-tools/37.0.0');
 const badging=execFileSync(path.join(buildTools,'aapt'),['dump','badging',apk],{env:environment(),encoding:'utf8'});
 assert.ok(badging.includes("package: name='com.anylink.agent.debug'"));
-assert.ok(badging.includes("launchable-activity: name='ai.openclaw.app.MainActivity'"));
+assert.ok(badging.includes("launchable-activity: name='ai.openclaw.app.anylink.AnyLinkActivity'"));
 assert.ok(badging.includes("sdkVersion:'31'"));
 assert.ok(badging.includes("targetSdkVersion:'36'"));
 assert.ok(badging.includes("application-label:'大肥鱼 · AnyLink'"));
+for(const permission of ['READ_SMS','SEND_SMS','READ_CALL_LOG','ACCESS_BACKGROUND_LOCATION','READ_MEDIA_IMAGES','CAMERA'])assert.ok(!badging.includes("uses-permission: name='android.permission."+permission+"'"),'Unexpected legacy phone permission '+permission);
+const manifest=execFileSync(path.join(buildTools,'aapt'),['dump','xmltree',apk,'AndroidManifest.xml'],{encoding:'utf8'});
+for(const component of ['ai.openclaw.app.MainActivity','NodeForegroundService','VoiceE2eReceiver','VoiceE2eService','OpenClawAccessibilityService'])assert.ok(!manifest.includes(component),'Legacy component is still registered: '+component);
+
 const signature=execFileSync('/bin/sh',[path.join(buildTools,'apksigner'),'verify','--verbose','--print-certs',apk],{env:environment(),encoding:'utf8'});
 const buildInfo=JSON.parse(execFileSync('/usr/bin/unzip',['-p',apk,'assets/anylink/build-info.json'],{encoding:'utf8'}));
+assert.equal(buildInfo.architecture,'device-agent');assert.equal(buildInfo.gateway_required,false);
 assert.equal(buildInfo.upstream,lock.commit);assert.equal(buildInfo.version,version);
 assert.equal(buildInfo.source,execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim());
 // Inspect decompressed entries, including DEX strings. Searching the compressed

@@ -1,12 +1,12 @@
 <p align="center"><img src="docs/assets/banner.svg" alt="AnyLink Agent — protocol and SDK" width="100%"></p>
 
-<p align="center"><a href="README.zh-CN.md">简体中文</a> · <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.0-preview.1">Downloads</a> · <a href="sdk/README.md">SDK</a> · <a href="protocol/README.md">Protocol</a> · <a href="LICENSE">MIT</a></p>
+<p align="center"><a href="README.zh-CN.md">简体中文</a> · <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.1-preview.1">Downloads</a> · <a href="sdk/README.md">SDK</a> · <a href="protocol/README.md">Protocol</a> · <a href="LICENSE">MIT</a></p>
 
 # AnyLink Agent
 
 **Bring your agent across devices. Share memory. Keep execution with its host.**
 
-AnyLink provides self-hosted memory, optional model passthrough, a device task protocol, and a JavaScript/TypeScript SDK. It does not require a particular agent harness. Connect your own application, automation system, Codex adapter or other agent. The modified Mac and Android OpenClaw applications are reference clients.
+AnyLink provides self-hosted memory, optional model passthrough, a device task protocol, and a JavaScript/TypeScript SDK. It does not require a particular agent harness. Connect your own application, automation system, Codex adapter or other agent. Each device owns its conversation and tool loop and connects to the server. A local Mac OpenClaw harness and an independent native Android Agent are reference implementations.
 
 ## What works
 
@@ -14,21 +14,25 @@ AnyLink provides self-hosted memory, optional model passthrough, a device task p
 - **Device task flow**: the owner explicitly grants a source/target/capability tuple; the target claims work, executes locally and reports a durable receipt.
 - **Failure semantics**: idempotent mutations, revision preconditions, local execution journals and explicit unknown outcomes. Unknown model requests or external effects are never silently rerun.
 - **Self-hosted service**: TypeScript, Fastify and PostgreSQL. The cloud does not run an agent tool loop.
-- **Reference clients**: a Mac `.app` with chat, computer control and a desktop companion; an official-OpenClaw-based Android client with chat, Talk and character states. OS permissions and hardware verification still apply.
+- **Reference clients**: a Mac `.app` with chat, computer control and a desktop companion; an Android-local Agent with private notes, shared memory, cross-device tasks and character states. System speech and OS permissions still need hardware verification.
 
 <img src="docs/assets/architecture.svg" alt="Applications connect through the AnyLink SDK to cloud services and host-owned execution" width="100%">
 
-The protocol and SDK already work independently. The downloadable Mac/Android apps still use OpenClaw transport; they are not yet a generic AnyLink mobile controller. The Codex example starts a separate read-only CLI turn, rather than controlling an existing desktop chat.
+**Android 0.3+ connects only to the AnyLink server, never to a Mac Gateway.** With the Mac offline, phone chat, phone tools and shared memory keep working. Mac-directed work is queued and returned through the server. Android 0.2.x was a historical companion preview; that connection path is retired. The Codex example still starts a separate read-only CLI turn and does not control an existing desktop chat.
 
 ## Downloads
 
-The first public release is **v0.8.0-preview.1**. [GitHub Releases](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.0-preview.1) contains binaries, source revision, a manifest and SHA-256 checksums:
+The first public release is **v0.8.1-preview.1**. [GitHub Releases](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.1-preview.1) contains binaries, source revision, a manifest and SHA-256 checksums:
 
-- [Android APK](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/AnyLink-Android-0.2.0-preview.2.apk): Android 12+, debug-signed preview.
-- [Mac application](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/AnyLink-macOS-arm64-0.8.0-preview.zip): Apple Silicon, macOS 15+. This compiled desktop shell uses a separately configured checkout; select your own project directory at first launch. Voice input requires macOS 26. The preview is ad-hoc signed and not notarized; see [client setup](docs/open-source/clients.md).
-- [SDK tarball](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/anylink-agent-sdk-0.1.0.tgz): install in your own Node/TypeScript project. Not yet published to the npm registry.
+- [Android APK](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/AnyLink-Android-0.3.0-preview.1.apk): Android 12+, debug-signed preview.
+- [Mac application](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/AnyLink-macOS-arm64-0.8.1-preview.zip): Apple Silicon, macOS 15+. This compiled desktop shell uses a separately configured checkout; select your own project directory at first launch. Voice input requires macOS 26. The preview is ad-hoc signed and not notarized; see [client setup](docs/open-source/clients.md).
+- [SDK tarball](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz): install in your own Node/TypeScript project. Not yet published to the npm registry.
 
 Public packages **exclude the DeepSeek-chan model, textures, derived avatar and Live2D Cubism Core**. They use original code-drawn placeholder artwork. Obtain optional third-party assets through their authors and follow their licenses; the MIT code license does not grant character/model redistribution rights.
+
+## Connect a phone
+
+Register an Android device in your server's owner console and obtain its one-time credential JSON. In the app's **Server connection** panel, enter your **AnyLink HTTPS URL** and import that JSON. No Mac address, OpenClaw token or pairing is needed. The server provides model inference; the phone runs its own tool loop. A reachable HTTPS endpoint is an operator deployment prerequisite; USB/SSH forwarding is only a development option. See [client setup](docs/open-source/clients.md).
 
 ## Preview
 
@@ -36,10 +40,14 @@ Public packages **exclude the DeepSeek-chan model, textures, derived avatar and 
 
 Left: public placeholder. Right: optional third-party character configured locally. Both images are **desktop browser composition previews, not Android hardware screenshots**. DeepSeek-chan / 大肥鱼 art and separation: **神宫凉子**; Live2D: **霓虹猫_NeonNeko**. [Model source and usage notice](https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md).
 
+Native server-connection screen rendered by the Android UI test (not a physical-phone screenshot):
+
+<img src="docs/assets/android-server-connection.png" alt="Android AnyLink server connection" width="300">
+
 ## Connect your project
 
 ```bash
-npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.0-preview.1/anylink-agent-sdk-0.1.0.tgz
+npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz
 ```
 
 ```js
@@ -99,7 +107,7 @@ TEST_DATABASE_URL=postgresql://USER:PASS@127.0.0.1:5432/anylink_test npm run tes
 
 This is a **single-owner reference deployment**. Logical devices share one owner trust domain. Default context selection is not multi-tenant data isolation or proof of physical pairing. Execution also requires capability grants and host policy. Cancellation is cooperative; exactly-once effects in external systems cannot be guaranteed. The server can read stored memory/tasks and forwarded model content.
 
-A generic Android SDK, generic mobile-controller transport, existing Codex desktop-chat control and end-to-end realtime voice are not implemented. Phone microphone, playback, interruption, GPU behavior and node operations still require hardware verification. See [SECURITY](SECURITY.md).
+The native Android Agent speaks the generic cloud protocol; a standalone Kotlin SDK is not published. Current phone tools cover device information, private notes, shared memory and cross-device tasks; general control of other apps is not implemented. Existing Codex desktop-chat control and end-to-end realtime voice are not implemented. Phone speech, GPU and lifecycle behavior still require hardware verification. See [SECURITY](SECURITY.md).
 
 ## License and mirrors
 

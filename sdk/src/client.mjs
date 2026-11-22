@@ -33,6 +33,7 @@ export class AnyLinkClient {
     try{return await response.json();}catch(cause){throw new AnyLinkError('AnyLink response was incomplete',{code:writing?'SUBMISSION_UNKNOWN':'INVALID_RESPONSE',requestId,idempotencyKey:key,submissionUnknown:writing,cause});}
   }
   protocol(options){return this.#request('GET','edge/v1/link/protocol',undefined,options);}
+  peers(options){return this.#request('GET','edge/v1/link/peers',undefined,options);}
   identity(options){return this.#request('GET','edge/v1/identity',undefined,options);}
   context(options){return this.#request('GET','edge/v1/context',undefined,options);}
   searchMemories(query={},options){return this.#request('POST','edge/v1/memories/search',query,{...options,idempotencyKey:false});}
