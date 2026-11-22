@@ -19,7 +19,7 @@ export function loadConfig() {
     databaseUrl: secret('DATABASE_URL'), ownerToken: secret('OWNER_TOKEN'),deepseekApiKey:/^(REPLACE_|CONFIGURE_)/.test(providerKey)?'':providerKey,
     deepseekBaseUrl:process.env.DEEPSEEK_BASE_URL, origin: process.env.APP_ORIGIN,
     host: process.env.HOST, port: process.env.PORT,
-    joinKey:/^(?:|REPLACE_|CONFIGURE_)/.test(joinKey)?'':joinKey,
+    joinKey:/^(REPLACE_|CONFIGURE_|GENERATE_)/.test(joinKey)?'':joinKey,
     personaFile:process.env.ANYLINK_PERSONA_FILE??'persona/dafeiyu.md',
   });
 }

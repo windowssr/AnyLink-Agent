@@ -16,8 +16,9 @@ if(values['credential-file']){
   const joinKey=fs.readFileSync(values['join-key-file'],'utf8').trim();
   if(joinKey.length<24)throw new Error('Expected an owner join key of at least 24 characters');
   let installId=existing?.install_id??null;
-  if(!installId&&existing?.token){
-    installId=`mac-${randomUUID()}`;
+  if(existing?.token&&!existing.worker){
+    // Persist before adopting so a failed join can be retried with the same id (adopt is idempotent).
+    if(!installId){installId=`mac-${randomUUID()}`;fs.writeFileSync(paths.connection,JSON.stringify({...existing,install_id:installId},null,2)+'\n',{mode:0o600});}
     const legacy=new AnyLinkClient({baseUrl:values.server,token:existing.token});
     try{await legacy.adoptInstallId(installId);}catch(e){if(e.code==='INSTALL_ID_ALREADY_SET')throw new Error('The existing device already uses a different install_id; refusing to create a new device');throw e;}
   }
