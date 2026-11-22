@@ -1,12 +1,24 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 
 /** Bounded, resumable HTTP ranges; the final official digest owns acceptance. */
-export async function downloadPinned({url,sha256,bytes},target) {
-  const digest=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-  if(fs.existsSync(target)&&fs.statSync(target).size===bytes&&digest(target)===sha256)return;
+export async function downloadPinned({url,sha256,sha1,bytes},target) {
+  fs.mkdirSync(path.dirname(target),{recursive:true});
+  // Google SDK repository metadata publishes SHA-1 for SDK package archives;
+  // CLI/bootstrap tools and Gradle use their stronger published SHA-256 pins.
+  const algorithm=sha256?'sha256':'sha1',expected=sha256??sha1;
+  if(!new RegExp(`^[a-f0-9]{${algorithm==='sha256'?64:40}}$`).test(expected??''))throw new Error('A published artifact checksum is required');
+  const digest=file=>createHash(algorithm).update(fs.readFileSync(file)).digest('hex');
+  if(fs.existsSync(target)&&fs.statSync(target).size===bytes&&digest(target)===expected)return;
   const count=6,chunkSize=Math.ceil(bytes/count),chunks=[];
+  // An interrupted standard downloader may already have a prefix. Reuse it
+  // only as untrusted partial data; the complete published digest still gates use.
+  if(fs.existsSync(target)&&fs.statSync(target).size<bytes&&!fs.existsSync(target+'.part-0')){
+    const prefix=fs.readFileSync(target);
+    for(let i=0;i<count;i++){const start=i*chunkSize;if(start>=prefix.length)break;fs.writeFileSync(target+'.part-'+i,prefix.subarray(start,Math.min(prefix.length,start+chunkSize)));}
+  }
   const settled=await Promise.allSettled(Array.from({length:count},async(_,i)=>{
     const start=i*chunkSize,end=Math.min(bytes-1,start+chunkSize-1),size=end-start+1,file=target+'.part-'+i;chunks[i]=file;
     for(let attempt=0;attempt<4;attempt++){
@@ -34,6 +46,6 @@ export async function downloadPinned({url,sha256,bytes},target) {
   // child transfers behind could race the next resumable installation.
   const failed=settled.find(r=>r.status==='rejected');if(failed)throw failed.reason;
   const fd=fs.openSync(target,'w');try{for(const file of chunks)fs.writeSync(fd,fs.readFileSync(file));}finally{fs.closeSync(fd);}
-  if(digest(target)!==sha256)throw new Error('Official artifact SHA-256 mismatch; download was not executed');
+  if(digest(target)!==expected)throw new Error('Official artifact checksum mismatch; download was not executed');
   for(const file of chunks)fs.rmSync(file);
 }
