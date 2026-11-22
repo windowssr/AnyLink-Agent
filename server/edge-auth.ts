@@ -10,8 +10,8 @@ export async function authenticateEdge(db:Db,req:FastifyRequest) {
   if(!token.startsWith('ak_')||token.length>150)throw new ApiError(401,'EDGE_AUTH_REQUIRED','需要设备服务凭据');
   const row=(await db.query('UPDATE edge_credentials SET last_used_at=now() WHERE token_hash=$1 AND revoked_at IS NULL RETURNING id,device_id,agent_id',[hash(token)])).rows[0];
   if(!row)throw new ApiError(401,'EDGE_AUTH_REQUIRED','设备凭据无效或已撤销');
-  const agent=(await db.query('UPDATE agents SET last_seen_at=now() WHERE id=$1 AND owner_id=$2 AND revoked_at IS NULL RETURNING id',[row.agent_id,OWNER_ID])).rows[0];
-  if(!agent)throw new ApiError(401,'EDGE_AUTH_REQUIRED','Agent 已撤销或不存在');
+  const agent=(await db.query('UPDATE agents SET last_seen_at=now() WHERE id=$1 AND owner_id=$2 AND revoked_at IS NULL AND device_id IN(SELECT id FROM devices WHERE revoked_at IS NULL) RETURNING id',[row.agent_id,OWNER_ID])).rows[0];
+  if(!agent)throw new ApiError(401,'EDGE_AUTH_REQUIRED','Agent 已撤销、设备已撤销或不存在');
   req.edgeIdentity={id:row.id,device_id:row.device_id,agent_id:row.agent_id};return req.edgeIdentity;
 }
 export const connectSchema=z.object({
@@ -34,6 +34,7 @@ export function registerConnectRoute(app:FastifyInstance,db:Db,config:Config,att
       await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`connect:${body.device.install_id}`]);
       const device=(await c.query(`INSERT INTO devices(id,owner_id,name,platform,install_id) VALUES($1,$2,$3,$4,$5)
         ON CONFLICT(install_id) DO UPDATE SET name=EXCLUDED.name,platform=EXCLUDED.platform RETURNING *`,[randomUUID(),OWNER_ID,body.device.name,body.device.platform,body.device.install_id])).rows[0];
+      if(device.revoked_at)throw new ApiError(403,'DEVICE_REVOKED','This device has been revoked by the owner');
       const agent=(await c.query(`INSERT INTO agents(id,owner_id,device_id,key,name,kind) VALUES($1,$2,$3,$4,$5,$6)
         ON CONFLICT(device_id,key) DO UPDATE SET name=EXCLUDED.name,kind=EXCLUDED.kind RETURNING *`,[randomUUID(),OWNER_ID,device.id,body.agent.key,body.agent.name,body.agent.kind])).rows[0];
       if(agent.revoked_at)throw new ApiError(403,'AGENT_REVOKED','This agent key has been revoked');
@@ -69,9 +70,17 @@ export function registerCredentialRoutes(app:FastifyInstance,db:Db) {
   app.post('/v1/devices/:id/revoke',async req=>{
     const {id}=z.object({id:z.uuid()}).parse(req.params);
     if(!(await db.query('SELECT id FROM devices WHERE id=$1 AND owner_id=$2',[id,OWNER_ID])).rowCount)throw new ApiError(404,'DEVICE_NOT_FOUND','设备不存在');
+    await db.query('UPDATE devices SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL',[id]);
     await db.query('UPDATE agents SET revoked_at=now() WHERE device_id=$1 AND revoked_at IS NULL',[id]);
     await db.query('UPDATE edge_credentials SET revoked_at=now() WHERE device_id=$1 AND revoked_at IS NULL',[id]);
     return {device_id:id,revoked:true};
+  });
+  app.post('/v1/devices/:id/restore',async req=>{
+    const {id}=z.object({id:z.uuid()}).parse(req.params);
+    if(!(await db.query('SELECT id FROM devices WHERE id=$1 AND owner_id=$2',[id,OWNER_ID])).rowCount)throw new ApiError(404,'DEVICE_NOT_FOUND','设备不存在');
+    await db.query('UPDATE devices SET revoked_at=NULL WHERE id=$1',[id]);
+    await db.query('UPDATE agents SET revoked_at=NULL WHERE device_id=$1',[id]);
+    return {device_id:id,restored:true};
   });
   app.get('/v1/agents',async()=>({items:(await db.query(`SELECT a.id,a.device_id,a.key,a.name,a.kind,a.capabilities,a.last_seen_at,a.revoked_at,a.created_at,d.name AS device_name,d.platform AS device_platform,(a.last_seen_at IS NOT NULL AND a.last_seen_at>now()-interval '60 seconds') AS online
     FROM agents a JOIN devices d ON d.id=a.device_id WHERE d.owner_id=$1 ORDER BY d.name,d.id,a.key`,[OWNER_ID])).rows}));

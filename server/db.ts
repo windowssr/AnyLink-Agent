@@ -72,6 +72,7 @@ export async function migrate(db: Db) {
       INSERT INTO schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING;`);
     if(!(await c.query('SELECT 1 FROM schema_migrations WHERE version=4')).rowCount){
       await c.query(`ALTER TABLE devices ADD COLUMN install_id text;
+        ALTER TABLE devices ADD COLUMN revoked_at timestamptz;
         ALTER TABLE devices ADD CONSTRAINT devices_install_id_key UNIQUE(install_id);
         CREATE TABLE agents(id uuid PRIMARY KEY,owner_id uuid NOT NULL,device_id uuid NOT NULL REFERENCES devices(id),key text NOT NULL,name text NOT NULL,kind text NOT NULL DEFAULT 'agent',capabilities jsonb NOT NULL DEFAULT '[]',capabilities_updated_at timestamptz,last_seen_at timestamptz,revoked_at timestamptz,created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(device_id,key));
         INSERT INTO agents(id,owner_id,device_id,key,name,kind) SELECT gen_random_uuid(),owner_id,id,'default',name,'legacy' FROM devices d WHERE NOT EXISTS(SELECT 1 FROM agents a WHERE a.device_id=d.id);

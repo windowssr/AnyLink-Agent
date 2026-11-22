@@ -1147,6 +1147,50 @@
         }
       }
     },
+    "/v1/devices/{id}/restore": {
+      "post": {
+        "summary": "Restore a revoked device and its agents; credentials stay revoked and agents must reconnect",
+        "security": [
+          {
+            "ownerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
     "/v1/devices/{id}/credential": {
       "post": {
         "summary": "Issue a one-time credential bound to the device default agent (201); not replayable",

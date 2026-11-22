@@ -47,7 +47,7 @@ export function registerLink(app:FastifyInstance,db:Db){
   app.get('/edge/v1/link/peers',async req=>{
     const rows=(await db.query(`SELECT d.id,d.name,d.platform,a.capabilities,a.last_seen_at FROM devices d
       JOIN agents a ON a.device_id=d.id AND a.revoked_at IS NULL
-      WHERE d.owner_id=$1 AND d.id<>$2 ORDER BY d.name,d.id`,[OWNER_ID,who(req).device_id])).rows;
+      WHERE d.owner_id=$1 AND d.revoked_at IS NULL AND d.id<>$2 ORDER BY d.name,d.id`,[OWNER_ID,who(req).device_id])).rows;
     const items=new Map<string,any>();
     for(const row of rows){
       const item=items.get(row.id)??{id:row.id,name:row.name,platform:row.platform,capabilities:[],last_seen_at:null};
@@ -62,7 +62,7 @@ export function registerLink(app:FastifyInstance,db:Db){
     const me=who(req);
     const rows=(await db.query(`SELECT d.id AS device_id,d.name AS device_name,d.platform,a.id AS agent_id,a.key,a.name AS agent_name,a.kind,a.capabilities,a.last_seen_at
       FROM devices d JOIN agents a ON a.device_id=d.id AND a.revoked_at IS NULL
-      WHERE d.owner_id=$1 ORDER BY d.name,d.id,a.key`,[OWNER_ID])).rows;
+      WHERE d.owner_id=$1 AND d.revoked_at IS NULL ORDER BY d.name,d.id,a.key`,[OWNER_ID])).rows;
     const items=new Map<string,any>();
     for(const row of rows){
       const item=items.get(row.device_id)??{device:{id:row.device_id,name:row.device_name,platform:row.platform},agents:[]};
@@ -84,16 +84,16 @@ export function registerLink(app:FastifyInstance,db:Db){
       let targetAgentId:string|null=null,targetDeviceId:string|null=null;
       const cap=capabilityJson(body.capability);
       if(body.target&&'agent_id' in body.target){
-        const agent=(await c.query('SELECT id,device_id FROM agents WHERE id=$1 AND revoked_at IS NULL AND capabilities @> $2::jsonb',[body.target.agent_id,cap])).rows[0];
+        const agent=(await c.query(`SELECT a.id,a.device_id FROM agents a JOIN devices d ON d.id=a.device_id AND d.revoked_at IS NULL WHERE a.id=$1 AND a.revoked_at IS NULL AND a.capabilities @> $2::jsonb`,[body.target.agent_id,cap])).rows[0];
         if(!agent)throw new ApiError(409,'NO_TARGET_AGENT','No live agent advertises this capability for the requested target');
         targetAgentId=agent.id;targetDeviceId=agent.device_id;
       }else{
         const deviceId=body.target&&'device_id' in body.target?body.target.device_id:body.target_device_id??null;
         if(deviceId){
-          if(!(await c.query('SELECT 1 FROM devices WHERE id=$1 AND owner_id=$2',[deviceId,OWNER_ID])).rowCount)throw new ApiError(409,'NO_TARGET_AGENT','Target device does not exist');
-          if(!(await c.query('SELECT 1 FROM agents WHERE device_id=$1 AND revoked_at IS NULL AND capabilities @> $2::jsonb LIMIT 1',[deviceId,cap])).rowCount)throw new ApiError(409,'NO_TARGET_AGENT','No live agent on the target device advertises this capability');
+          if(!(await c.query('SELECT 1 FROM devices WHERE id=$1 AND owner_id=$2 AND revoked_at IS NULL',[deviceId,OWNER_ID])).rowCount)throw new ApiError(409,'NO_TARGET_AGENT','Target device does not exist');
+          if(!(await c.query('SELECT 1 FROM agents a JOIN devices d ON d.id=a.device_id AND d.revoked_at IS NULL WHERE a.device_id=$1 AND a.revoked_at IS NULL AND a.capabilities @> $2::jsonb LIMIT 1',[deviceId,cap])).rowCount)throw new ApiError(409,'NO_TARGET_AGENT','No live agent on the target device advertises this capability');
           targetDeviceId=deviceId;
-        }else if(!(await c.query('SELECT 1 FROM agents WHERE owner_id=$1 AND revoked_at IS NULL AND capabilities @> $2::jsonb LIMIT 1',[OWNER_ID,cap])).rowCount)throw new ApiError(409,'NO_TARGET_AGENT','No live agent advertises this capability');
+        }else if(!(await c.query('SELECT 1 FROM agents a JOIN devices d ON d.id=a.device_id AND d.revoked_at IS NULL WHERE a.owner_id=$1 AND a.revoked_at IS NULL AND a.capabilities @> $2::jsonb LIMIT 1',[OWNER_ID,cap])).rowCount)throw new ApiError(409,'NO_TARGET_AGENT','No live agent advertises this capability');
       }
       const row=(await c.query(`INSERT INTO link_tasks(id,owner_id,source_device_id,source_agent_id,target_device_id,target_agent_id,capability,input,expires_at,source_credential_id)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+$9*interval '1 second',$10) RETURNING *`,[randomUUID(),OWNER_ID,me.device_id,me.agent_id,targetDeviceId,targetAgentId,body.capability,JSON.stringify(body.input),body.ttl_seconds,me.id])).rows[0];

@@ -165,6 +165,57 @@ test('unknown writes are not replayed or followed by another write in the same r
   },{onRequest:entry=>{if(fail&&entry.method==='POST'&&entry.path==='/edge/v1/memories')throw new TypeError('fixture network disconnected');}});
 });
 
+test('agent-tier facts join the prompt context and carry agent scope',async()=>{
+  const AGENT_FACT={id:'agent-fact',title:'Agent 私有',content:'Only this agent sees me',scope:'agent',applicable_device_id:MAC,applicable_agent_id:'agent-1',revision:1};
+  await fixture(async({hooks,requests})=>{
+    const prompt=await hooks.before_prompt_build({currentUserMessage:'你好'},macContext);
+    assert.match(prompt.prependContext,/Only this agent sees me/);assert.match(prompt.prependContext,/Agent 私有/);
+    assert.match(prompt.prependSystemContext,/agent（当前 Agent）/);
+    const save=requests.find(r=>r.path==='/edge/v1/memories');
+    assert.equal(save,undefined);
+  },{onRequest:entry=>entry.path==='/edge/v1/context'?Response.json({device_id:MAC,global:[GLOBAL],device:[MAC_FACT],agent:[AGENT_FACT]}):undefined});
+});
+
+test('link tools are main-only, send target shape with idempotency and report unknown outcomes once',async()=>{
+  await fixture(async({hooks,requests,tools})=>{
+    await hooks.before_prompt_build({currentUserMessage:'派发一个任务'},macContext);
+    const registered=tools(macContext);
+    for(const name of ['anylink_link_directory','anylink_task_create','anylink_task_status','anylink_task_cancel'])assert.ok(registered[name],name);
+    assert.equal(tools(androidContext).anylink_task_create,undefined,'link tools stay off non-main agents');
+    const directory=await registered.anylink_link_directory.execute('dir',{});
+    assert.equal(directory.details.items!==undefined,true);
+    const dirRequest=requests.at(-1);assert.equal(dirRequest.path,'/edge/v1/link/directory');assert.equal(dirRequest.method,'GET');assert.equal(dirRequest.token,'Bearer ak_fixture_mac');
+    const created=await registered.anylink_task_create.execute('make',{capability:'text.reverse',input:{text:'hi'},target_agent_id:'agent-target',ttl_seconds:600});
+    const post=requests.at(-1);assert.equal(post.path,'/edge/v1/link/tasks');assert.equal(post.method,'POST');
+    assert.deepEqual(post.body.target,{agent_id:'agent-target'});assert.equal(post.body.capability,'text.reverse');assert.equal(post.body.ttl_seconds,600);
+    assert.match(post.headers['Idempotency-Key'],/^[a-f0-9]{64}$/);
+    await registered.anylink_task_create.execute('make-device',{capability:'files.search',input:{q:'x'},target_device_id:'dev-1'});
+    assert.deepEqual(requests.at(-1).body.target,{device_id:'dev-1'});
+    await registered.anylink_task_create.execute('make-any',{capability:'files.search',input:{q:'x'}});
+    assert.equal(Object.hasOwn(requests.at(-1).body,'target'),false);
+    const status=await registered.anylink_task_status.execute('st',{id:'task-1'});assert.equal(requests.at(-1).path,'/edge/v1/link/tasks/task-1');assert.equal(status.isError,undefined);
+    await registered.anylink_task_cancel.execute('cx',{id:'task-1'});assert.equal(requests.at(-1).path,'/edge/v1/link/tasks/task-1/cancel');assert.equal(requests.at(-1).method,'POST');
+  },{onRequest:entry=>{
+    if(entry.path==='/edge/v1/link/directory')return Response.json({items:[{device:{id:MAC,name:'Mac',platform:'macos'},agents:[{id:'a1',key:'k',name:'n',kind:'agent',capabilities:[],last_seen_at:null,online:false,self:true}]}]});
+    if(entry.path==='/edge/v1/link/tasks'&&entry.method==='POST')return Response.json({id:'task-new',state:'queued'});
+    if(entry.path.startsWith('/edge/v1/link/tasks/'))return Response.json({id:'task-1',state:'queued'});
+    return undefined;
+  }});
+});
+
+test('a transport failure on task create reports unknown outcome without a second request',async()=>{
+  let posts=0;
+  await fixture(async({hooks,tools})=>{
+    await hooks.before_prompt_build({currentUserMessage:'派发任务'},macContext);
+    const create=tools(macContext).anylink_task_create,registered=tools(macContext);
+    const result=await create.execute('lost',{capability:'text.reverse',input:{}});
+    assert.equal(result.details.error.code,'TASK_RESULT_UNKNOWN');assert.equal(result.isError,true);
+    assert.equal(posts,1,'no automatic retry after an uncertain submission');
+    const status=await registered.anylink_task_status.execute('check',{id:'maybe'});
+    assert.equal(status.isError,undefined);
+  },{onRequest:entry=>{if(entry.path==='/edge/v1/link/tasks'&&entry.method==='POST'){posts++;throw new TypeError('socket hangup');}if(entry.path.startsWith('/edge/v1/link/tasks/'))return Response.json({id:'maybe',state:'queued'});return undefined;}});
+});
+
 test('a known revision conflict is returned unchanged without retrying or poisoning the run',async()=>{
   let conflict=true;
   await fixture(async({hooks,requests,tools})=>{

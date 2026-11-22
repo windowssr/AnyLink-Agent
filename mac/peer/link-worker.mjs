@@ -13,7 +13,7 @@ export function createMacLinkWorker({connection,policyFile,journalPath}){
     return value;
   };
   policy();
-  return new AnyLinkWorker({client:new AnyLinkClient({baseUrl:connection.server,token:connection.token,timeoutMs:20000}),journalPath,
+  return new AnyLinkWorker({client:new AnyLinkClient({baseUrl:connection.server,token:connection.worker?.token??connection.token,timeoutMs:20000}),journalPath,
     handlers:{'files.search':{description:'Read-only filename search in Mac-owned roots; no file contents or shell',
       execute:(input,{signal})=>searchFiles(input,policy(),{signal})}}});
 }
@@ -23,7 +23,8 @@ async function main(){
   // A missing local policy does not silently open new folders.
   if(!fs.existsSync(policyFile)){process.stdout.write('{"event":"link_worker_needs_local_search_policy"}\n');return;}
   const directory=path.join(root,'data/mac/link');fs.mkdirSync(directory,{recursive:true,mode:0o700});
-  const worker=createMacLinkWorker({connection,policyFile,journalPath:path.join(directory,'executions.sqlite')});
+  const agentId=connection.worker?.agent_id,journal=agentId?`executions-${agentId}.sqlite`:'executions.sqlite';
+  const worker=createMacLinkWorker({connection,policyFile,journalPath:path.join(directory,journal)});
   const abort=new AbortController();const stop=()=>abort.abort();process.on('SIGTERM',stop);process.on('SIGINT',stop);
   try{
     while(!abort.signal.aborted){

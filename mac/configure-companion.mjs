@@ -1,11 +1,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {paths} from './configure.mjs';
+export function composeSoul(base,appendix){return `${base.trimEnd()}\n\n${appendix.trimEnd()}\n`;}
+export function installSharedPersona({mainWorkspace,companionWorkspace,markerFile,baseFile,mainAppendixFile,companionAppendixFile}){
+  const base=fs.readFileSync(baseFile,'utf8');
+  fs.mkdirSync(companionWorkspace,{recursive:true,mode:0o700});
+  fs.writeFileSync(path.join(companionWorkspace,'SOUL.md'),composeSoul(base,fs.readFileSync(companionAppendixFile,'utf8')),{mode:0o600});
+  if(fs.existsSync(markerFile))return {migrated:false};
+  const identity=path.join(mainWorkspace,'IDENTITY.md'),soul=path.join(mainWorkspace,'SOUL.md');
+  for(const file of [soul,identity]){
+    if(!fs.existsSync(file))continue;
+    const backup=file+'.before-shared-persona';
+    if(!fs.existsSync(backup))fs.writeFileSync(backup,fs.readFileSync(file),{mode:0o600,flag:'wx'});
+  }
+  fs.writeFileSync(soul,composeSoul(base,fs.readFileSync(mainAppendixFile,'utf8')),{mode:0o600});
+  if(fs.existsSync(identity)){
+    const original=fs.readFileSync(identity,'utf8');
+    fs.writeFileSync(identity,original.replace(/^- \*\*Vibe:\*\*.*$/m,'- **Vibe:** 聪明但惜力、傲娇却可靠的深海鲸鱼娘'),{mode:0o600});
+  }
+  fs.writeFileSync(markerFile,JSON.stringify({version:'0.6',installed_at:new Date().toISOString()}),{mode:0o600,flag:'wx'});
+  return {migrated:true};
+}
+function main(){
 const file=path.join(paths.state,'openclaw.json'),config=JSON.parse(fs.readFileSync(file,'utf8'));
 if(config.gateway?.port!==18791||config.gateway.bind!=='loopback')throw new Error('Unexpected Mac profile');
 const folder=path.join(paths.root,'data/mac/companion'),workspace=path.join(folder,'workspace');
 fs.mkdirSync(workspace,{recursive:true,mode:0o700});
-fs.copyFileSync(path.join(paths.root,'mac/companion/persona.md'),path.join(workspace,'SOUL.md'));fs.chmodSync(path.join(workspace,'SOUL.md'),0o600);
 const identity=path.join(paths.workspace,'IDENTITY.md'),personaMarker=path.join(folder,'persona-v0.5.json');
 if(fs.existsSync(identity)&&!fs.existsSync(personaMarker)){
   const original=fs.readFileSync(identity,'utf8'),backup=identity+'.before-desktop-companion';
@@ -22,6 +43,7 @@ if(fs.existsSync(identity)&&!fs.existsSync(personaMarker)){
   }
   fs.writeFileSync(identity,updated,{mode:0o600});fs.writeFileSync(personaMarker,JSON.stringify({version:'0.5',installed_at:new Date().toISOString()}),{mode:0o600,flag:'wx'});
 }
+installSharedPersona({mainWorkspace:paths.workspace,companionWorkspace:workspace,markerFile:path.join(folder,'persona-v0.6.json'),baseFile:path.join(paths.root,'persona/dafeiyu.md'),mainAppendixFile:path.join(paths.root,'mac/persona-main.md'),companionAppendixFile:path.join(paths.root,'mac/companion/persona.md')});
 config.plugins.allow=[...new Set([...config.plugins.allow,'anylink-companion'])];
 config.plugins.load.paths=[...new Set([...config.plugins.load.paths,path.join(paths.root,'mac/companion/plugin')])];
 config.plugins.entries['anylink-companion']={enabled:true,hooks:{allowConversationAccess:true,allowPromptInjection:true,timeoutMs:15000},config:{projectRoot:paths.root}};
@@ -39,3 +61,5 @@ if(fs.existsSync(identity)){
 const backup=file+'.before-companion-'+new Date().toISOString().replaceAll(/[:.]/g,'-');fs.copyFileSync(file,backup);fs.chmodSync(backup,0o600);
 const temp=file+'.companion-'+process.pid;fs.writeFileSync(temp,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});fs.renameSync(temp,file);
 console.log('Configured local companion persona and bounded desktop companion tools. Concurrency and cloud configuration retained.');
+}
+if(process.argv[1]===fileURLToPath(import.meta.url))main();

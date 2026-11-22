@@ -8,7 +8,11 @@
       "anylink_memory_search",
       "anylink_memory_save",
       "anylink_memory_update",
-      "anylink_memory_delete"
+      "anylink_memory_delete",
+      "anylink_link_directory",
+      "anylink_task_create",
+      "anylink_task_status",
+      "anylink_task_cancel"
     ]
   },
   "configSchema": {
@@ -57,6 +61,26 @@
       ]
     },
     "anylink_memory_delete": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_link_directory": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_task_create": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_task_status": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_task_cancel": {
       "profiles": [
         "coding"
       ]

@@ -118,6 +118,22 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
     await t.test('credential revocation blocks model and memory, owner remains valid',async()=>{
       await owner('POST',`/v1/devices/${device.id}/revoke`,{});assert.equal((await edge('GET','/edge/v1/context')).statusCode,401);assert.equal((await model('no')).statusCode,401);assert.equal((await owner('GET','/v1/devices')).statusCode,200);
     });
+    await t.test('revoked devices block connect and tokens until owner restore',async()=>{
+      const install='install-revoke-0001';
+      const join=async()=>instance.app.inject({method:'POST',url:'/edge/v1/connect',headers:{authorization:`Bearer ${joinKey}`},payload:{device:{install_id:install,name:'Revocable',platform:'other'},agent:{key:'agent-'+randomUUID().slice(0,8),name:'a'}}});
+      const first=(await join()).json();assert.equal(first.device_id!==undefined,true);
+      const second=(await instance.app.inject({method:'POST',url:'/edge/v1/connect',headers:{authorization:`Bearer ${joinKey}`},payload:{device:{install_id:install,name:'Revocable',platform:'other'},agent:{key:'agent-b',name:'b'}}})).json();
+      assert.equal(second.device_id,first.device_id);
+      await owner('POST',`/v1/devices/${first.device_id}/revoke`,{});
+      assert.equal((await join()).statusCode,403);
+      assert.equal((await instance.app.inject({method:'POST',url:'/edge/v1/connect',headers:{authorization:`Bearer ${joinKey}`},payload:{device:{install_id:install,name:'Revocable',platform:'other'},agent:{key:'agent-a',name:'a'}}})).json().error.code,'DEVICE_REVOKED');
+      assert.equal((await edge('GET','/edge/v1/identity',undefined,randomUUID(),first.token)).statusCode,401);
+      assert.equal((await edge('GET','/edge/v1/identity',undefined,randomUUID(),second.token)).statusCode,401);
+      const devices=(await owner('GET','/v1/devices')).json();assert.equal(devices.items.find((d:any)=>d.id===first.device_id).revoked_at!==null,true);
+      await owner('POST',`/v1/devices/${first.device_id}/restore`,{});
+      const third=(await join()).json();assert.equal(third.device_id,first.device_id);assert.notEqual(third.token,first.token);
+      assert.equal((await edge('GET','/edge/v1/identity',undefined,randomUUID(),third.token)).statusCode,200);
+    });
     await t.test('service restart retains facts and quarantines uncertain proxy requests',async()=>{
       const credential=(await instance.db.query('SELECT id FROM edge_credentials LIMIT 1')).rows[0].id,id=randomUUID();
       await instance.db.query("INSERT INTO model_requests(id,credential_id,device_id,model,state) VALUES($1,$2,$3,'deepseek-flash','submitted')",[id,credential,device.id]);

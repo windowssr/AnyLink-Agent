@@ -38,6 +38,7 @@ route('/v1/devices','post',{schema:'Device',owner:true,key:true,summary:'Registe
 route('/v1/agents','get',{owner:true,summary:'List all agents across devices'});
 route('/v1/agents/{id}/revoke','post',{owner:true,summary:'Revoke an agent and its credentials; queued targeted tasks stop routing'});
 route('/v1/agents/{id}/restore','post',{owner:true,summary:'Restore a revoked agent; it must reconnect for a new credential'});
+route('/v1/devices/{id}/restore','post',{owner:true,summary:'Restore a revoked device and its agents; credentials stay revoked and agents must reconnect'});
 route('/v1/devices/{id}/credential','post',{owner:true,summary:'Issue a one-time credential bound to the device default agent (201); not replayable'});
 paths['/v1/devices/{id}/credential'].post.responses['201']={description:'One-time secret: device_id, agent_id, credential_id and token. Store privately.'};
 delete paths['/v1/devices/{id}/credential'].post.responses['200'];
