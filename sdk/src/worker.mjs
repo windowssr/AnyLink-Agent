@@ -1,6 +1,10 @@
 import {DatabaseSync} from 'node:sqlite';
 import {setTimeout as delay} from 'node:timers/promises';
 import {openSync,closeSync,chmodSync} from 'node:fs';
+/** A handler throws TaskFailure (or sets taskFailure=true) when the failure is definite and safe to report as `failed`. Any other throw stays `unknown`. */
+export class TaskFailure extends Error {
+  constructor(code,message){super(message);this.name='TaskFailure';this.code=code;this.taskFailure=true;}
+}
 /** A local receipt journal is mandatory. Retained started rows are never rerun. */
 export class AnyLinkWorker {
   #client;#handlers;#db;#binding;
@@ -46,7 +50,10 @@ export class AnyLinkWorker {
         // Claim admission is current on the server. Local host policy remains
         // authoritative for individual side effects inside each handler.
         try{controller.signal.throwIfAborted();result={state:'succeeded',output:await handler.execute(task.input,{task,signal:controller.signal})};}
-        catch(error){result={state:'unknown',error:{code:controller.signal.aborted?'INTERRUPTED_OUTCOME_UNKNOWN':'HANDLER_OUTCOME_UNKNOWN',message:'The host handler did not return a durable result; inspect its effects before retrying'}};}
+        catch(error){
+          if(error instanceof TaskFailure||(error&&error.taskFailure===true))result={state:'failed',error:{code:error.code??'TASK_FAILED',message:String(error.message??error).slice(0,500)}};
+          else result={state:'unknown',error:{code:controller.signal.aborted?'INTERRUPTED_OUTCOME_UNKNOWN':'HANDLER_OUTCOME_UNKNOWN',message:'The host handler did not return a durable result; inspect its effects before retrying'}};
+        }
       }
       this.#db.prepare("UPDATE executions SET state='finished',result=? WHERE task_id=?").run(JSON.stringify(result),task.id);
       const completed=await this.#client.completeTask(task.id,result,{idempotencyKey:resultKey});

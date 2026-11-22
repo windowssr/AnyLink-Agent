@@ -16,9 +16,11 @@ Android：原生人物 / 文字 / 系统语音
        → 本机策略限制的执行 → 云端持久回执 → 手机任务面板
 反向：其他设备把 phone.status / companion.say 路由到这台手机
        → 前台 worker 领取并执行 → 结果回传云端
+Mac 文件操作：agent.ask → mac-openclaw Agent → 本机 OpenClaw remote Agent
+       → anylink_files_* 受限工具（读写/整理/移动/删到废纸篓/打开）
 ```
 
-当前手机工具是基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除（global／device／agent 三层）、表情动作，以及跨设备的 link_directory／task_create／task_status／task_cancel。App 在前台时还会声明 `phone.status`（读取型号、系统版本、电量等）和 `companion.say`（让大肥鱼用语音说一句话并显示在屏幕上，text ≤500 字）两个能力供其他设备派发。没有沿用旧 Gateway 的手机操作能力，不能宣称能点击其他 App、读相册或操控全屏。后续逐项接原生能力和权限。
+当前手机工具是基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除（global／device／agent 三层）、表情动作，以及跨设备的 link_directory／task_create／task_status／task_cancel。Mac 的 `mac-files` Agent 提供 `files.search` 文件名搜索；Mac 的 `mac-openclaw` Agent 提供 `agent.ask`，把完整中文指令交给 Mac 上的大肥鱼在开放目录内读写、整理、移动、删到废纸篓或打开文件（无确认、删除进废纸篓、需 Mac 保持唤醒）。App 在前台时还会声明 `phone.status`（读取型号、系统版本、电量等）和 `companion.say`（让大肥鱼用语音说一句话并显示在屏幕上，text ≤500 字）两个能力供其他设备派发。没有沿用旧 Gateway 的手机操作能力，不能宣称能点击其他 App、读相册或操控全屏。后续逐项接原生能力和权限。
 
 ## 连接
 

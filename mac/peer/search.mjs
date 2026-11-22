@@ -5,7 +5,7 @@ export class PeerFailure extends Error {
   constructor(status, code, message) { super(message); Object.assign(this, {status, code}); }
 }
 const scopes = new Set(['all', 'desktop', 'documents', 'downloads', 'projects', 'workspace']);
-const excluded = new Set(['node_modules', 'vendor', 'secrets', 'data', 'backups', 'artifacts', 'dist', 'build', 'unpackage', 'Library', 'Applications']);
+export const excluded = new Set(['node_modules', 'vendor', 'secrets', 'data', 'backups', 'artifacts', 'dist', 'build', 'unpackage', 'Library', 'Applications']);
 const inside = (root, file) => file === root || file.startsWith(root + path.sep);
 export function searchInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !['query', 'scope', 'limit'].includes(k))) throw new PeerFailure(400, 'INVALID_SEARCH', '搜索参数不正确');

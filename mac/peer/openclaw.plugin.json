@@ -1,10 +1,10 @@
 {
   "id": "anylink-peer-search",
-  "name": "AnyLink Read-only Peer Search",
-  "version": "0.1.0",
-  "description": "Mac-owned bounded filename search and paired peer receipts. No shell, file content or cloud task scheduler.",
+  "name": "AnyLink Peer Files",
+  "version": "0.2.0",
+  "description": "Mac-owned bounded filename search plus confined file operations inside policy roots. Deletes go to Trash; no shell or cloud task scheduler.",
   "activation": {"onStartup": true},
   "configSchema": {"type": "object", "properties": {"projectRoot": {"type": "string"}}, "required": ["projectRoot"], "additionalProperties": false},
-  "contracts": {"tools": ["anylink_mac_search_files"]},
-  "toolMetadata": {"anylink_mac_search_files": {"profiles": ["coding"]}}
+  "contracts": {"tools": ["anylink_mac_search_files", "anylink_files_list", "anylink_files_read", "anylink_files_write", "anylink_files_mkdir", "anylink_files_move", "anylink_files_trash", "anylink_files_open"]},
+  "toolMetadata": {"anylink_mac_search_files": {"profiles": ["coding"]}, "anylink_files_list": {"profiles": ["coding"]}, "anylink_files_read": {"profiles": ["coding"]}, "anylink_files_write": {"profiles": ["coding"]}, "anylink_files_mkdir": {"profiles": ["coding"]}, "anylink_files_move": {"profiles": ["coding"]}, "anylink_files_trash": {"profiles": ["coding"]}, "anylink_files_open": {"profiles": ["coding"]}}
 }

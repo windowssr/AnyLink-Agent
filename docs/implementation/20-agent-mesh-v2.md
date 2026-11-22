@@ -20,6 +20,13 @@
 - 首次部署时配置正则把任何加入密钥都当成空值（JOIN_DISABLED），a84f423 修复。失败的那次 Mac 加入已认领 install_id 但未写回本机，已对该 Mac 设备单行清空 install_id 后重新加入。
 - 端到端验证：临时 SDK Agent 无授权按 agent_id 派发 `files.search` 到 `mac-files`，回执 succeeded；之后撤销临时设备和 Mac 的旧 `default` Agent。
 
+## Mac agent.ask（跨设备文件操作）
+
+- `mac-openclaw` Agent 新增 `agent.ask` 能力：`mac/peer/link-worker.mjs` 在 join 模式下并行运行第二个 `AnyLinkWorker`（顶层 `connection.token`，journal `executions-<agent_id>.sqlite`），把 `{instruction, context?}` 转发给本机 OpenClaw `remote` Agent（`openclaw/remote`，loopback `127.0.0.1:18791`，`x-openclaw-session-key: anylink-task-<id>`）。
+- `remote` Agent 由 `mac/configure-remote.mjs` 配置：SOUL.md＝共享人设＋`mac/persona-remote.md`，`tools.allow` 限定为搜索＋7 个 `anylink_files_*`＋记忆/目录/任务状态工具。
+- `anylink_files_*`（`mac/peer/files.mjs`）把路径限制在 `secrets/mac-peer-policy.json` 的 roots 内：拒绝越级、隐藏段、排除目录、符号链接；删除一律 rename 进废纸篓。**执行无确认**——任何持有加入密钥的 Agent 都能触发，Mac 需保持唤醒且 launch agent 在跑。
+- 失败语义：SDK `TaskFailure`（坏输入、网关 4xx/拒绝连接）→ `failed`；请求可能已发出的超时/中止/5xx → `unknown`，不自动重试。
+
 ## 待真机验证
 
 私有 APK 的 Live2D 只在软件 GL 浏览器预览中确认渲染；手机 GPU、TTS、前台 Worker 与 `companion.say` 需要安装到真机后验收。

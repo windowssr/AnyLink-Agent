@@ -1,6 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {DatabaseSync} from 'node:sqlite';
-import {AnyLinkWorker} from '../src/worker.mjs';
+import {AnyLinkWorker,TaskFailure} from '../src/worker.mjs';
 test('a durable started receipt is unknown after restart and never re-executes',async t=>{
  const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-recovery-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
  const file=path.join(folder,'receipt.sqlite'),db=new DatabaseSync(file);
@@ -24,6 +24,19 @@ test('a handler exception cannot prove that external effects failed',async t=>{
  const client={baseUrl:'https://fixture.test/',identity:async()=>({device:{id:'target'},agent:{id:'agent-1'}}),claimTask:async()=>({task}),task:async()=>task,completeTask:async(_id,result)=>task={...task,...result}};
  const worker=new AnyLinkWorker({client,journalPath:path.join(folder,'journal.sqlite'),handlers:{'text.reverse':{description:'fixture',async execute(){calls++;throw new Error('Connection broke after an external effect');}}}});
  try{assert.equal((await worker.runNext()).task.state,'unknown');await worker.runNext();assert.equal(calls,1);}finally{worker.close();}
+});
+test('TaskFailure reports failed while other throws stay unknown',async t=>{
+ const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-failure-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
+ const results=[];
+ for(const [capability,thrown] of [['text.reverse',new TaskFailure('BAD_INPUT','bad input')],['text.reverse',Object.assign(new Error('definite'),{taskFailure:true,code:'X'})],['text.reverse',new Error('maybe sent')]]){
+  let task={id:'t-'+results.length,state:'running',capability,input:{}};
+  const client={baseUrl:'https://fixture.test/',identity:async()=>({device:{id:'target'},agent:{id:'agent-1'}}),claimTask:async()=>({task}),task:async()=>task,completeTask:async(_id,result)=>{results.push(result);task={...task,...result};}};
+  const worker=new AnyLinkWorker({client,journalPath:path.join(folder,'j'+results.length+'.sqlite'),handlers:{'text.reverse':{description:'fixture',async execute(){throw thrown;}}}});
+  try{await worker.runNext();}finally{worker.close();}
+ }
+ assert.equal(results[0].state,'failed');assert.equal(results[0].error.code,'BAD_INPUT');
+ assert.equal(results[1].state,'failed');assert.equal(results[1].error.code,'X');
+ assert.equal(results[2].state,'unknown');
 });
 test('startup identity transport failure can recover without claiming or replaying early',async t=>{
  const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-startup-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));let identities=0,claims=0,effects=0;
