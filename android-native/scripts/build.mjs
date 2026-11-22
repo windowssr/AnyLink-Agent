@@ -6,6 +6,11 @@ const prepare=!process.argv.includes('--no-prepare');
 if(prepare)execFileSync(process.execPath,[path.join(home,'scripts/prepare.mjs')],{stdio:'inherit'});
 fs.mkdirSync(output,{recursive:true});
 const env=environment(),agent=process.env.ANYLINK_AGENT_ID??'anylink-android-preview';
+if(process.argv.includes('--test')){
+  const testHome=path.join(root,'data/android-native/test-user'),maven=path.join(root,'data/android-native/maven-cache');
+  fs.mkdirSync(testHome,{recursive:true});fs.mkdirSync(maven,{recursive:true});
+  env.JAVA_TOOL_OPTIONS+=` -Duser.home="${testHome}" -Dmaven.repo.local="${maven}"`;
+}
 if(!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(agent))throw new Error('Invalid configured Android agent ID');
 if(!process.argv.includes('--dependencies')&&!fs.existsSync(path.join(sdk,'platforms/android-37.0/android.jar')))throw new Error('Install the authorized SDK first: node android-native/scripts/install-toolchain.mjs --accept-sdk-license');
 const app=path.join(source,'apps/android'),version=JSON.parse(fs.readFileSync(path.join(home,'package.json'),'utf8')).version;

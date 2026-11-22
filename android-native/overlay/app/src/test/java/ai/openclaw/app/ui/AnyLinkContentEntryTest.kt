@@ -10,6 +10,8 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.gateway.Question
+import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
@@ -18,9 +20,12 @@ import android.provider.Settings
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -93,6 +98,36 @@ class AnyLinkContentEntryTest {
       )
     }
     assertComposerText("Review this shared text")
+  }
+
+  @Test fun `other-session and answered questions leave portrait closed but a current pending question opens records`() {
+    // Wait until the fixture's initial Gateway reconciliation has settled.
+    compose.waitUntil(timeoutMillis = 5_000) { !viewModel.chatHistoryLoading.value }
+    val current = QuestionRecord(
+      id = "anylink-current-question",
+      questions = listOf(Question(questionId = "confirm", header = "Confirm", question = "Continue this task?", options = emptyList())),
+      agentId = viewModel.chatSessionOwnerAgentId.value ?: "main",
+      sessionKey = viewModel.chatSessionKey.value,
+      createdAtMs = System.currentTimeMillis(),
+      expiresAtMs = Long.MAX_VALUE,
+      status = "pending",
+    )
+    compose.runOnIdle {
+      runtime.chat.handleGatewayEvent(
+        "question.requested",
+        Json.encodeToString(current.copy(id = "elsewhere", sessionKey = "agent:main:other-conversation")),
+      )
+    }
+    compose.onNodeWithText("回到大肥鱼身边").assertDoesNotExist()
+    compose.runOnIdle {
+      runtime.chat.handleGatewayEvent("question.requested", Json.encodeToString(current.copy(id = "answered-history", status = "answered")))
+    }
+    compose.onNodeWithText("回到大肥鱼身边").assertDoesNotExist()
+    compose.runOnIdle { runtime.chat.handleGatewayEvent("question.requested", Json.encodeToString(current)) }
+    compose.waitUntil(timeoutMillis = 5_000) {
+      compose.onAllNodesWithText("回到大肥鱼身边").fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onNodeWithText("回到大肥鱼身边").assertExists()
   }
 
   private fun assertComposerText(expected: String) {

@@ -51,6 +51,7 @@ private val AnyLinkBlue = Color(0xFF468CAF)
 @Composable
 internal fun AnyLinkCompanionScreen(
   viewModel: MainViewModel,
+  hasPendingQuestion: Boolean,
   onToggleTalk: () -> Unit,
   onOpenChat: () -> Unit,
   onOpenSidebar: () -> Unit,
@@ -66,11 +67,10 @@ internal fun AnyLinkCompanionScreen(
   val active by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val tools by viewModel.chatToolActivities.collectAsState()
   val error by viewModel.chatError.collectAsState()
-  val questions by viewModel.chatQuestions.collectAsState()
   val preferredAgent = BuildConfig.ANYLINK_AGENT_ID
   val agentAvailable = agents.any { it.id == preferredAgent }
   val contextReady = connected && owner == preferredAgent
-  val phase = anyLinkPhase(listening, speaking, awaiting, active.count, tools.any { !it.isComplete }, !error.isNullOrBlank() || questions.isNotEmpty())
+  val phase = anyLinkPhase(listening, speaking, awaiting, active.count, tools.any { !it.isComplete }, !error.isNullOrBlank() || hasPendingQuestion)
   val expression = tools.lastOrNull { it.name == "anylink_companion_expression" && it.isError != true }
   val emotion = expression?.args?.get("emotion")?.jsonPrimitive?.contentOrNull ?: if (phase == AnyLinkPhase.Thinking) "curious" else "neutral"
   val gesture = expression?.args?.get("gesture")?.jsonPrimitive?.contentOrNull

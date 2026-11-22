@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.chat.rememberChatRealtimeTalkLauncher
 import androidx.compose.foundation.layout.Box
@@ -39,17 +40,23 @@ internal fun UnifiedChatShellScreen(
   val shares by viewModel.chatShareDrafts.collectAsState()
   val assistantRequest by viewModel.pendingAssistantAutoSend.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
+  val sessionKey by viewModel.chatSessionKey.collectAsState()
+  val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  val sessionOwner by viewModel.chatSessionOwnerAgentId.collectAsState()
+  val defaultAgent by viewModel.gatewayDefaultAgentId.collectAsState()
+  val agentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: sessionOwner ?: defaultAgent ?: "main"
+  val pendingQuestions = anyLinkPendingQuestions(questions, sessionKey, mainSessionKey, agentId)
   // These explicit entry points need the original composer to stage content for
   // review. ChatScreen retains ownership of importing, consuming and sending it.
-  LaunchedEffect(draft, shares, assistantRequest, questions) {
-    if (draft != null || shares.isNotEmpty() || assistantRequest != null || questions.isNotEmpty()) records = true
+  LaunchedEffect(draft, shares, assistantRequest, pendingQuestions) {
+    if (draft != null || shares.isNotEmpty() || assistantRequest != null || pendingQuestions.isNotEmpty()) records = true
   }
   // Our Gateway uses stt-tts: Android speech recognition + the same DeepSeek
   // agent + Gateway speech. It does not need a realtime speech-model account.
   val startTalk = rememberChatRealtimeTalkLauncher(viewModel, nativeSpeech = true)
   val toggleTalk = { if (talkModeEnabled) viewModel.setTalkModeEnabled(false) else startTalk() }
   LaunchedEffect(viewModel) { viewModel.refreshTalkSetupReadiness() }
-  AnyLinkCompanionScreen(viewModel, toggleTalk, { records = true }, onOpenSidebar, onOpenGatewaySettings)
+  AnyLinkCompanionScreen(viewModel, pendingQuestions.isNotEmpty(), toggleTalk, { records = true }, onOpenSidebar, onOpenGatewaySettings)
   if (records) {
     AppModalBottomSheet(
       onDismissRequest = { records = false },

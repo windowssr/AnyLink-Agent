@@ -37,6 +37,9 @@ build=build.replace('buildConfigField("String", "BUILD_TIMESTAMP", "\\\"$openCla
   'buildConfigField("String", "BUILD_TIMESTAMP", "\\\"$openClawBuildTimestamp\\\"")\n    val anyLinkAgent = providers.gradleProperty("ANYLINK_AGENT_ID").orElse("anylink-android-preview").get()\n    require(anyLinkAgent.matches(Regex("[a-z0-9][a-z0-9_-]{0,63}")))\n    buildConfigField("String", "ANYLINK_AGENT_ID", "\\\"$anyLinkAgent\\\"")');
 if(!build.includes('"ANYLINK_AGENT_ID"'))throw new Error('Cannot add the configured Android context.');
 fs.writeFileSync(path.join(source,gradle),build);prepared[gradle]=hash(path.join(source,gradle));
+// Shared/benchmark/watch modules are configured by the official root build too;
+// keep their SDK tool choice consistent instead of admitting another auto-install.
+for(const module of ['wear-shared','wear','benchmark'])patch(`apps/android/${module}/build.gradle.kts`,'compileSdk = 37','compileSdk = 37\n  buildToolsVersion = "37.0.0"');
 patch('apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt','{ ShellNavigation() }','{ ShellNavigation(activeTab = Tab.Chat) }');
 patch('apps/android/gradle/wrapper/gradle-wrapper.properties','networkTimeout=10000','networkTimeout=60000');
 // AGP 9.5 and Gradle 9.7 officially support JDK17. Reuse the installed JDK,
