@@ -59,12 +59,13 @@ npm run build:app
 - 单一聊天入口，本地对话记录、流式响应与停止；本地 Pi 负责工具多轮调用。
 - 云端 global / 当前 device 事实读取；记忆查询、保存、更正和删除，revision 与幂等键对接既有接口。
 - 手机基础状态，以及 AnyLink 私有便笺保存、读取；不宣称已接通其他 App 操作。
+- 已配对 Mac 的只读文件名搜索，返回真实路径与双方回执；手机端显示结果卡片，云端不运行搜索。启用与边界见 [跨设备搜索](../docs/implementation/13-peer-file-search.md)。
 - 复用蓝色大肥鱼 Live2D，表情、招手、指向和点头；人物请求与实际渲染状态分开。
 - Android 凭据采用 Keystore AES-GCM 封装，失败时拒绝明文保存；仍需真机验证 Native.js 调用。
 - 取消、后台切换、网络中断与进程终止后，未确认运行不自动重发。工具执行记录在副作用前落盘；重复工具调用返回既有回执。
 
 ## 后续真机验收
 
-Android 原生网络是否逐段交付 SSE、Keystore、系统状态接口、GPU 和 WebView 表现、锁屏与进程回收，均以手机验收为准。当前不包含语音通话、系统悬浮宠物、通知推送、无障碍跨 App 操作、后台常驻和手机向 Mac 派任务。App 内人物已经接入，手机桌面悬浮形象是另一项原生能力。
+Android 原生网络是否逐段交付 SSE、Keystore、系统状态接口、GPU 和 WebView 表现、锁屏与进程回收，均以手机验收为准。当前已在电脑预览与真实 Mac 间打通只读文件搜索；不包含通用 Mac 任务执行、语音通话、系统悬浮宠物、通知推送、无障碍跨 App 操作和后台常驻。App 内人物已经接入，手机桌面悬浮形象是另一项原生能力。
 
 实现与验收记录见 [Android 施工说明](../docs/implementation/12-android-foundation.md)，模型来源见 [素材说明](THIRD-PARTY-NOTICES.md)。

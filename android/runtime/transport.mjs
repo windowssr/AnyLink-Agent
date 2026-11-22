@@ -3,10 +3,12 @@ import {AgentFailure, validateConnection} from '../core/protocol.mjs';
 export function createTransport(input) {
   const connection = validateConnection(input);
   return async function request(path, {method = 'GET', body, headers = {}, signal, onText} = {}) {
-    if (!/^\/(edge|model)\/v1\/[a-z0-9/_-]+$/i.test(path)) throw new AgentFailure('BAD_ROUTE', '不支持的服务接口');
+    if (!/^\/(edge|model|anylink-peer)\/v1\/[a-z0-9/_-]+$/i.test(path)) throw new AgentFailure('BAD_ROUTE', '不支持的服务接口');
     if (signal?.aborted) throw new AgentFailure('CANCELLED', '本轮已停止');
-    const url = connection.server + path;
-    const auth = {Authorization: 'Bearer ' + connection.token, ...(body === undefined ? {} : {'Content-Type': 'application/json'}), ...headers};
+    const peerRequest = path.startsWith('/anylink-peer/'), peer = connection.mac_peer;
+    if (peerRequest && (!peer || !['/anylink-peer/v1/files/search', '/anylink-peer/v1/capabilities'].includes(path))) throw new AgentFailure('MAC_NOT_PAIRED', '当前设备尚未配对 Mac 只读搜索');
+    const url = (peerRequest ? peer.server : connection.server) + path;
+    const auth = {...headers, ...(body === undefined ? {} : {'Content-Type': 'application/json'}), Authorization: 'Bearer ' + (peerRequest ? peer.token : connection.token), ...(peerRequest ? {'X-AnyLink-Peer-Device': connection.device_id, 'X-AnyLink-Target-Device': peer.device_id} : {})};
     let response;
     try {
       if (typeof plus !== 'undefined' && plus.net) response = await nativeRequest(url, {method, body, headers: auth, signal, onText});
@@ -18,8 +20,8 @@ export function createTransport(input) {
     let data; try { data = response.text ? JSON.parse(response.text) : null; } catch { data = null; }
     if (response.status < 200 || response.status >= 300) {
       const code = data?.error?.code ?? 'HTTP_' + response.status;
-      const messages = {EDGE_AUTH_REQUIRED: '设备凭据无效或已撤销，请重新连接', MODEL_BUSY: '原模型请求还在处理中，请稍后再试', REVISION_CONFLICT: '记忆已被修改，请重新查询当前版本'};
-      throw new AgentFailure(code, messages[code] ?? '服务未确认本次请求（' + response.status + '）', response.status >= 500 && method !== 'GET');
+      const messages = {EDGE_AUTH_REQUIRED: '设备凭据无效或已撤销，请重新连接', MODEL_BUSY: '原模型请求还在处理中，请稍后再试', REVISION_CONFLICT: '记忆已被修改，请重新查询当前版本', PEER_NOT_PAIRED: 'Mac 搜索配对已失效，请在 Mac 上核对', PEER_AUTH_REQUIRED: 'Mac 未接受当前搜索凭据', MAC_SEARCH_BUSY: 'Mac 正在搜索其他文件，请稍后再试', SEARCH_RESULT_UNKNOWN: '原 Mac 搜索结果未确认，没有自动重跑', MAC_SEARCH_UNAVAILABLE: 'Mac 搜索服务暂时不可用，请检查 Mac 是否在线'};
+      throw new AgentFailure(code, messages[code] ?? '服务未确认本次请求（' + response.status + '）', code === 'SEARCH_RESULT_UNKNOWN' || (response.status >= 500 && method !== 'GET'));
     }
     return onText ? response : data;
   };

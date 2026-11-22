@@ -19,6 +19,16 @@ const server = http.createServer(async (req, res) => {
       if (!fs.existsSync(secret)) return error(404);
       res.writeHead(200, {'Content-Type': 'application/json'}); res.end(fs.readFileSync(secret)); return;
     }
+    if (url.pathname.startsWith('/anylink-peer/')) {
+      if (!['/anylink-peer/v1/files/search', '/anylink-peer/v1/capabilities'].includes(url.pathname) || !['GET', 'POST'].includes(req.method)) return error(404);
+      if (!/^Bearer ap_[A-Za-z0-9_-]+$/.test(req.headers.authorization ?? '')) return error(401);
+      const controller = new AbortController(); res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+      const headers = {Authorization: req.headers.authorization};
+      for (const name of ['content-type', 'idempotency-key', 'x-anylink-peer-device', 'x-anylink-target-device']) if (req.headers[name]) headers[name] = req.headers[name];
+      const response = await fetch('http://127.0.0.1:18791' + url.pathname, {method: req.method, headers, body: req.method === 'GET' ? undefined : req, duplex: 'half', signal: controller.signal, redirect: 'error'});
+      res.writeHead(response.status, {'Content-Type': response.headers.get('content-type') ?? 'application/json'});
+      if (response.body) await pipeline(response.body, res); else res.end(); return;
+    }
     if (/^\/(edge|model)\/v1\/[a-z0-9/_-]+$/i.test(url.pathname)) {
       if (!/^Bearer ak_[A-Za-z0-9_-]+$/.test(req.headers.authorization ?? '')) return error(401);
       const controller = new AbortController(); res.on('close', () => { if (!res.writableEnded) controller.abort(); });

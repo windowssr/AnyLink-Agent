@@ -1,0 +1,10 @@
+{
+  "id": "anylink-peer-search",
+  "name": "AnyLink Read-only Peer Search",
+  "version": "0.1.0",
+  "description": "Mac-owned bounded filename search and paired peer receipts. No shell, file content or cloud task scheduler.",
+  "activation": {"onStartup": true},
+  "configSchema": {"type": "object", "properties": {"projectRoot": {"type": "string"}}, "required": ["projectRoot"], "additionalProperties": false},
+  "contracts": {"tools": ["anylink_mac_search_files"]},
+  "toolMetadata": {"anylink_mac_search_files": {"profiles": ["coding"]}}
+}

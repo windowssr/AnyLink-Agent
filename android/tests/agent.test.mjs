@@ -83,7 +83,7 @@ test('wire transcript preserves function call IDs and tool replies', () => {
   assert.equal(wire[0].content, '系统'); assert.equal(wire[1].tool_calls[0].id, 'x'); assert.equal(wire[2].tool_call_id, 'x');
 });
 test('negative memory instruction does not grant a write', () => {
-  assert.equal(memoryIntent('不要记住这句话'), false); assert.equal(memoryIntent('记住我喜欢蓝色'), true);
+  assert.equal(memoryIntent('不要记住这句话'), false); assert.equal(memoryIntent('不保存记忆，只搜索文件'), false); assert.equal(memoryIntent('记住我喜欢蓝色'), true);
 });
 test('a tool loop is bounded and leaves a clear continuation boundary', async () => {
   let calls = 0; const f = fixture(async (_path, options) => { calls++; return reply(options, {calls: [{id: 'call-' + calls, name: 'anylink_device_status', args: {}}]}); });

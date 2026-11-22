@@ -14,6 +14,11 @@ export function createTools({request, connection, device, journal, run, expressi
   }});
   const writeAllowed = () => { if (!memoryIntent(run.text)) throw new AgentFailure('MEMORY_NOT_REQUESTED', '主人本轮没有要求记住、更正或遗忘，未修改记忆'); };
   return [
+    ...(connection.mac_peer ? [define('anylink_mac_search_files', '在 Mac 上搜索文件', '把只读搜索交给已配对的 Mac 本地 OpenClaw 执行，返回真实文件名、路径和请求回执。query 使用文件名关键词，不传路径或通配符；scope 可为 all、desktop、documents、downloads、projects、workspace。只搜索 Mac 开放的范围，不读内容。partial=true 时说明搜索范围或数量限制，不声称全盘不存在。', object({query: str(120), scope: {type: 'string', enum: ['all', 'desktop', 'documents', 'downloads', 'projects', 'workspace']}, limit: {type: 'integer', minimum: 1, maximum: 50}}, ['query']), async (p, headers, s) => {
+      const value = await request('/anylink-peer/v1/files/search', {method: 'POST', body: p, headers, signal: s});
+      if (!value || value.target_device_id !== connection.mac_peer.device_id || value.origin_device_id !== connection.device_id || value.read_only !== true || value.name_only !== true || !Array.isArray(value.matches)) throw new AgentFailure('MAC_RESULT_UNVERIFIED', 'Mac 搜索回执不匹配，未采信结果', true);
+      return value;
+    })] : []),
     define('anylink_memory_search', '查询共同记忆', '查询云端当前有效记忆。默认只查全局和当前手机；可指定其他设备 ID 查询该设备事实。', object({q: {type: 'string', maxLength: 200}, device_id: uuid}), async (p, _h, s) => {
       if (p.device_id) return request('/edge/v1/memories/search', {method: 'POST', body: p, signal: s});
       const c = await request('/edge/v1/context', {signal: s}), q = (p.q ?? '').toLowerCase();
