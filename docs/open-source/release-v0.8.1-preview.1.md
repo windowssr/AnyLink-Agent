@@ -12,7 +12,7 @@ Install Android 12+ and enter your own reachable AnyLink HTTPS endpoint and the 
 
 Public binaries exclude third-party character/model/Core resources and use original placeholder artwork. Android is debug signed; Apple Silicon Mac archive is ad-hoc signed and not notarized, and uses a separately configured checkout. Verify SHA256SUMS and release-manifest.json. Physical phone speech, GPU and lifecycle behavior remain unverified; no full-duplex/latency promise.
 
-Local validation: 12 native Agent/UI tests, 28 server/HTTP integration tests, 17 SDK/Mac-search tests and 7 portable-setup tests passed. TypeScript, protocol generation and source credential audits passed. These do not replace physical-phone verification.
+Local validation: 12 native Agent/UI tests, 28 server/HTTP integration tests, 18 SDK/Mac-search tests and 7 portable-setup tests passed. TypeScript, protocol generation and source credential audits passed. These do not replace physical-phone verification.
 
 ---
 
@@ -22,4 +22,8 @@ Local validation: 12 native Agent/UI tests, 28 server/HTTP integration tests, 17
 
 公开包无第三方人物模型、纹理、派生头像或 Cubism Core。Android 使用开发签名，Mac 未公证且需要自行配置工程。正式远程使用要有自己的 HTTPS 入口，USB／SSH 为开发调试通道。系统语音与 GPU 尚待真机验收，不承诺 Grok 延迟或自动开口打断。通用手机 App 操控和 Codex 现有桌面聊天控制不在此版能力中。
 
-本机已通过 12 项原生 Agent／界面测试、28 项服务端与 HTTP 集成测试、17 项 SDK／Mac 搜索测试、7 项可移植配置测试，以及类型、协议生成和源码凭据检查；这些结果不代替真机验收。
+本机已通过 12 项原生 Agent／界面测试、28 项服务端与 HTTP 集成测试、18 项 SDK／Mac 搜索测试、7 项可移植配置测试，以及类型、协议生成和源码凭据检查；这些结果不代替真机验收。
+
+Live cloud proof also passed using the native Kotlin Agent implementation: real model/tool round, global and phone memory writes, fresh-session recall, and phone → cloud → Mac filename-search receipts. Test facts and the unique file were cleaned up; this is a desktop JVM proof, not physical-phone verification. SDK startup identity checks now recover after an unavailable tunnel without replaying execution.
+
+原生 Kotlin Agent 的真实云端联调也已通过：模型工具循环、全局／手机事实保存、新会话召回、手机经云端下发 Mac 文件搜索并回传。已清理唯一测试事实和文件；这是电脑上的 JVM 实现联调，不是真机验收。SDK 已修复首次隧道未就绪后无法恢复的问题，恢复连接不会重放执行。

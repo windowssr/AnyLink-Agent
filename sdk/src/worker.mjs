@@ -17,7 +17,13 @@ export class AnyLinkWorker {
       const owner=this.#db.prepare('SELECT server,device_id FROM worker_binding WHERE singleton=1').get();
       if(owner.server!==this.#client.baseUrl||owner.device_id!==device.id)throw new Error('Journal belongs to another service or device; use its original identity or a separate journal');
     })();
-    await this.#binding;
+    const binding=this.#binding;
+    try{await binding;}catch(error){
+      // An unavailable tunnel during startup must not poison future identity
+      // checks. Only this read/bind attempt is reset; execution rows stay intact.
+      if(this.#binding===binding)this.#binding=undefined;
+      throw error;
+    }
   }
   async advertise(options){await this.#bound();return this.#client.registerCapabilities(Object.entries(this.#handlers).map(([name,h])=>({name,description:h.description})),options);}
   async runNext({signal}={}){

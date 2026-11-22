@@ -25,3 +25,14 @@ test('a handler exception cannot prove that external effects failed',async t=>{
  const worker=new AnyLinkWorker({client,journalPath:path.join(folder,'journal.sqlite'),handlers:{'text.reverse':{description:'fixture',async execute(){calls++;throw new Error('Connection broke after an external effect');}}}});
  try{assert.equal((await worker.runNext()).task.state,'unknown');await worker.runNext();assert.equal(calls,1);}finally{worker.close();}
 });
+test('startup identity transport failure can recover without claiming or replaying early',async t=>{
+ const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-startup-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));let identities=0,claims=0,effects=0;
+ let task={id:'after-connect',state:'running',capability:'text.reverse',input:{}};
+ const client={baseUrl:'https://fixture.test/',identity:async()=>{if(++identities===1)throw new Error('Tunnel not ready');return {device:{id:'target'}};},claimTask:async()=>{claims++;return {task};},task:async()=>task,completeTask:async(_id,result)=>task={...task,...result}};
+ const worker=new AnyLinkWorker({client,journalPath:path.join(folder,'journal.sqlite'),handlers:{'text.reverse':{description:'fixture',async execute(){effects++;return {text:'done'};}}}});
+ try{
+  await assert.rejects(worker.runNext(),/Tunnel not ready/);assert.equal(claims,0);assert.equal(effects,0);
+  assert.equal((await worker.runNext()).task.state,'succeeded');assert.equal(identities,2);assert.equal(effects,1);
+  await worker.runNext();assert.equal(effects,1);
+ }finally{worker.close();}
+});
