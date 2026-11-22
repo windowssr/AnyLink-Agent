@@ -52,6 +52,7 @@ test('join mode adopts a legacy device token install_id before connecting agents
  for(const name of ['connect.mjs','configure.mjs'])fs.copyFileSync('mac/'+name,path.join(root,'mac',name));fs.copyFileSync('sdk/src/client.mjs',path.join(root,'sdk/src/client.mjs'));
  const legacyToken='ak_'+'y'.repeat(40),deviceId='00000000-0000-4000-8000-000000000020';
  fs.writeFileSync(path.join(root,'secrets/mac-connection.json'),JSON.stringify({server:'SERVER_URL',device_id:deviceId,token:legacyToken}));
+ const profileFile=path.join(root,'data/mac/openclaw/openclaw.json'),profile='{"plugins":{"allow":["anylink-companion"]}}\n';fs.mkdirSync(path.dirname(profileFile),{recursive:true});fs.writeFileSync(profileFile,profile);
  const order=[];
  const server=createServer((req,res)=>{
   res.setHeader('Content-Type','application/json');let body='';req.on('data',b=>body+=b);req.on('end',()=>{
@@ -65,4 +66,5 @@ test('join mode adopts a legacy device token install_id before connecting agents
  assert.equal(run.code,0,run.output);assert.deepEqual(order.slice(0,3),['adopt','connect','connect'],'legacy token adopts install_id before agent connects');
  const connection=JSON.parse(fs.readFileSync(path.join(root,'secrets/mac-connection.json'),'utf8'));
  assert.equal(connection.device_id,deviceId);assert.equal(connection.install_id.startsWith('mac-'),true);
+ assert.equal(fs.readFileSync(profileFile,'utf8'),profile,'rejoin keeps the layered OpenClaw profile');
 });

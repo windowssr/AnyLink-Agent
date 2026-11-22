@@ -32,7 +32,10 @@ if(values['credential-file']){
   }
   connection={server:values.server.replace(/\/$/,''),ssh_host:values['ssh-host']??null,install_id:installId,device_id:openclaw.device_id,agent_id:openclaw.agent_id,credential_id:openclaw.credential_id,token:openclaw.token,worker:{agent_id:files.agent_id,credential_id:files.credential_id,token:files.token}};
 }
-configure(connection);
+// An existing install keeps its OpenClaw profile (companion, control, voice and peer
+// plugins were layered onto it); only the credentials file changes on rejoin.
+if(existing){fs.writeFileSync(paths.connection,JSON.stringify(connection,null,2)+'\n',{mode:0o600});fs.chmodSync(paths.connection,0o600);console.log(JSON.stringify({configured:true,rejoined:true,device_id:connection.device_id,profile_preserved:true}));}
+else configure(connection);
 const policyFile=path.join(root,'secrets/mac-peer-policy.json');
 if(fs.existsSync(policyFile)){
   const policy=JSON.parse(fs.readFileSync(policyFile,'utf8'));
