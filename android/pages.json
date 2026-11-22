@@ -1,0 +1,4 @@
+{
+  "pages": [{"path": "pages/index/index", "style": {"navigationStyle": "custom", "disableScroll": true, "app-plus": {"softinputMode": "adjustResize"}}}],
+  "globalStyle": {"backgroundColor": "#eff6fc", "navigationBarTextStyle": "black", "navigationBarTitleText": "大肥鱼", "navigationBarBackgroundColor": "#eff6fc"}
+}

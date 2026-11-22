@@ -1,12 +1,14 @@
-# Android 本地 Agent（后续阶段）
+# Android 本地 Agent
 
 Android 必须有自己的交互入口、Agent 运行与原生工具适配，再连接同一云端模型 / 记忆服务。只把手机做成云端 Agent 遥控器，不符合当前目标。
 
-第一阶段不实现 Android，也不假定现有 OpenClaw Android companion 就满足完整边缘 harness 的要求；需核实其运行所有权和扩展方式。
+Android V0.1 已开始施工：HBuilderX / uni-app Vue 3 工程位于 `android/`，使用 Pi Agent core 1.6.0 在设备端管理会话、工具循环与回执。已完成本地演示、统一记忆 / 模型接口适配及 Web、App 资源编译。当前按主人选择只交付工程和电脑预览，尚未生成签名 APK 或进行真机验收，见 [Android 施工记录](../implementation/12-android-foundation.md)。
+
+官方 OpenClaw Android companion 是连接外部 Gateway 的 node，不能作为手机本地完整 harness 的证明；Mac 使用 OpenClaw，Android 使用 Pi 核心，二者访问同一记忆和模型服务。
 
 ## 后续模块
 
-本地会话、工具循环、云端记忆适配、模型代理接入、原生系统能力、任务回执、语音与形象。共享人格取自同一 global 配置，本机权限和执行状态仍独立。
+首版模块包括本地会话、工具循环、云端记忆适配、模型代理接入、基础状态和私有便笺、任务回执、App 内形象。语音、系统悬浮形象和跨 App 操作后续接入。两端角色设定保持一致，当前没有实现人格配置的云端动态同步；本机权限和执行状态独立。
 
 ## 系统边界
 
