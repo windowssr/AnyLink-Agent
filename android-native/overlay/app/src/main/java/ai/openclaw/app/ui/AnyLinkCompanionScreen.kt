@@ -20,10 +20,10 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -132,7 +132,7 @@ internal fun AnyLinkCompanionScreen(
           Text(when { !connected || !agentAvailable -> "连接我的 Mac"; !contextReady -> "回到手机上下文"; talk -> "结束语音"; else -> "和我说话" }, fontSize = 16.sp)
         }
         IconButton(onClick = onOpenChat, modifier = Modifier.background(Color.White.copy(alpha = 0.7f), CircleShape)) {
-          Icon(Icons.Default.ReceiptLong, contentDescription = "结果与记录", tint = AnyLinkInk)
+          Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "结果与记录", tint = AnyLinkInk)
         }
       }
       Text(if (talk) "语音已开启，聊天和做事都在同一段对话里。" else "聊天，或者交给我一件事。", color = Color(0xFF7E9BAC), fontSize = 11.sp)

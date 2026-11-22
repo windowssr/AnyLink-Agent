@@ -9,6 +9,7 @@ const apk=path.join(output,'AnyLink-Android-'+version+'.apk');
 const buildTools=path.join(sdk,'build-tools/37.0.0');
 const badging=execFileSync(path.join(buildTools,'aapt'),['dump','badging',apk],{env:environment(),encoding:'utf8'});
 assert.ok(badging.includes("package: name='com.anylink.agent.debug'"));
+assert.ok(badging.includes("launchable-activity: name='ai.openclaw.app.MainActivity'"));
 assert.ok(badging.includes("sdkVersion:'31'"));
 assert.ok(badging.includes("targetSdkVersion:'36'"));
 assert.ok(badging.includes("application-label:'大肥鱼 · AnyLink'"));
