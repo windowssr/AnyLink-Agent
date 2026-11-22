@@ -31,6 +31,8 @@ patch('apps/android/app/build.gradle.kts','applicationId = openClawAndroidApplic
 // Merge this second edit with the first expected output, preserving the same base.
 const gradle='apps/android/app/build.gradle.kts';
 let build=fs.readFileSync(path.join(source,gradle),'utf8');
+if(build.split('compileSdk = 37').length!==2)throw new Error('Pinned compile SDK context changed');
+build=build.replace('compileSdk = 37','compileSdk = 37\n  buildToolsVersion = "37.0.0"');
 build=build.replace('buildConfigField("String", "BUILD_TIMESTAMP", "\\\"$openClawBuildTimestamp\\\"")',
   'buildConfigField("String", "BUILD_TIMESTAMP", "\\\"$openClawBuildTimestamp\\\"")\n    val anyLinkAgent = providers.gradleProperty("ANYLINK_AGENT_ID").orElse("anylink-android-preview").get()\n    require(anyLinkAgent.matches(Regex("[a-z0-9][a-z0-9_-]{0,63}")))\n    buildConfigField("String", "ANYLINK_AGENT_ID", "\\\"$anyLinkAgent\\\"")');
 if(!build.includes('"ANYLINK_AGENT_ID"'))throw new Error('Cannot add the configured Android context.');
