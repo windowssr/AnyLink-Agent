@@ -5,7 +5,8 @@ import {connectSchema} from '../server/edge-auth.ts';
 const installIdSchema=z.object({install_id:z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)}).strict();
 import {memorySchema,memoryPatchSchema,memorySearchSchema,deviceSchema} from '../server/store.ts';
 import {modelInputSchema} from '../server/model-proxy.ts';
-const schemas={Connect:connectSchema,InstallId:installIdSchema,Capabilities:capabilitiesSchema,TaskInput:taskCreateSchema,TaskResult:taskResultSchema,Task:taskSchema,MemoryInput:memorySchema,MemoryPatch:memoryPatchSchema,MemorySearch:memorySearchSchema,ChatCompletions:modelInputSchema,Device:deviceSchema};
+import {speechSchema} from '../server/speech.ts';
+const schemas={Connect:connectSchema,InstallId:installIdSchema,Capabilities:capabilitiesSchema,TaskInput:taskCreateSchema,TaskResult:taskResultSchema,Task:taskSchema,MemoryInput:memorySchema,MemoryPatch:memoryPatchSchema,MemorySearch:memorySearchSchema,ChatCompletions:modelInputSchema,Speech:speechSchema,Device:deviceSchema};
 const paths={};
 function route(url,method,{schema,owner=false,key=false,summary,response,join=false}={}){
   const params=[];
@@ -34,6 +35,7 @@ route('/edge/v1/memories/{id}','patch',{schema:'MemoryPatch',key:true,summary:'R
 route('/edge/v1/memories/{id}','delete',{key:true,summary:'Tombstone a memory using If-Match'});
 route('/edge/v1/memories/search','post',{schema:'MemorySearch',summary:'Read-only search: q, scope and optional device_id'});
 route('/model/v1/chat/completions','post',{schema:'ChatCompletions',summary:'OpenAI Chat Completions compatible passthrough; JSON or SSE; never automatically replay'});
+route('/model/v1/speech','post',{schema:'Speech',summary:'Spoken reply audio: sanitize + optional summarize + Microsoft neural TTS; mp3 base64'});
 paths['/edge/v1/link/tasks'].get.parameters.push({name:'role',in:'query',schema:{type:'string',enum:['source','target'],default:'source'}},{name:'state',in:'query',schema:{type:'string',enum:['queued','running','cancel_requested','succeeded','failed','cancelled','unknown','expired']}});
 route('/v1/devices','get',{owner:true,summary:'List owner devices with their agents'});
 route('/v1/devices','post',{schema:'Device',owner:true,key:true,summary:'Register a logical device'});

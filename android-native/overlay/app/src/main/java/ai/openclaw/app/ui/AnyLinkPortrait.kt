@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -30,6 +32,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.webkit.WebViewAssetLoader
 import java.io.ByteArrayInputStream
+import android.util.Log
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -40,11 +43,14 @@ internal fun AnyLinkPortrait(
   emotion: String,
   gesture: String?,
   sequence: String?,
+  safeTopPx: Int = 0,
+  safeBottomPx: Int = 0,
   modifier: Modifier = Modifier,
 ) {
   var web by remember { mutableStateOf<WebView?>(null) }
   var ready by remember { mutableStateOf(false) }
   var paused by remember { mutableStateOf(false) }
+  var webEpoch by remember { mutableIntStateOf(0) }
   val animationsEnabled = rememberSystemAnimationsEnabled()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val payload =
@@ -55,6 +61,8 @@ internal fun AnyLinkPortrait(
       put("sequence", sequence ?: "")
       put("paused", paused)
       put("reducedMotion", !animationsEnabled)
+      put("safeTop", safeTopPx)
+      put("safeBottom", safeBottomPx)
     }.toString()
   val currentPayload by rememberUpdatedState(payload)
   DisposableEffect(lifecycle) {
@@ -66,15 +74,22 @@ internal fun AnyLinkPortrait(
       } else if (event == Lifecycle.Event.ON_RESUME) {
         paused = false
         web?.onResume()
+        // If the renderer was killed or the context lost while paused, the page
+        // may never reach READY again; reload once after a grace period.
+        val view = web
+        if (view != null) view.postDelayed({
+          if (web === view && !ready) { Log.w(TAG, "avatar not ready 8s after resume; reloading"); view.reload() }
+        }, 8000)
       }
     }
     lifecycle.addObserver(observer)
     onDispose { lifecycle.removeObserver(observer) }
   }
-  DisposableEffect(Unit) {
-    onDispose { web?.stopLoading(); web?.destroy(); web = null }
-  }
   Box(modifier) {
+    key(webEpoch) {
+    DisposableEffect(webEpoch) {
+      onDispose { web?.stopLoading(); web?.destroy() }
+    }
     if (!ready) {
       Image(
         painter = painterResource(R.drawable.anylink_avatar),
@@ -106,9 +121,18 @@ internal fun AnyLinkPortrait(
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
+
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+              // The renderer crashed (usually memory pressure). Recreate the
+              // WebView instead of leaving a dead surface on screen.
+              Log.w(TAG, "render process gone didCrash=${detail.didCrash()}; recreating WebView")
+              ready = false; webEpoch++
+              return true
+            }
           }
           webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+              Log.i(TAG, "console: ${message.message().take(400)}")
               if (message.message() == "ANYLINK_AVATAR_READY") {
                 ready = true
                 evaluateJavascript("window.anylinkMobileAvatar?.update($currentPayload)", null)
@@ -125,5 +149,8 @@ internal fun AnyLinkPortrait(
       },
       update = { it.evaluateJavascript("window.anylinkMobileAvatar?.update($payload)", null) },
     )
+    }
   }
 }
+
+private const val TAG = "AnyLinkAvatar"

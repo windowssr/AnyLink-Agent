@@ -982,6 +982,50 @@
         }
       }
     },
+    "/model/v1/speech": {
+      "post": {
+        "summary": "Spoken reply audio: sanitize + optional summarize + Microsoft neural TTS; mp3 base64",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Speech"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
     "/v1/devices": {
       "get": {
         "summary": "List owner devices with their agents",
@@ -1878,6 +1922,34 @@
           "messages"
         ],
         "additionalProperties": {}
+      },
+      "Speech": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          },
+          "summarize": {
+            "default": true,
+            "type": "boolean"
+          },
+          "voice": {
+            "default": "sweet-lively",
+            "type": "string",
+            "enum": [
+              "sweet-lively",
+              "sweet-warm"
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "summarize",
+          "voice"
+        ],
+        "additionalProperties": false
       },
       "Device": {
         "type": "object",

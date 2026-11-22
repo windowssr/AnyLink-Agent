@@ -9,6 +9,7 @@ import { ApiError, createDb, hash, idempotent, migrate, transaction } from './db
 import { createDevice, deleteMemory, deviceSchema, editMemory, getMemory, listDevices, memoryDirectory, memoryPatchSchema, memorySchema, memorySearchSchema, saveMemory, searchMemories } from './store.js';
 import { authenticateEdge,registerConnectRoute,registerCredentialRoutes } from './edge-auth.js';
 import { registerModelProxy } from './model-proxy.js';
+import { registerSpeech } from './speech.js';
 import { registerLink } from './link.js';
 
 const idParams=z.object({id:z.uuid()});
@@ -73,7 +74,7 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
     return {items:devices.map(d=>({...d,agents:byDevice.get(d.id)??[]}))};
   });
   app.post('/v1/devices',async req=>{const v=deviceSchema.parse(req.body);return mutate(req,'devices:create',v,c=>createDevice(c,v));});
-  registerConnectRoute(app,db,config,loginAttempts);registerCredentialRoutes(app,db);registerModelProxy(app,db,config);registerLink(app,db);
+  registerConnectRoute(app,db,config,loginAttempts);registerCredentialRoutes(app,db);registerModelProxy(app,db,config);registerSpeech(app,config,persona);registerLink(app,db);
   app.get('/edge/v1/identity',async req=>{
     const me=req.edgeIdentity!;
     const agent=(await db.query('SELECT id,key,name,kind,capabilities FROM agents WHERE id=$1',[me.agent_id])).rows[0];

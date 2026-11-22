@@ -92,6 +92,16 @@ if(privateCharacter){
   const model=path.join(root,'data/mac/companion/model');
   if(!fs.existsSync(path.join(model,'entry.model3.json')))throw new Error('Prepare privately licensed character assets first.');
   fs.cpSync(model,path.join(assets,'model'),{recursive:true});
+  // Phone GPUs and WebView texture memory are tighter than the Mac's: shrink the
+  // copied 4096px textures to 2048 for this build only. Source assets stay untouched.
+  const modelOut=path.join(assets,'model');
+  for(const dir of fs.readdirSync(modelOut,{withFileTypes:true,recursive:true})){
+    if(!dir.isFile()||!dir.name.endsWith('.png'))continue;
+    const file=path.join(dir.parentPath??dir.path??modelOut,dir.name);
+    try{const size=execFileSync('sips',['-g','pixelWidth','-g','pixelHeight',file],{encoding:'utf8'});
+      if(/pixelWidth:\s*(\d+)/.exec(size)&&Number(/pixelWidth:\s*(\d+)/.exec(size)[1])>2048)
+        execFileSync('sips',['-Z','2048',file],{stdio:'pipe'});}catch{/* keep original texture */}
+  }
   for(const [from,name] of [['data/mac/companion/runtime/live2dcubismcore.min.js','live2dcubismcore.min.js'],['mac/companion/vendor/pixi.min.js','pixi.min.js'],['mac/companion/vendor/cubism4-colors.min.js','cubism4-colors.min.js']])fs.copyFileSync(path.join(root,from),path.join(assets,name));
   fs.copyFileSync(path.join(root,'data/mac/branding/avatar.png'),path.join(drawable,'anylink_avatar.png'));
 }else{

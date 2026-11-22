@@ -43,7 +43,7 @@ USB 是开发调试通道，不是正式产品对 Mac 的依赖。正式安装�
 
 全屏形象接收本地的 idle / listening / thinking / working / speaking / attention 状态。输入、任务回执、失败与记录由原生界面呈现，人物 WebView 不接触凭据和设备操作。
 
-语音使用 Android `SpeechRecognizer`（优先本机服务，设备不支持时使用系统服务）与 `TextToSpeech`。系统服务商可能在线处理语音／合成文字。点击“说话”会停止旧模型回复与播放，识别完整句子后交给本机 Agent。当前提供显式停止，不承诺全双工、自动开口打断、固定甜妹音色或 Grok 延迟；收音、播报、回声、GPU 和实际手机生命周期待真机验证。
+语音识别使用 Android `SpeechRecognizer`（优先本机服务，设备不支持时使用系统服务），系统服务商可能在线处理语音。播报优先走云端 `POST /model/v1/speech`：服务端清洗文字（去代码、表格、Markdown、链接、表情），可选让 DeepSeek 改写成一两句口播稿，再用微软语音合成甜美女声 mp3，App 用 `MediaPlayer` 播放并驱动人物 speaking 状态；新一轮主人回复会打断当前播报，`companion.say` 消息排队追加。合成失败或服务端 502 时回退到系统 `TextToSpeech` 朗读 `spoken_text`（服务端不可达时用本地同口径清洗的文字）。点击“说话”会停止旧模型回复与播放，识别完整句子后交给本机 Agent。当前提供显式停止，不承诺全双工、自动开口打断或 Grok 延迟；收音、回声、GPU 和实际手机生命周期待真机验证。
 
 每轮注入最近十条全局和十条设备事实的有界要点，各作用域独立预算；需要更早或完整事实时通过记忆搜索读取，避免全局内容挤掉手机事实。
 
@@ -61,6 +61,21 @@ node android-native/scripts/build.mjs --test
 node android-native/scripts/inspect-apk.mjs
 node android-native/scripts/preview.mjs --public
 ```
+
+### 模拟器（可选，用于真机不可用时的验收）
+
+SDK 位于 `data/android-native/sdk`（gitignored）。安装模拟器与 arm64 系统镜像：
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export ANDROID_HOME=$PWD/data/android-native/sdk ANDROID_SDK_ROOT=$ANDROID_HOME
+$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "emulator" "system-images;android-34;google_apis;arm64-v8a"
+$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd -n anylink-test -k "system-images;android-34;google_apis;arm64-v8a" -d "pixel_6"
+$ANDROID_HOME/emulator/emulator -avd anylink-test -gpu host
+$ANDROID_HOME/platform-tools/adb install artifacts/android-native/AnyLink-Android-0.4.0-preview.1-private.apk
+```
+
+模拟器上验证头像：`adb logcat -s AnyLinkAvatar`（页面 console 全量转发）、`adb exec-out screencap -p > shot.png`、`adb shell dumpsys meminfo ai.openclaw.app`。
 
 ### 私人角色构建（仅主人自己的手机）
 

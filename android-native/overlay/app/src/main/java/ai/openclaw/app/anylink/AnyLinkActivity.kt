@@ -20,6 +20,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -213,6 +215,7 @@ class AnyLinkActivity : ComponentActivity() {
   private var recognizer: SpeechRecognizer? = null
   private var speech: TextToSpeech? = null
   private var speechReady = false
+  private var speechPlayer: SpeechPlayer? = null
   private val listening = mutableStateOf(false)
   private val speaking = mutableStateOf(false)
   private val voiceNotice = mutableStateOf("")
@@ -231,11 +234,14 @@ class AnyLinkActivity : ComponentActivity() {
       @Deprecated("Required platform callback") override fun onError(utteranceId: String?) { runOnUiThread { speaking.value = false; voiceNotice.value = "播报失败，请查看文字结果。" } }
     })
     lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { model.startWorker(); while (true) { model.refreshTasks(); delay(4000) } } }
+    speechPlayer = SpeechPlayer(this, lifecycleScope, { model.connection.value },
+      { text, flush -> if (speechReady) speech?.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "tts-${UUID.randomUUID()}") },
+      { speaking.value = it })
     lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
       model.companionSay.collect { incoming ->
         val (text, source) = incoming ?: return@collect
         voiceNotice.value = "来自 $source：$text"
-        if (speechReady) speech?.speak(text, TextToSpeech.QUEUE_ADD, null, "companion-${UUID.randomUUID()}")
+        speechPlayer?.enqueue(text, summarize = false, interrupt = false)
         model.companionSay.value = null
       }
     } }
@@ -253,7 +259,7 @@ class AnyLinkActivity : ComponentActivity() {
           val last = local.runs.firstOrNull()
           if (last?.text("state") == "completed" && last.text("id") != spoken) {
             spoken = last.text("id")
-            if (speechReady && last.text("answer").isNotBlank()) speech?.speak(last.text("answer").take(3500), TextToSpeech.QUEUE_FLUSH, null, spoken)
+            if (last.text("answer").isNotBlank()) speechPlayer?.enqueue(last.text("answer").take(3500), summarize = true, interrupt = true)
           }
         }
         CloudCompanionScreen(local, profile?.server, error, voiceNotice.value, connecting, listening.value, speaking.value, tasks,
@@ -270,7 +276,7 @@ class AnyLinkActivity : ComponentActivity() {
     }
   }
   private fun interrupt() {
-    model.stop(); speech?.stop(); recognizer?.cancel(); listening.value = false; speaking.value = false
+    model.stop(); speechPlayer?.interrupt(); speech?.stop(); recognizer?.cancel(); listening.value = false; speaking.value = false
   }
   private fun listen() {
     if (!SpeechRecognizer.isRecognitionAvailable(this)) { voiceNotice.value = "系统没有语音识别服务，请使用文字输入。"; return }
@@ -292,7 +298,7 @@ class AnyLinkActivity : ComponentActivity() {
     })
     recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN").putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true).putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true))
   }
-  override fun onStop() { recognizer?.cancel(); listening.value = false; speech?.stop(); speaking.value = false; model.stopWorker(); super.onStop() }
+  override fun onStop() { recognizer?.cancel(); listening.value = false; speechPlayer?.interrupt(); speech?.stop(); speaking.value = false; model.stopWorker(); super.onStop() }
   override fun onDestroy() { recognizer?.destroy(); speech?.shutdown(); super.onDestroy() }
 }
 
@@ -322,14 +328,18 @@ internal fun CloudCompanionScreen(
   var credential by remember { mutableStateOf("") }
   var legacyImport by remember { mutableStateOf(false) }
   val phase = when { speaking -> AnyLinkPhase.Speaking; listening -> AnyLinkPhase.Listening; state.phase == "working" -> AnyLinkPhase.Working; state.busy -> AnyLinkPhase.Thinking; state.notice.isNotEmpty() -> AnyLinkPhase.Attention; else -> AnyLinkPhase.Idle }
+  var titleHeightPx by remember { mutableIntStateOf(0) }
+  var panelHeightPx by remember { mutableIntStateOf(0) }
+  val density = LocalDensity.current
+  val imeBottomPx = WindowInsets.ime.getBottom(density)
   Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF5FBFE), Color(0xFFD5ECF7))))) {
-    AnyLinkPortrait(phase, state.emotion, state.gesture, state.sequence, Modifier.fillMaxSize())
-    Column(Modifier.fillMaxWidth().statusBarsPadding().padding(20.dp)) {
+    AnyLinkPortrait(phase, state.emotion, state.gesture, state.sequence, safeTopPx = titleHeightPx, safeBottomPx = (panelHeightPx - imeBottomPx).coerceAtLeast(0), modifier = Modifier.fillMaxSize())
+    Column(Modifier.fillMaxWidth().statusBarsPadding().padding(20.dp).onSizeChanged { titleHeightPx = it.height }) {
       Text("大肥鱼 · AnyLink", style = MaterialTheme.typography.headlineSmall)
       Text(if (server == null) "连接你的服务器，让我住进这台手机" else "手机本地 Agent · 统一记忆与模型", style = MaterialTheme.typography.bodySmall)
       TextButton(onClick = openConfiguration, enabled = !state.busy) { Text("服务器连接") }
     }
-    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xEAF0F8FC)).navigationBarsPadding().imePadding().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xEAF0F8FC)).navigationBarsPadding().imePadding().padding(18.dp).onSizeChanged { panelHeightPx = it.height }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(if (state.tool.isNotBlank()) "正在${toolLabel(state.tool)}" else phase.caption)
       if (error.isNotBlank() || state.notice.isNotBlank()) Text(error.ifBlank { state.notice }, color = MaterialTheme.colorScheme.error)
       if (voiceNotice.isNotBlank()) Text(voiceNotice, maxLines = 2, style = MaterialTheme.typography.bodySmall)

@@ -65,6 +65,8 @@ export class AnyLinkClient {
   updateMemory(id,revision,patch,options){return this.#request('PATCH',`edge/v1/memories/${encodeURIComponent(id)}`,{...patch,expected_revision:revision},options);}
   deleteMemory(id,revision,options){return this.#request('DELETE',`edge/v1/memories/${encodeURIComponent(id)}`,undefined,{...options,headers:{'If-Match':String(revision)}});}
   chatCompletions(input,options){return this.#request('POST','model/v1/chat/completions',{...input,stream:false},{...options,idempotencyKey:false});}
+  /** Spoken reply audio: {text, summarize?, voice?} → {spoken_text, voice, format, audio_base64}. 502 SPEECH_UNAVAILABLE still carries spoken_text for client fallback. */
+  speech(input,options){return this.#request('POST','model/v1/speech',input,{...options,idempotencyKey:false});}
   async *streamChatCompletions(input,options){
     const response=await this.#request('POST','model/v1/chat/completions',{...input,stream:true},{...options,idempotencyKey:false,raw:true});
     if(!response.headers.get('content-type')?.includes('text/event-stream')){await response.body?.cancel();throw new AnyLinkError('Expected an SSE model response',{code:'INVALID_STREAM',submissionUnknown:true});}

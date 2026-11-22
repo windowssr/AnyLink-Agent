@@ -4,7 +4,7 @@
   const phases = new Set(['idle', 'listening', 'thinking', 'working', 'speaking', 'attention']);
   const emotions = new Set(['neutral', 'happy', 'curious', 'comfort', 'apologetic', 'excited', 'shy']);
   let app, model, ready = false, paused = false, expressionKey = '', gestureSequence, actionEpoch = 0;
-  let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false};
+  let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false, safeTop: 0, safeBottom: 0};
   let touch = 0, lastFrame = performance.now();
   const pose = {x: 0, y: 0, tilt: 0, pitch: 0, mouth: 0, body: 0};
   function fit() {
@@ -13,10 +13,13 @@
     model.scale.set(1);
     // Keep the head inside the safe top margin. The lower body extends below
     // the viewport: a portrait composition, never a stretched full-body sprite.
-    const scale = Math.max(innerWidth * 1.12 / model.width, innerHeight * 2.28 / model.height);
+    const top = Number.isFinite(state.safeTop) ? Math.max(0, state.safeTop) : 0;
+    const bottom = Number.isFinite(state.safeBottom) ? Math.max(0, state.safeBottom) : 0;
+    const region = Math.max(1, innerHeight - top - bottom);
+    const scale = Math.max(innerWidth * 1.12 / model.width, region * 2.28 / model.height);
     // This model's canvas includes empty space above the head. Offset that
-    // padding while retaining headroom, so the viewport ends near the waist.
-    model.scale.set(scale); model.position.set(innerWidth / 2, -innerHeight * 0.15);
+    // padding while retaining headroom, so the visible region ends near the waist.
+    model.scale.set(scale); model.position.set(innerWidth / 2, top - region * 0.15);
   }
   async function gesture(name) {
     if (!ready || state.reducedMotion) return;
@@ -48,7 +51,8 @@
   window.anylinkMobileAvatar = {
     update(value) {
       if (!value || !phases.has(value.phase)) return;
-      state = {phase: value.phase, emotion: emotions.has(value.emotion) ? value.emotion : 'neutral', level: Number.isFinite(value.level) ? Math.max(0, Math.min(1, value.level)) : 0, reducedMotion: !!value.reducedMotion, gesture: value.gesture, sequence: value.sequence};
+      state = {phase: value.phase, emotion: emotions.has(value.emotion) ? value.emotion : 'neutral', level: Number.isFinite(value.level) ? Math.max(0, Math.min(1, value.level)) : 0, reducedMotion: !!value.reducedMotion, gesture: value.gesture, sequence: value.sequence, safeTop: (Number(value.safeTop) || 0) / (window.devicePixelRatio || 1), safeBottom: (Number(value.safeBottom) || 0) / (window.devicePixelRatio || 1)};
+      fit();
       paused = value.paused === true; apply();
     },
   };
@@ -76,6 +80,15 @@
       set('ParamMouthOpenY', ease('mouth', mouth, 65));
     });
     app.view.addEventListener('pointerup', () => { touch = performance.now(); });
+    // A lost WebGL context cannot be resumed by PIXI; reload the page so the
+    // model is rebuilt from scratch. The host re-sends its payload on READY.
+    const canvas = app.view;
+    let contextLost = false;
+    canvas.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault(); contextLost = true; console.info('ANYLINK_AVATAR_CONTEXT_LOST');
+      setTimeout(() => { if (contextLost) location.reload(); }, 3000);
+    });
+    canvas.addEventListener('webglcontextrestored', () => { contextLost = false; console.info('ANYLINK_AVATAR_CONTEXT_RESTORED'); location.reload(); });
     document.addEventListener('visibilitychange', apply);
     document.getElementById('fallback').hidden = true; ready = true; apply(); console.info('ANYLINK_AVATAR_READY');
   }

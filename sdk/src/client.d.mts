@@ -31,6 +31,7 @@ export class AnyLinkClient {
  updateMemory(id:string,revision:number,patch:{title?:string;content?:string},options?:RequestOptions):Promise<Memory>;
  deleteMemory(id:string,revision:number,options?:RequestOptions):Promise<unknown>;
  chatCompletions(input:Payload,options?:RequestOptions):Promise<Payload>;
+ speech(input:{text:string;summarize?:boolean;voice?:'sweet-lively'|'sweet-warm'},options?:RequestOptions):Promise<{spoken_text:string;voice:string;format:string;audio_base64:string} | Payload>;
  streamChatCompletions(input:Payload,options?:RequestOptions):AsyncGenerator<Payload>;
  registerCapabilities(capabilities:Capability[],options?:RequestOptions):Promise<{agent_id:string;device_id:string;capabilities:Capability[]}>;
  createTask(task:{target?:{agent_id:string}|{device_id:string};target_device_id?:string;capability:string;input:Payload;ttl_seconds?:number},options?:RequestOptions):Promise<Task>;
