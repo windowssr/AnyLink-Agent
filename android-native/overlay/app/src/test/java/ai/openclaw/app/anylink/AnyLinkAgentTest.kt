@@ -267,6 +267,7 @@ class AnyLinkAgentTest {
       server.start()
       server.enqueue(response("""{"ok":true}"""))
       server.enqueue(response("""{"task":{"id":"77777777-7777-4777-8777-777777777777","capability":"companion.say","input":{"text":"你好呀"},"source_device_id":"dev-src"}}"""))
+      server.enqueue(response("""{"items":[{"device":{"id":"dev-src","name":"Mac 主机","platform":"macos"},"agents":[]},{"device":{"id":"dev-other","name":"其他设备","platform":"other"},"agents":[]}]}"""))
       server.enqueue(response("""{"ok":true}"""))
       server.enqueue(response("""{"task":null}"""))
       val ledger = MemoryLedger(); val said = mutableListOf<Pair<String, String>>()
@@ -276,7 +277,7 @@ class AnyLinkAgentTest {
       val caps = requests.first { it.path == "/edge/v1/link/capabilities" }
       val capsBody = linkJson.parseToJsonElement(caps.body.readUtf8()).jsonObject["capabilities"]!!.jsonArray.map { it.jsonObject.text("name") }
       assertTrue(capsBody.containsAll(listOf("phone.status", "companion.say")))
-      assertEquals(listOf("你好呀" to "dev-src"), said)
+      assertEquals("source device name resolves through the directory", listOf("你好呀" to "Mac 主机"), said)
       val result = requests.single { it.path == "/edge/v1/link/tasks/77777777-7777-4777-8777-777777777777/result" }
       assertEquals("result:77777777-7777-4777-8777-777777777777", result.getHeader("Idempotency-Key"))
       assertEquals("succeeded", result.body.readUtf8().let { linkJson.parseToJsonElement(it).jsonObject.text("state") })
@@ -299,6 +300,22 @@ class AnyLinkAgentTest {
       val resultPosts = requests.filter { it.path?.endsWith("/result") == true }
       assertEquals(1, resultPosts.size)
       assertTrue(resultPosts[0].body.readUtf8().contains("EXECUTION_INTERRUPTED"))
+    }
+  }
+  @Test fun `worker tolerates null claims and unknown source names`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      server.enqueue(response("""{"ok":true}"""))
+      server.enqueue(response("""{"task":{"id":"99999999-9999-4999-8999-999999999999","capability":"companion.say","input":{"text":"在吗"}}}"""))
+      server.enqueue(response("""{"items":[]}"""))
+      server.enqueue(response("""{"ok":true}"""))
+      server.enqueue(response("""{"task":null}"""))
+      val ledger = MemoryLedger(); val said = mutableListOf<Pair<String, String>>()
+      val job = launch { runCatching { linkWorkerLoop(CloudClient(CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)), ledger, { jsonObject("model" to str("m")) }, { t, s -> said += t to s }) } }
+      delay(700); job.cancel()
+      assertEquals("missing source id falls back without a directory hit", listOf("在吗" to "其他设备"), said)
+      val requests = (1..server.requestCount).map { server.takeRequest() }
+      assertFalse("blank source skips the directory lookup", requests.any { it.path == "/edge/v1/link/directory" })
     }
   }
 }

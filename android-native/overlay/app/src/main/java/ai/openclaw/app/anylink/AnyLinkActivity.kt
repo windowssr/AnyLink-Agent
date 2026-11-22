@@ -61,6 +61,7 @@ internal class AnyLinkViewModel(application: Application) : AndroidViewModel(app
   private var cloud: CloudClient? = null
   private var turn: Job? = null
   private var workerJob: Job? = null
+  @Volatile private var foreground = false
   init {
     try { profiles.load()?.let(::activate) } catch (_: Exception) { error.value = "无法解密原设备凭据，请重新连接；原会话和便笺保留。" }
   }
@@ -70,9 +71,10 @@ internal class AnyLinkViewModel(application: Application) : AndroidViewModel(app
     agent.value = DeviceAgent(value, transport, SqlAgentLedger(getApplication(), value), {
       jsonObject("platform" to str("android"), "manufacturer" to str(Build.MANUFACTURER), "model" to str(Build.MODEL), "android_version" to str(Build.VERSION.RELEASE), "device_id" to str(value.deviceId), "runtime" to str("on-device-agent"), "mac_required" to JsonPrimitive(false))
     }, PersonaProvider { readPersona() })
+    stopWorker(); if (foreground) startWorker()
   }
-  fun startWorker() { val value = connection.value ?: return; val transport = cloud ?: return; if (workerJob?.isActive == true) return; workerJob = viewModelScope.launch { workerLoop(transport, value) } }
-  fun stopWorker() { workerJob?.cancel(); workerJob = null }
+  fun startWorker() { foreground = true; val value = connection.value ?: return; val transport = cloud ?: return; if (workerJob?.isActive == true) return; workerJob = viewModelScope.launch { workerLoop(transport, value) } }
+  fun stopWorker() { foreground = false; workerJob?.cancel(); workerJob = null }
   private fun readPersona(): Pair<String, String> {
     val assets = getApplication<Application>().assets
     fun read(name: String) = runCatching { assets.open("anylink/$name").bufferedReader().use { it.readText() } }.getOrDefault("")
@@ -155,6 +157,13 @@ internal suspend fun linkWorkerLoop(transport: LinkTransport, ledger: AgentLedge
     jsonObject("name" to str("phone.status"), "description" to str("读取这台手机的基础状态：型号、系统版本、电量等")),
     jsonObject("name" to str("companion.say"), "description" to str("让手机上的大肥鱼用语音说一句话并显示在屏幕上，text 不超过 500 字")))))
   try { transport.request("POST", "/edge/v1/link/capabilities", capabilities, "caps:${UUID.randomUUID()}") } catch (_: Exception) { }
+  var names: Map<String, String>? = null
+  suspend fun deviceName(id: String): String {
+    if (names == null) names = runCatching {
+      transport.request("GET", "/edge/v1/link/directory")["items"]!!.jsonArray.flatMap { (it.jsonObject["device"] as? JsonObject)?.let { d -> listOf(d.text("id") to d.text("name")) } ?: emptyList() }.toMap()
+    }.getOrNull()
+    return names?.get(id)?.takeIf { it.isNotBlank() } ?: run { names = null; "其他设备" }
+  }
   while (true) {
     try {
       // Resend journaled results whose POST never confirmed; stable key makes replay safe.
@@ -164,29 +173,34 @@ internal suspend fun linkWorkerLoop(transport: LinkTransport, ledger: AgentLedge
         sendResult(taskId)
       }
       val claim = transport.request("POST", "/edge/v1/link/tasks/claim", JsonObject(emptyMap()), "claim:${UUID.randomUUID()}")
-      val task = claim["task"]?.jsonObject ?: continue
-      val taskId = task.text("id")
-      val existing = ledger.workerTask(taskId)
-      if (existing?.text("state") == "started") { ledger.workerTask(taskId, interrupted(taskId)); sendResult(taskId); continue }
-      if (existing != null) { sendResult(taskId); continue }
-      ledger.workerTask(taskId, jsonObject("task_id" to str(taskId), "state" to str("started")))
-      val result = try { executeWorkerTask(task, info, say) } catch (failure: Exception) {
-        jsonObject("state" to str("failed"), "error" to jsonObject("code" to str((failure as? LinkFailure)?.code ?: "EXECUTION_FAILED"), "message" to str(failure.message.orEmpty().take(500))))
+      val task = claim["task"] as? JsonObject
+      if (task != null) {
+        val taskId = task.text("id")
+        val existing = ledger.workerTask(taskId)
+        if (existing?.text("state") == "started") { ledger.workerTask(taskId, interrupted(taskId)); sendResult(taskId) }
+        else if (existing != null) sendResult(taskId)
+        else {
+          ledger.workerTask(taskId, jsonObject("task_id" to str(taskId), "state" to str("started")))
+          val result = try { executeWorkerTask(task, info, say, ::deviceName) } catch (failure: Exception) {
+            jsonObject("state" to str("failed"), "error" to jsonObject("code" to str((failure as? LinkFailure)?.code ?: "EXECUTION_FAILED"), "message" to str(failure.message.orEmpty().take(500))))
+          }
+          ledger.workerTask(taskId, jsonObject("task_id" to str(taskId), "state" to str("resulted"), "result" to result, "sent" to JsonPrimitive(false)))
+          sendResult(taskId)
+        }
       }
-      ledger.workerTask(taskId, jsonObject("task_id" to str(taskId), "state" to str("resulted"), "result" to result, "sent" to JsonPrimitive(false)))
-      sendResult(taskId)
     } catch (error: CancellationException) { throw error } catch (_: Exception) { }
     delay(3000)
   }
 }
-private suspend fun executeWorkerTask(task: JsonObject, info: () -> JsonObject, say: suspend (String, String) -> Unit): JsonObject {
+private suspend fun executeWorkerTask(task: JsonObject, info: () -> JsonObject, say: suspend (String, String) -> Unit, deviceName: suspend (String) -> String): JsonObject {
   val input = task["input"]?.jsonObject ?: JsonObject(emptyMap())
   return when (task.text("capability")) {
     "phone.status" -> jsonObject("state" to str("succeeded"), "output" to info())
     "companion.say" -> {
       val text = input.text("text")
       if (text.isBlank() || text.length > 500) throw LinkFailure("BAD_TOOL_INPUT", "companion.say 需要 1 到 500 字的 text")
-      say(text, task["source_device_id"]?.jsonPrimitive?.contentOrNull ?: "其他设备")
+      val source = task["source_device_id"]?.jsonPrimitive?.contentOrNull
+      say(text, if (source.isNullOrBlank()) "其他设备" else deviceName(source))
       jsonObject("state" to str("succeeded"), "output" to jsonObject("spoken" to JsonPrimitive(true), "note" to str("已排队到手机语音播报与屏幕展示")))
     }
     else -> jsonObject("state" to str("failed"), "error" to jsonObject("code" to str("CAPABILITY_UNAVAILABLE"), "message" to str("这台手机没有能力 ${task.text("capability")}")))
