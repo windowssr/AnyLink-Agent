@@ -36,6 +36,9 @@ build=build.replace('compileSdk = 37','compileSdk = 37\n  buildToolsVersion = "3
 build=build.replace('buildConfigField("String", "BUILD_TIMESTAMP", "\\\"$openClawBuildTimestamp\\\"")',
   'buildConfigField("String", "BUILD_TIMESTAMP", "\\\"$openClawBuildTimestamp\\\"")\n    val anyLinkAgent = providers.gradleProperty("ANYLINK_AGENT_ID").orElse("anylink-android-preview").get()\n    require(anyLinkAgent.matches(Regex("[a-z0-9][a-z0-9_-]{0,63}")))\n    buildConfigField("String", "ANYLINK_AGENT_ID", "\\\"$anyLinkAgent\\\"")');
 if(!build.includes('"ANYLINK_AGENT_ID"'))throw new Error('Cannot add the configured Android context.');
+const mermaidCommand='commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")';
+if(build.split(mermaidCommand).length!==2)throw new Error('Pinned Mermaid build context changed');
+build=build.replace(mermaidCommand,`commandLine(${JSON.stringify(node)}, ${JSON.stringify(path.join(home,'scripts/build-mermaid.mjs'))})\n    inputs.file(${JSON.stringify(path.join(home,'renderer/package-lock.json'))})\n    inputs.file(${JSON.stringify(path.join(home,'scripts/build-mermaid.mjs'))})`);
 fs.writeFileSync(path.join(source,gradle),build);prepared[gradle]=hash(path.join(source,gradle));
 // Shared/benchmark/watch modules are configured by the official root build too;
 // keep their SDK tool choice consistent instead of admitting another auto-install.

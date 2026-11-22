@@ -7,7 +7,9 @@ export function configuredPreview(original,root) {
   const workspace=path.join(root,'data/android-native/workspace');
   c.agents.entries[previewAgent]={...c.agents.entries[previewAgent],name:'大肥鱼 · Android 开发预览',workspace,
     identity:{name:'大肥鱼',avatar:'avatars/dafeiyu.png'},
-    tools:{allow:['anylink_memory_search','anylink_memory_save','anylink_memory_update','anylink_memory_delete','anylink_mac_search_files','anylink_companion_expression','nodes']}};
+    // The inherited coding profile excludes native node/mobile tools. Override
+    // only this agent's profile, then bound it with the explicit allowlist.
+    tools:{profile:'full',allow:['anylink_memory_search','anylink_memory_save','anylink_memory_update','anylink_memory_delete','anylink_mac_search_files','anylink_companion_expression','nodes','mobile_ui','ask_user']}};
   const memory=c.plugins.entries['anylink-memory'];
   memory.config={...memory.config,deviceConnections:{...memory.config.deviceConnections,[previewAgent]:{connectionFile:path.join(root,'secrets/android-preview-connection.json'),label:'Android 开发预览（未绑定真机）',platform:'android'}}};
   c.plugins.allow=[...new Set([...c.plugins.allow,'microsoft'])];

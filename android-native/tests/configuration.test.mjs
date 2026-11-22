@@ -9,7 +9,10 @@ test('native preview retains Mac routes and confines Android to separately confi
   assert.deepEqual(c.gateway,original.gateway);
   assert.deepEqual(c.plugins.entries['anylink-memory'].config.deviceConnections.existing,{connectionFile:'/private/existing.json'});
   const android=c.agents.entries[previewAgent];
+  assert.equal(android.tools.profile,'full');
   assert.ok(android.tools.allow.includes('nodes'));
+  assert.ok(android.tools.allow.includes('mobile_ui'));
+  assert.ok(android.tools.allow.includes('ask_user'));
   assert.ok(android.tools.allow.includes('anylink_mac_search_files'));
   assert.ok(!android.tools.allow.includes('exec'));
   assert.ok(!android.tools.allow.includes('anylink_mac_act'));

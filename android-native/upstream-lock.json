@@ -18,6 +18,7 @@
     "src/gateway/methods",
     "src/infra",
     "src/shared",
-    "config"
+    "config",
+    "packages/mermaid-renderer"
   ]
 }
