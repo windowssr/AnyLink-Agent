@@ -36,7 +36,7 @@ await new Promise((resolve,reject)=>{
 if(!testing&&!process.argv.includes('--dependencies')){
   const dir=path.join(app,'app/build/outputs/apk/thirdParty/debug');
   const metadata=JSON.parse(fs.readFileSync(path.join(dir,'output-metadata.json'),'utf8'));
-  if(metadata.elements.length!==1||metadata.elements[0].versionName!==version)throw new Error('APK output metadata does not match the selected version');
+  if(metadata.elements.length!==1||metadata.elements[0].versionName!==version+'-debug'||metadata.elements[0].versionCode!==3001)throw new Error('APK output metadata does not match the selected debug version');
   const name=metadata.elements[0].outputFile;
   if(!name)throw new Error('No built APK was produced');
   const target=path.join(output,'AnyLink-Android-'+version+'.apk');fs.copyFileSync(path.join(dir,name),target);
