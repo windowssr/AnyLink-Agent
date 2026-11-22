@@ -19,7 +19,7 @@ export async function transaction<T>(db: Db, fn: (c: PoolClient) => Promise<T>):
   catch (e) { await c.query('ROLLBACK'); throw e; }
   finally { c.release(); }
 }
-export async function idempotent<T>(db: Db, scope: string, key: string, body: unknown, fn: (c: PoolClient) => Promise<T>): Promise<{ value: T; replayed: boolean }> {
+export async function idempotent<T>(db: Db, scope: string, key: string, body: unknown, fn: (c: PoolClient) => Promise<T>,options:{cacheResult?:(value:T)=>boolean}={}): Promise<{ value: T; replayed: boolean }> {
   if (!key || key.length > 160) throw new ApiError(400, 'IDEMPOTENCY_KEY_REQUIRED', '写操作需要 Idempotency-Key');
   const digest = hash(canonical(body));
   return transaction(db, async c => {
@@ -30,7 +30,7 @@ export async function idempotent<T>(db: Db, scope: string, key: string, body: un
       return { value: old.result as T, replayed: true };
     }
     const value = await fn(c);
-    await c.query('INSERT INTO mutation_keys(scope,key,body_hash,result) VALUES($1,$2,$3,$4)', [scope,key,digest,JSON.stringify(value)]);
+    if(options.cacheResult?.(value)!==false)await c.query('INSERT INTO mutation_keys(scope,key,body_hash,result) VALUES($1,$2,$3,$4)', [scope,key,digest,JSON.stringify(value)]);
     return { value, replayed: false };
   });
 }
@@ -61,6 +61,13 @@ export async function migrate(db: Db) {
       prompt_tokens integer,completion_tokens integer,error_code text,created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz);
       CREATE INDEX IF NOT EXISTS model_device_recent ON model_requests(device_id,created_at);
       INSERT INTO schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING;`);
+    await c.query(`CREATE TABLE IF NOT EXISTS link_capabilities(device_id uuid PRIMARY KEY REFERENCES devices(id),capabilities jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now());
+      CREATE TABLE IF NOT EXISTS link_grants(source_device_id uuid NOT NULL REFERENCES devices(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,enabled boolean NOT NULL DEFAULT false,PRIMARY KEY(source_device_id,target_device_id,capability));
+      CREATE TABLE IF NOT EXISTS link_tasks(id uuid PRIMARY KEY,owner_id uuid NOT NULL,source_device_id uuid NOT NULL REFERENCES devices(id),source_credential_id uuid NOT NULL REFERENCES edge_credentials(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,input jsonb NOT NULL,
+      state text NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','running','cancel_requested','succeeded','failed','cancelled','unknown','expired')),result jsonb,created_at timestamptz NOT NULL DEFAULT now(),expires_at timestamptz NOT NULL,started_at timestamptz,finished_at timestamptz);
+      CREATE INDEX IF NOT EXISTS link_task_queue ON link_tasks(target_device_id,created_at) WHERE state='queued';
+      CREATE INDEX IF NOT EXISTS link_task_source ON link_tasks(source_device_id,created_at);
+      INSERT INTO schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING;`);
     // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
     await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");
   });

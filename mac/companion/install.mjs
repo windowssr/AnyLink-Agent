@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..'),lock=JSON.parse(fs.readFileSync(path.join(root,'mac/companion/runtime-lock.json'),'utf8'));
 const home=path.join(root,'data/mac/companion'),model=path.join(home,'model'),runtime=path.join(home,'runtime');
+if(!fs.existsSync(path.join(home,'installed.json'))&&!process.argv.includes('--accept-third-party-licenses'))throw new Error('Read mac/companion/ASSET-NOTICE.md and the linked author/Core terms, then explicitly pass --accept-third-party-licenses for private local use. Public redistribution is not granted.');
 for(const directory of [home,model,runtime])fs.mkdirSync(directory,{recursive:true,mode:0o700});
 const hash=(data,algorithm='sha256')=>createHash(algorithm).update(data).digest('hex');
 const blob=data=>hash(Buffer.concat([Buffer.from(`blob ${data.length}\0`),data]),'sha1');

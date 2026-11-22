@@ -6,9 +6,10 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { type Config, OWNER_ID } from './config.js';
 import { ApiError, createDb, hash, idempotent, migrate } from './db.js';
-import { createDevice, deleteMemory, deviceSchema, editMemory, getMemory, listDevices, memoryDirectory, memoryPatchSchema, memorySchema, saveMemory, searchMemories } from './store.js';
+import { createDevice, deleteMemory, deviceSchema, editMemory, getMemory, listDevices, memoryDirectory, memoryPatchSchema, memorySchema, memorySearchSchema, saveMemory, searchMemories } from './store.js';
 import { authenticateEdge,registerCredentialRoutes } from './edge-auth.js';
 import { registerModelProxy } from './model-proxy.js';
+import { registerLink } from './link.js';
 
 const idParams=z.object({id:z.uuid()});
 const tokenFromCookie=(r:FastifyRequest)=>(r.headers.cookie??'').split(';').map(s=>s.trim()).find(s=>s.startsWith('anylink_session='))?.slice('anylink_session='.length);
@@ -39,11 +40,11 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
   async function mutate(req:FastifyRequest,scope:string,body:unknown,fn:Parameters<typeof idempotent>[4]) {
     return (await idempotent(db,scope,key(req),body,fn)).value;
   }
-  app.get('/healthz',async()=>({ok:true,service:'anylink-agent',version:'0.3.0',role:'memory-and-model-services'}));
+  app.get('/healthz',async()=>({ok:true,service:'anylink-agent',version:'0.4.0',role:'memory-model-and-task-relay'}));
   app.get('/readyz',async(_req,reply)=>{
     let database=false;try{await db.query('SELECT 1');database=true;}catch{}
     const provider_configured=!!config.deepseekApiKey;
-    return reply.code(database&&provider_configured?200:503).send({ok:database&&provider_configured,database,provider_configured,cloud_agent:false});
+    return reply.code(database?200:503).send({ok:database,database,provider_configured,cloud_agent:false});
   });
   app.post('/v1/auth/login',async(req,reply)=>{
     const input=z.object({token:z.string().min(1).max(200)}).strict().parse(req.body),now=Date.now(),old=loginAttempts.get(req.ip);
@@ -59,11 +60,11 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
   app.post('/v1/auth/logout',async(req,reply)=>{
     await db.query('DELETE FROM auth_sessions WHERE token_hash=$1',[hash(tokenFromCookie(req)??'')]);reply.header('Set-Cookie','anylink_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');return {ok:true};
   });
-  app.get('/v1/status',async()=>({version:'0.3.0',assistant:'AnyLink',model:'deepseek-flash',cloud_agent:false,execution_enabled:false,owner_id:OWNER_ID}));
+  app.get('/v1/status',async()=>({version:'0.4.0',assistant:'AnyLink',model:'deepseek-flash',cloud_agent:false,execution_enabled:false,owner_id:OWNER_ID}));
   app.get('/v1/devices',async()=>({items:(await db.query(`SELECT d.*,c.id AS credential_id,c.created_at AS bound_at,c.last_used_at FROM devices d LEFT JOIN edge_credentials c ON c.device_id=d.id AND c.revoked_at IS NULL WHERE d.owner_id=$1 ORDER BY d.created_at`,[OWNER_ID])).rows}));
   app.post('/v1/devices',async req=>{const v=deviceSchema.parse(req.body);return mutate(req,'devices:create',v,c=>createDevice(c,v));});
-  registerCredentialRoutes(app,db);registerModelProxy(app,db,config);
-  app.get('/edge/v1/identity',async req=>({device:(await listDevices(db)).find(d=>d.id===req.edgeIdentity!.device_id),scopes:['memory','model']}));
+  registerCredentialRoutes(app,db);registerModelProxy(app,db,config);registerLink(app,db);
+  app.get('/edge/v1/identity',async req=>({device:(await listDevices(db)).find(d=>d.id===req.edgeIdentity!.device_id),scopes:['memory','model','link']}));
   app.get('/edge/v1/context',async req=>{
     const [global,device]=await Promise.all([searchMemories(db,{scope:'global',limit:30}),searchMemories(db,{device_id:req.edgeIdentity!.device_id,limit:30})]);
     return {device_id:req.edgeIdentity!.device_id,global,device,directory:{device_id:req.edgeIdentity!.device_id,entries:device.map(m=>({id:m.id,title:m.title,revision:m.revision}))}};
@@ -72,7 +73,7 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
     const source=(req:FastifyRequest)=>({kind:req.edgeIdentity?'edge_owner_statement':'owner_edit',deviceId:req.edgeIdentity?.device_id});
     const scope=(req:FastifyRequest,op:string)=>`${req.edgeIdentity?.id??'owner'}:${op}`;
     app.get(prefix+'/devices/:id/memory-directory',async req=>memoryDirectory(db,idParams.parse(req.params).id));
-    const searchSchema=z.object({q:z.string().max(200).optional(),scope:z.enum(['global','device']).optional(),device_id:z.uuid().optional()}).strict();
+    const searchSchema=memorySearchSchema;
     app.get(prefix+'/memories',async req=>({items:await searchMemories(db,searchSchema.parse(req.query))}));
     app.post(prefix+'/memories/search',async req=>({items:await searchMemories(db,searchSchema.parse(req.body))}));
     app.get(prefix+'/memories/:id',async req=>getMemory(db,idParams.parse(req.params).id));

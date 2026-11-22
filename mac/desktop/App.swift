@@ -50,12 +50,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         do {
             guard let configURL = Bundle.main.url(forResource: "desktop", withExtension: "json") else { throw DesktopError.configuration }
             let config = try JSONDecoder().decode(DesktopConfiguration.self, from: Data(contentsOf: configURL))
-            let candidate = URL(fileURLWithPath: config.projectRoot, isDirectory: true).standardizedFileURL
+            var project = config.projectRoot
+            if project.isEmpty {
+                project = UserDefaults.standard.string(forKey: "AnyLinkConfiguredProject") ?? ""
+                if project.isEmpty || !FileManager.default.fileExists(atPath: URL(fileURLWithPath: project).appendingPathComponent("mac/start.mjs").path) {
+                    let picker = NSOpenPanel()
+                    picker.title = "选择已经配置的 AnyLink 项目文件夹"
+                    picker.message = "公开预览版使用你自己的本地运行时与服务器连接。请先按 README 完成安装，再选择项目目录。"
+                    picker.canChooseDirectories = true; picker.canChooseFiles = false; picker.allowsMultipleSelection = false
+                    NSApp.activate(ignoringOtherApps: true)
+                    guard picker.runModal() == .OK, let selected = picker.url else { throw DesktopError.configuration }
+                    project = selected.path
+                }
+            }
+            let candidate = URL(fileURLWithPath: project, isDirectory: true).standardizedFileURL
             guard FileManager.default.fileExists(atPath: candidate.appendingPathComponent("mac/start.mjs").path) else { throw DesktopError.configuration }
+            if config.projectRoot.isEmpty { UserDefaults.standard.set(candidate.path, forKey: "AnyLinkConfiguredProject") }
             root = candidate
             computer = MacControlCoordinator(root: candidate)
         } catch {
-            serviceError = "找不到已配置的 AnyLink 工程。请在工程中重新运行 node mac/build-app.mjs 和 node mac/install-app.mjs。"
+            serviceError = "请按 README 配置本机工程后重新打开 AnyLink，并选择项目文件夹。开发者也可在工程中重新构建。"
         }
         buildMenu()
         buildWindow()

@@ -4,16 +4,17 @@ import { z } from 'zod';
 import { ApiError,type Db,transaction } from './db.js';
 import type { Config } from './config.js';
 export const MODEL='deepseek-flash';
-const inputSchema=z.object({
+export const modelInputSchema=z.object({
   model:z.literal(MODEL),messages:z.array(z.object({role:z.enum(['system','developer','user','assistant','tool']),content:z.unknown().optional()}).passthrough()).min(1).max(1000),
   stream:z.boolean().optional(),max_tokens:z.number().int().min(1).max(8192).optional(),max_completion_tokens:z.number().int().min(1).max(8192).optional(),
   tools:z.array(z.unknown()).max(100).optional(),n:z.literal(1).optional(),
 }).passthrough();
 export function registerModelProxy(app:FastifyInstance,db:Db,config:Config) {
   const active=new Map<string,AbortController>();
-  app.get('/model/v1/models',async()=>({object:'list',data:[{id:MODEL,object:'model',owned_by:'deepseek',input_modalities:['text','image']}]}));
+  app.get('/model/v1/models',async()=>({object:'list',data:config.deepseekApiKey?[{id:MODEL,object:'model',owned_by:'deepseek',input_modalities:['text','image']}]:[]}));
   app.post('/model/v1/chat/completions',{bodyLimit:16*1024*1024},async(req,reply)=>{
-    const who=req.edgeIdentity!,input=inputSchema.parse(req.body),id=randomUUID();
+    if(!config.deepseekApiKey)throw new ApiError(503,'PROVIDER_NOT_CONFIGURED','Memory and task services are available; this deployment has no model provider configured');
+    const who=req.edgeIdentity!,input=modelInputSchema.parse(req.body),id=randomUUID();
     const controller=new AbortController();
     await transaction(db,async c=>{
       await c.query('SELECT pg_advisory_xact_lock(3180010)');

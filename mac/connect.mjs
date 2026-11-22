@@ -1,0 +1,10 @@
+import fs from 'node:fs';import {parseArgs} from 'node:util';import {configure,paths} from './configure.mjs';import {AnyLinkClient} from '../sdk/src/client.mjs';
+const {values}=parseArgs({options:{server:{type:'string'},'credential-file':{type:'string'},'ssh-host':{type:'string'}}});
+if(!values.server||!values['credential-file'])throw new Error('Usage: node mac/connect.mjs --server URL --credential-file FILE [--ssh-host SSH_ALIAS]');
+if(fs.existsSync(paths.connection))throw new Error('Preserving existing Mac connection and profile; use its existing update workflow');
+const credential=JSON.parse(fs.readFileSync(values['credential-file'],'utf8'));
+if(!/^[0-9a-f-]{36}$/i.test(credential.device_id??'')||typeof credential.token!=='string'||!credential.token.startsWith('ak_'))throw new Error('Expected a one-time device credential response');
+const client=new AnyLinkClient({baseUrl:values.server,token:credential.token});
+if((await client.identity()).device.id!==credential.device_id)throw new Error('The device credential does not match the declared identity');
+if(values['ssh-host']&&!/^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(values['ssh-host']))throw new Error('Use a simple SSH config alias');
+configure({server:values.server.replace(/\/$/,''),ssh_host:values['ssh-host']??null,device_id:credential.device_id,credential_id:credential.credential_id,token:credential.token});

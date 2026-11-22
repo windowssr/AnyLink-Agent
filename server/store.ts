@@ -5,6 +5,7 @@ import { ApiError } from './db.js';
 import { OWNER_ID } from './config.js';
 export type Queryable = Pick<PoolClient, 'query'>;
 export const deviceSchema = z.object({ name: z.string().trim().min(1).max(80), platform: z.enum(['macos','android','other']) }).strict();
+export const memorySearchSchema=z.object({q:z.string().max(200).optional(),scope:z.enum(['global','device']).optional(),device_id:z.uuid().optional()}).strict();
 export const memorySchema = z.object({
   title: z.string().trim().min(1).max(120), content: z.string().trim().min(1).max(4000),
   scope: z.enum(['global','device']), applicable_device_id: z.uuid().nullable().optional(),

@@ -1,0 +1,19 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {AnyLinkClient,AnyLinkError} from '../src/client.mjs';
+test('unknown writes expose their stable key and never retry',async()=>{
+  let calls=0;const client=new AnyLinkClient({baseUrl:'https://example.test',token:'fixture',fetch:async()=>{calls++;throw new Error('Disconnected');}});
+  await assert.rejects(client.createTask({}),e=>e instanceof AnyLinkError&&e.submissionUnknown&&!!e.idempotencyKey);assert.equal(calls,1);
+});
+test('split SSE preserves tool deltas and refuses incomplete streams',async()=>{
+  const encoder=new TextEncoder();let wire='data: {"choices":[{"delta":{"tool_calls":[{"id":"test"}]}}]}\r\n\r\ndata: [DONE]\n\n';
+  const fetch=async()=>new Response(new ReadableStream({start(c){for(let i=0;i<wire.length;i+=7)c.enqueue(encoder.encode(wire.slice(i,i+7)));c.close();}}),{headers:{'content-type':'text/event-stream'}});
+  const client=new AnyLinkClient({baseUrl:'http://127.0.0.1',token:'fixture',fetch});
+  const values=[];for await(const v of client.streamChatCompletions({}))values.push(v);assert.equal(values[0].choices[0].delta.tool_calls[0].id,'test');
+  wire='data: {"choices":[]}\n\n';await assert.rejects(async()=>{for await(const _ of client.streamChatCompletions({})){}},e=>e.code==='STREAM_INCOMPLETE'&&e.submissionUnknown);
+});
+test('credentials are absent from errors and cannot follow redirects',async()=>{
+  assert.throws(()=>new AnyLinkClient({baseUrl:'http://remote.example',token:'private-token'}),/HTTPS/);
+  const client=new AnyLinkClient({baseUrl:'https://example.test',token:'private-token',fetch:async(_u,o)=>{assert.equal(o.redirect,'error');return Response.json({error:{code:'DENIED',message:'Denied'}},{status:403});}});
+  await assert.rejects(client.context(),e=>e.code==='DENIED'&&!e.message.includes('private-token'));
+});

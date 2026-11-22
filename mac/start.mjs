@@ -19,7 +19,7 @@ function connect(){
   const retry=()=>{if(stopping||scheduled)return;scheduled=true;log('cloud_tunnel_reconnecting');reconnect=setTimeout(connect,3000);};
   tunnel.on('error',retry);tunnel.on('exit',retry);
 }
-connect();
+if(connection.ssh_host!==null)connect();
 const env={...process.env,PATH:path.dirname(node)+':'+(process.env.PATH??'/usr/bin:/bin'),OPENCLAW_STATE_DIR:paths.state,OPENCLAW_CONFIG_PATH:path.join(paths.state,'openclaw.json'),OPENCLAW_NO_RESPAWN:'1',NODE_COMPILE_CACHE:path.join(paths.state,'compile-cache'),ANYLINK_DEVICE_TOKEN:connection.token};
 // The native local Gateway stays alive while the cloud tunnel reconnects.
 // DeepSeek credentials never enter this process; OpenClaw owns the Agent loop.

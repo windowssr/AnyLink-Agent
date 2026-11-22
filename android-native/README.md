@@ -1,6 +1,6 @@
 # 大肥鱼 Android 原生预览
 
-基于官方 OpenClaw Android `v2026.11.6`，固定上游提交 `06afb10d3272cc9deaf38ca6a3b7b839d5935638`。这是 AnyLink 私有改版，不是官方发行包。手机要求 Android 12 / API 31 或更新。
+基于官方 OpenClaw Android `v2026.11.6`，固定上游提交 `06afb10d3272cc9deaf38ca6a3b7b839d5935638`。这是 AnyLink 开源参考客户端，不是官方发行包。公开版本默认不带第三方模型、纹理、派生头像或 Cubism Core，使用原创占位形象；下文半身人物效果需要自行配置并仅用于许可允许的私有构建。手机要求 Android 12 / API 31 或更新。
 
 主入口是占满屏幕的正常比例半身人物。底部开启语音；文字、文件、工具结果与审批按需展开官方聊天界面。聊天、语音、手机节点与工具生命周期继续由官方原生代码管理；人物 WebView 只接收表现状态。
 
@@ -44,7 +44,7 @@ node android-native/scripts/inspect-apk.mjs
 
 上游 compileSdk=37、targetSdk=36、minSdk=31；Google 仓库的平台包现名为 `platforms;android-37.0`。工具锁定见 `toolchain-lock.json`；下载校验失败不会执行。`install-gradle` 使用与官方 wrapper 相同的版本及 SHA-256，为低速连接提供可恢复的分段下载。官方代码准备脚本验证完整上游 SHA，以固定上下文打补丁，遇到其他本地修改会停止，避免重置覆盖。
 
-当前 APK 目标：`artifacts/android-native/AnyLink-Android-0.2.0-preview.1.apk`。使用独立 applicationId `com.anylink.agent.debug` 和本机调试签名，可与官方 App 并存。未签发布版、未上传商店；后续正式签名需要稳定的私有密钥。人物素材沿用本机私有资源，未加入 Git；分发与商业用途须另行核实角色及模型授权，详见原有 `mac/companion/ASSET-NOTICE.md`。
+当前 APK 目标：`artifacts/android-native/AnyLink-Android-0.2.0-preview.2.apk`。使用独立 applicationId `com.anylink.agent.debug` 和本机调试签名，可与官方 App 并存。未签发布版、未上传商店；后续正式签名需要稳定的私有密钥。公开构建不携带受限素材；私有本机构建可使用 ANYLINK_CHARACTER_MODE=private，分发与商业用途须另行核实角色及模型授权，详见原有 `mac/companion/ASSET-NOTICE.md`。
 
 官方原生图表资源仍使用上游 Vite 8.3.4、Pele 1.6.0 和 DOMPurify 3.4.17，通过独立 npm lockfile 构建。Gradle 仅替换该构建命令的入口，不改渲染器、沙箱和清理逻辑。JVM 回归的 Maven 缓存和 Java 用户目录也限制在项目 `data/android-native/`。测试固定使用 Robolectric 4.17 的 Android 14 / API 34 框架 JAR，预取约 151 MB，并校验 Maven 发布的 SHA-256；这不安装或启动模拟器，也不改变 App 的 Android 12 最低要求。
 

@@ -6,12 +6,13 @@ function secret(name: string) {
   return path ? readFileSync(path, 'utf8').trim() : process.env[name];
 }
 export function loadConfig() {
+  const providerKey=secret('DEEPSEEK_API_KEY')??'';
   return z.object({
-    databaseUrl: z.string().min(1), ownerToken: z.string().min(24), deepseekApiKey:z.string().min(20),
+    databaseUrl: z.string().min(1), ownerToken: z.string().min(24), deepseekApiKey:z.string().refine(v=>v===''||v.length>=20,'Configure a provider key or leave it empty').default(''),
     deepseekBaseUrl:z.url().default('https://api.deepseek.com/v1'),origin: z.url().default('http://127.0.0.1:3180'),
     host: z.string().default('127.0.0.1'), port: z.coerce.number().int().min(1).max(65535).default(3180),
   }).parse({
-    databaseUrl: secret('DATABASE_URL'), ownerToken: secret('OWNER_TOKEN'),deepseekApiKey:secret('DEEPSEEK_API_KEY'),
+    databaseUrl: secret('DATABASE_URL'), ownerToken: secret('OWNER_TOKEN'),deepseekApiKey:/^(REPLACE_|CONFIGURE_)/.test(providerKey)?'':providerKey,
     deepseekBaseUrl:process.env.DEEPSEEK_BASE_URL, origin: process.env.APP_ORIGIN,
     host: process.env.HOST, port: process.env.PORT,
   });

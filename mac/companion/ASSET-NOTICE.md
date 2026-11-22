@@ -2,7 +2,7 @@
 
 本地使用 DeepSeek-chan（蓝色大肥鱼）Live2D 模型。绘画与拆分：神宫凉子；Live2D：霓虹猫_NeonNeko。社区存档及原始使用须知：https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md 。该社区仓库不等于已取得原作者的商业授权。
 
-人物模型、纹理和 Live2D Cubism Core 仅由安装脚本获取到忽略的 `data/mac/companion`，不进入 Git 或 AnyLink 安装包。原始文件不改动，单独的本地入口声明已有动作。不能将模型当作 AnyLink 自有素材转售或再次完整分发。将人物用于收费产品、广告或公开商业发布前，应向角色作者确认许可。
+人物模型、纹理和 Live2D Cubism Core 仅在明确接受第三方许可后由安装脚本获取到忽略的 `data/mac/companion`，不进入 Git 或公开安装包。仅本机私有 Android 构建可以显式选择这些素材，该包不得直接公开分发。原始文件不改动，单独的本地入口声明已有动作。不能将模型当作 AnyLink 自有素材转售或再次完整分发。将人物用于收费产品、广告或公开商业发布前，应向角色作者确认许可。
 
 Cubism Core 按 Live2D 专有软件许可使用：https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html 。SDK 应用发布条件：https://www.live2d.com/en/sdk/license/ 。本地开发成功不代表已满足商业发布条件。
 

@@ -11,4 +11,4 @@ assert call('/model/v1/models')['data'][0]['id']=='deepseek-flash'
 assert 'global' in call('/edge/v1/context')
 r=call('/model/v1/chat/completions',{'model':'deepseek-flash','messages':[{'role':'user','content':'请只回复：服务正常'}],'max_tokens':32})
 assert '服务正常' in r['choices'][0]['message']['content']
-print(json.dumps({'passed':True,'role':'memory-and-model-services','checks':4,'edge_agent_verified':False}))
+print(json.dumps({'passed':True,'role':'memory-model-and-task-relay','checks':4,'edge_agent_verified':False}))

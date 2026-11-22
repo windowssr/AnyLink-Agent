@@ -5,12 +5,13 @@ import {fileURLToPath} from 'node:url';
 
 if(process.platform!=='darwin')throw new Error('Build AnyLink.app on macOS with Xcode Command Line Tools.');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const publicBuild=process.argv.includes('--public');
 const version=JSON.parse(fs.readFileSync(path.join(root,'mac/desktop/version.json'),'utf8'));
 const profile=path.join(root,'data/mac/openclaw/openclaw.json');
 if(fs.existsSync(profile)&&JSON.parse(fs.readFileSync(profile,'utf8')).gateway?.controlUi?.basePath!=='/openclaw'){
   throw new Error('Prepare the existing Mac profile while idle: node mac/configure-desktop.mjs');
 }
-const output=path.join(root,'artifacts/desktop');
+const output=path.join(root,publicBuild?'artifacts/public/desktop':'artifacts/desktop');
 const app=path.join(output,'AnyLink.app');
 const resources=path.join(app,'Contents/Resources');
 const binaries=path.join(app,'Contents/MacOS');
@@ -22,6 +23,8 @@ run(process.execPath,['mac/companion/patch-renderer.mjs']);
 run(process.execPath,['mac/companion/asset-check.mjs']);
 fs.rmSync(app,{recursive:true,force:true});
 for(const dir of [resources,binaries,cache])fs.mkdirSync(dir,{recursive:true});
+fs.copyFileSync(path.join(root,'LICENSE'),path.join(resources,'AnyLink-LICENSE.txt'));
+fs.copyFileSync(path.join(root,'android-native/licenses/OpenClaw-MIT.txt'),path.join(resources,'OpenClaw-MIT.txt'));
 const compilerArgs=['-swift-version','5','-O','-module-cache-path',cache,'-target',`${architecture}-apple-macosx${version.minimumMacOS}`];
 run('/usr/bin/xcrun',['swiftc',...compilerArgs,'-parse-as-library',...['App','MacControl','LocalGatewayClient','CompanionState','CompanionBehavior','CompanionControl','NeuralSpeech','CompanionSpeech','CompanionConversation','CompanionInteraction','CompanionSurface','CompanionRenderer','CompanionView','Companion','VoiceCore','VoiceAudio','VoiceGateway','Voice'].map(name=>'mac/desktop/'+name+'.swift'),'-o',path.join(binaries,'AnyLink'),'-framework','AppKit','-framework','WebKit','-framework','AVFoundation','-framework','Speech']);
 const companionResources=path.join(resources,'CompanionRenderer');fs.mkdirSync(companionResources,{recursive:true});
@@ -43,7 +46,7 @@ for(const size of [16,32,128,256,512])for(const scale of [1,2]){
   run('/usr/bin/sips',['-z',String(size*scale),String(size*scale),iconPNG,'--out',path.join(iconset,`icon_${size}x${size}${scale===2?'@2x':''}.png`)]);
 }
 run('/usr/bin/iconutil',['-c','icns',iconset,'-o',path.join(resources,'AnyLink.icns')]);
-fs.writeFileSync(path.join(resources,'desktop.json'),JSON.stringify({projectRoot:root},null,2)+'\n');
+fs.writeFileSync(path.join(resources,'desktop.json'),JSON.stringify({projectRoot:publicBuild?'':root,distribution:publicBuild?'public':'local'},null,2)+'\n');
 const xml=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 const revision=execFileSync('git',['rev-parse','--short=12','HEAD'],{cwd:root,encoding:'utf8'}).trim();
 const plist=`<?xml version="1.0" encoding="UTF-8"?>

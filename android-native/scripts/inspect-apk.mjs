@@ -34,11 +34,14 @@ with zipfile.ZipFile(sys.argv[2]) as z:
  for name in names:
   data=z.read(name)
   if '/secrets/' in name or any(t and t in data for t in tokens) or re.search(rb'sk-[a-zA-Z0-9]{24,}',data): bad.append(name)
- assert 'assets/anylink/model/entry.model3.json' in names
+ assert not any(n.endswith('.moc3') or 'live2dcubismcore' in n.lower() or '/anylink/model/' in n for n in names), 'Restricted character assets found in public APK'
+ assert not any('anylink_avatar' in n and n.endswith('.png') for n in names), 'Private derived avatar found in public APK'
+ assert 'assets/anylink/public-avatar.js' in names
  assert 'assets/anylink/portrait.html' in names
  print(json.dumps({'entries':len(names),'credential_matches':bad}))
 `,root,apk],{encoding:'utf8',maxBuffer:1024*1024}));
 assert.deepEqual(scan.credential_matches,[]);
+assert.equal(buildInfo.private_character,false,'Only the asset-free public build is distributable');
 const report={version,application_id:'com.anylink.agent.debug',min_sdk:31,target_sdk:36,bytes:fs.statSync(apk).size,sha256:createHash('sha256').update(fs.readFileSync(apk)).digest('hex'),...buildInfo,signature:signature.trim(),scan,verified_at:new Date().toISOString(),hardware_verified:false};
 fs.writeFileSync(path.join(output,'apk-inspection.json'),JSON.stringify(report,null,2)+'\n');
 console.log(JSON.stringify({verified:true,apk:path.relative(root,apk),sha256:report.sha256,bytes:report.bytes,entries:scan.entries,hardware_verified:false}));

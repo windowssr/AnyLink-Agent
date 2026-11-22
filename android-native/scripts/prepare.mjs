@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {root, home, source, lock, node, tools} from './layout.mjs';
 const run=(args,options={})=>execFileSync('git',args,{cwd:source,encoding:'utf8',...options});
+const privateCharacter=process.env.ANYLINK_CHARACTER_MODE==='private';
 const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 if(!fs.existsSync(path.join(source,'.git'))){
   fs.mkdirSync(path.dirname(source),{recursive:true});
@@ -110,12 +111,25 @@ publish(talkPath,Buffer.from(talk));
 function walk(dir){return fs.readdirSync(dir,{withFileTypes:true}).flatMap(item=>item.isDirectory()?walk(path.join(dir,item.name)):[path.join(dir,item.name)]);}
 for(const file of walk(path.join(home,'overlay'))){const relative=path.relative(path.join(home,'overlay'),file);publish('apps/android/'+relative,fs.readFileSync(file));}
 const assets=path.join(source,'apps/android/app/src/main/assets/anylink');fs.mkdirSync(assets,{recursive:true});
-for(const name of ['portrait.html','avatar.js'])fs.copyFileSync(path.join(home,'web',name),path.join(assets,name));
-const model=path.join(root,'data/mac/companion/model');
-if(!fs.existsSync(path.join(model,'entry.model3.json')))throw new Error('Prepare the existing private character assets first.');
-fs.cpSync(model,path.join(assets,'model'),{recursive:true});
-for(const [from,name] of [['data/mac/companion/runtime/live2dcubismcore.min.js','live2dcubismcore.min.js'],['mac/companion/vendor/pixi.min.js','pixi.min.js'],['mac/companion/vendor/cubism4-colors.min.js','cubism4-colors.min.js']])fs.copyFileSync(path.join(root,from),path.join(assets,name));
-const resource=path.join(source,'apps/android/app/src/main/res/drawable/anylink_avatar.png');fs.mkdirSync(path.dirname(resource),{recursive:true});fs.copyFileSync(path.join(root,'data/mac/branding/avatar.png'),resource);
+fs.copyFileSync(path.join(root,'LICENSE'),path.join(assets,'AnyLink-LICENSE.txt'));
+fs.copyFileSync(path.join(home,'licenses/OpenClaw-MIT.txt'),path.join(assets,'OpenClaw-MIT.txt'));
+for(const name of ['model','live2dcubismcore.min.js','pixi.min.js','cubism4-colors.min.js','public-avatar.js'])fs.rmSync(path.join(assets,name),{recursive:true,force:true});
+const drawable=path.join(source,'apps/android/app/src/main/res/drawable');fs.mkdirSync(drawable,{recursive:true});
+for(const ext of ['png','xml'])fs.rmSync(path.join(drawable,'anylink_avatar.'+ext),{force:true});
+if(privateCharacter){
+  for(const name of ['portrait.html','avatar.js'])fs.copyFileSync(path.join(home,'web',name),path.join(assets,name));
+  const model=path.join(root,'data/mac/companion/model');
+  if(!fs.existsSync(path.join(model,'entry.model3.json')))throw new Error('Prepare privately licensed character assets first.');
+  fs.cpSync(model,path.join(assets,'model'),{recursive:true});
+  for(const [from,name] of [['data/mac/companion/runtime/live2dcubismcore.min.js','live2dcubismcore.min.js'],['mac/companion/vendor/pixi.min.js','pixi.min.js'],['mac/companion/vendor/cubism4-colors.min.js','cubism4-colors.min.js']])fs.copyFileSync(path.join(root,from),path.join(assets,name));
+  fs.copyFileSync(path.join(root,'data/mac/branding/avatar.png'),path.join(drawable,'anylink_avatar.png'));
+}else{
+  fs.copyFileSync(path.join(home,'web/public-portrait.html'),path.join(assets,'portrait.html'));
+  fs.copyFileSync(path.join(home,'web/public-avatar.js'),path.join(assets,'public-avatar.js'));
+  fs.rmSync(path.join(assets,'avatar.js'),{force:true});
+  fs.writeFileSync(path.join(drawable,'anylink_avatar.xml'),'<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="256dp" android:height="256dp" android:viewportWidth="256" android:viewportHeight="256"><path android:fillColor="#468CAF" android:pathData="M128,16A112,112 0,1 0,128 240A112,112 0,1 0,128 16"/><path android:strokeColor="#D9F8FF" android:strokeWidth="14" android:strokeLineCap="round" android:pathData="M65,180L128,62L191,180M92,132L164,132"/></vector>');
+}
+fs.writeFileSync(path.join(assets,'character-mode.json'),JSON.stringify({private_character:privateCharacter})+'\n');
 const debug=path.join(source,'apps/android/app/src/debug/res');
 patch('apps/android/app/src/debug/res/values/strings.xml','OpenClaw Dev','大肥鱼 · AnyLink');
 const brandXml='<?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">大肥鱼 · AnyLink</string></resources>\n';

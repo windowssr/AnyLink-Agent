@@ -16,8 +16,10 @@ if(!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(agent))throw new Error('Invalid configured
 if(!process.argv.includes('--dependencies')&&!fs.existsSync(path.join(sdk,'platforms/android-37.0/android.jar')))throw new Error('Install the authorized SDK first: node android-native/scripts/install-toolchain.mjs --accept-sdk-license');
 const app=path.join(source,'apps/android'),version=JSON.parse(fs.readFileSync(path.join(home,'package.json'),'utf8')).version;
 const revision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
-fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,agent_context:agent},null,2)+'\n');
-const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=2001','-PANYLINK_AGENT_ID='+agent];
+const privateCharacter=process.env.ANYLINK_CHARACTER_MODE==='private';
+if(JSON.parse(fs.readFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/character-mode.json'))).private_character!==privateCharacter)throw new Error('Prepared character mode differs from requested distribution; prepare again');
+fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,agent_context:agent,private_character:privateCharacter},null,2)+'\n');
+const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=2002','-PANYLINK_AGENT_ID='+agent];
 if(process.argv.includes('--dependencies'))args.push('help');
 else if(process.argv.includes('--test'))args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.ui.AnyLinkPresenceTest','--tests','ai.openclaw.app.ui.AnyLinkNativeTalkTest','--tests','ai.openclaw.app.ui.AnyLinkContentEntryTest');
 else args.push(':app:assembleThirdPartyDebug');

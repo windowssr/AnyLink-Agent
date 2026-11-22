@@ -1,0 +1,18 @@
+name: anylink-local
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: anylink
+      POSTGRES_DB: anylink
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Run node scripts/init-local.mjs first}
+    ports: ["127.0.0.1:54329:5432"]
+    volumes: ["anylink-local-pg:/var/lib/postgresql/data"]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anylink -d anylink"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  anylink-local-pg: {}
