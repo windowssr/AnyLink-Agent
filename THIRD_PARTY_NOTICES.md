@@ -3,6 +3,7 @@
 AnyLink's original code and documentation are MIT licensed under [LICENSE](LICENSE). This does not relicense third-party code, characters, model files or hosted services.
 
 - **OpenClaw**: MIT, OpenClaw Foundation. The pinned Android reference and Mac runtime retain upstream notices. See [the exact Android license](android-native/licenses/OpenClaw-MIT.txt).
+- **Caddy**: optional HTTPS component, Apache-2.0; the installer retains the official archive LICENSE. Version and checksum are fixed in [the runtime lock](deploy/https/runtime-lock.json).
 - **Peekaboo**: its original MIT license is retained at [mac/control/PEEKABOO-LICENSE](mac/control/PEEKABOO-LICENSE); the Mac reference bundles the unmodified, signed upstream helper.
 - **PixiJS / pixi-live2d-display / AIRI compatibility changes**: original MIT notices are retained in [mac/companion/vendor](mac/companion/vendor).
 - **DeepSeek-chan / 大肥鱼**: original art and separation by 神宫凉子; Live2D by 霓虹猫_NeonNeko. The [model usage notice](https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md) permits attributed creative displays but prohibits unauthorized re-upload of the full model. Any illustrated local configuration is an optional third-party example, not AnyLink artwork or a bundled character. Public packages exclude its model, textures and derived avatar. Obtain resources through the author's source and follow its terms.

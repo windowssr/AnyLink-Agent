@@ -1,0 +1,33 @@
+{
+	admin 127.0.0.1:3189
+	auto_https disable_redirects
+	default_sni {$ANYLINK_PUBLIC_IP}
+	storage file_system {
+		root {$STATE_DIRECTORY}/storage
+	}
+	servers {
+		protocols h1 h2
+	}
+}
+
+https://{$ANYLINK_PUBLIC_IP} {
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+			profile shortlived
+			disable_http_challenge
+		}
+	}
+	@device_api path /edge/v1/* /model/v1/* /healthz
+	handle @device_api {
+		reverse_proxy 127.0.0.1:3180 {
+			flush_interval -1
+		}
+	}
+	handle / {
+		respond "AnyLink device endpoint. Connect using your device credential." 200
+	}
+	handle {
+		respond 404
+	}
+}

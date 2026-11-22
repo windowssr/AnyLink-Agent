@@ -32,7 +32,7 @@ AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协
 
 ## 手机如何连接
 
-在服务器管理页注册本手机，生成设备凭据 JSON。在 App 的“服务器连接”中填写 **AnyLink HTTPS 地址**并导入 JSON，验证身份后即可使用；不需要 Mac 的地址、OpenClaw Token 或配对。服务器负责调用模型，手机自己完成工具循环。远程使用需要部署者提供可达的 HTTPS 入口，USB／SSH 只用于开发调试。详见[客户端连接说明](docs/open-source/clients.md)。
+在服务器管理页注册本手机，生成设备凭据 JSON。在 App 的“服务器连接”中填写 **AnyLink HTTPS 地址**并导入 JSON，验证身份后即可使用；不需要 Mac 的地址、OpenClaw Token 或配对。服务器负责调用模型，手机自己完成工具循环。远程使用需要部署者提供可达的 HTTPS 入口，USB／SSH 只用于开发调试。详见[手机客户端连接与无域名 HTTPS](docs/open-source/phone-connection.md)和[客户端说明](docs/open-source/clients.md)。
 
 ## 展示
 

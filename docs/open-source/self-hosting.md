@@ -32,3 +32,7 @@ This service supports one owner. Same-owner device memory endpoints are not a te
 `/healthz` is process liveness. `/readyz` checks database reachability and reports whether optional provider credentials are configured; it does not spend a model request to verify upstream availability. No public hosted AnyLink endpoint or shared credentials are supplied by this repository.
 
 Integration tests refuse any database name except `anylink_test` and rebuild that test schema. Use a disposable container, not production PostgreSQL. Never use global Docker prune/reset commands to update this project.
+
+## Phone access without a domain
+
+The optional [device HTTPS component](phone-connection.md) uses a fixed official Caddy release, a public IPv4 certificate and automatic renewal. It binds an unused TCP443 independently of existing Nginx, forwards only device/model APIs, and leaves the owner console on its SSH-only origin. It needs a reachable, fixed public IPv4 address; it does not modify cloud-provider firewall rules.
