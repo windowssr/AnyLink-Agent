@@ -38,10 +38,11 @@ internal fun UnifiedChatShellScreen(
   val draft by viewModel.chatDraft.collectAsState()
   val shares by viewModel.chatShareDrafts.collectAsState()
   val assistantRequest by viewModel.pendingAssistantAutoSend.collectAsState()
+  val questions by viewModel.chatQuestions.collectAsState()
   // These explicit entry points need the original composer to stage content for
   // review. ChatScreen retains ownership of importing, consuming and sending it.
-  LaunchedEffect(draft, shares, assistantRequest) {
-    if (draft != null || shares.isNotEmpty() || assistantRequest != null) records = true
+  LaunchedEffect(draft, shares, assistantRequest, questions) {
+    if (draft != null || shares.isNotEmpty() || assistantRequest != null || questions.isNotEmpty()) records = true
   }
   // Our Gateway uses stt-tts: Android speech recognition + the same DeepSeek
   // agent + Gateway speech. It does not need a realtime speech-model account.
