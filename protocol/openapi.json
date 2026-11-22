@@ -59,6 +59,50 @@
         }
       }
     },
+    "/edge/v1/device/install-id": {
+      "post": {
+        "summary": "Adopt an install_id for the credential device so join connect keeps its identity and memories",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallId"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
     "/edge/v1/link/protocol": {
       "get": {
         "summary": "Negotiate AnyLink protocol 2.0 and delivery semantics",
@@ -1349,6 +1393,19 @@
         "required": [
           "device",
           "agent"
+        ],
+        "additionalProperties": false
+      },
+      "InstallId": {
+        "type": "object",
+        "properties": {
+          "install_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+          }
+        },
+        "required": [
+          "install_id"
         ],
         "additionalProperties": false
       },

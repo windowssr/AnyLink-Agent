@@ -32,7 +32,7 @@ Public packages **exclude the DeepSeek-chan model, textures, derived avatar and 
 
 ## Connect a phone
 
-Register an Android device in your server's owner console and obtain its one-time credential JSON. In the app's **Server connection** panel, enter your **AnyLink HTTPS URL** and import that JSON. No Mac address, OpenClaw token or pairing is needed. The server provides model inference; the phone runs its own tool loop. A reachable HTTPS endpoint is an operator deployment prerequisite; USB/SSH forwarding is only a development option. See [phone connection and domainless HTTPS](docs/open-source/phone-connection.md) and [client setup](docs/open-source/clients.md).
+In the app's **Server connection** panel, enter your **AnyLink HTTPS URL** and the owner **join key** (optionally a device name). From 0.4.0-preview.1 the phone joins as the `android-dafeiyu` agent; the join key is used only for that request and never stored. A legacy one-time credential JSON can still be imported for older setups, and a stored legacy credential adopts the new install ID so device memories carry over. No Mac address, OpenClaw token or pairing is needed. The server provides model inference; the phone runs its own tool loop. A reachable HTTPS endpoint is an operator deployment prerequisite; USB/SSH forwarding is only a development option. See [phone connection and domainless HTTPS](docs/open-source/phone-connection.md) and [client setup](docs/open-source/clients.md).
 
 ## Preview
 

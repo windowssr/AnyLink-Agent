@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import {z} from 'zod';
 import {capabilitiesSchema,taskCreateSchema,taskResultSchema,taskSchema} from '../server/link.ts';
 import {connectSchema} from '../server/edge-auth.ts';
+const installIdSchema=z.object({install_id:z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)}).strict();
 import {memorySchema,memoryPatchSchema,memorySearchSchema,deviceSchema} from '../server/store.ts';
 import {modelInputSchema} from '../server/model-proxy.ts';
-const schemas={Connect:connectSchema,Capabilities:capabilitiesSchema,TaskInput:taskCreateSchema,TaskResult:taskResultSchema,Task:taskSchema,MemoryInput:memorySchema,MemoryPatch:memoryPatchSchema,MemorySearch:memorySearchSchema,ChatCompletions:modelInputSchema,Device:deviceSchema};
+const schemas={Connect:connectSchema,InstallId:installIdSchema,Capabilities:capabilitiesSchema,TaskInput:taskCreateSchema,TaskResult:taskResultSchema,Task:taskSchema,MemoryInput:memorySchema,MemoryPatch:memoryPatchSchema,MemorySearch:memorySearchSchema,ChatCompletions:modelInputSchema,Device:deviceSchema};
 const paths={};
 function route(url,method,{schema,owner=false,key=false,summary,response,join=false}={}){
   const params=[];
@@ -14,6 +15,7 @@ function route(url,method,{schema,owner=false,key=false,summary,response,join=fa
   paths[url]??={};paths[url][method]={summary,security:[{[join?'joinKey':owner?'ownerSession':'deviceBearer']:[]}],parameters:params,...(schema?{requestBody:{required:true,content:{'application/json':{schema:{$ref:'#/components/schemas/'+schema}}}}}:{}),responses:{'200':{description:'Successful operation',...(response?{content:{'application/json':{schema:{$ref:'#/components/schemas/'+response}}}}:{})},'201':{description:'Created; one-time secret when issuing credentials'},'400':{description:'Invalid input'},'401':{description:'Invalid or revoked credential'},'403':{description:'Not permitted for this identity'},'404':{description:'Not visible to this agent'},'409':{description:'Revision, idempotency, routing or terminal-state conflict'},...(join?{'503':{description:'Join disabled'}}:{})}};
 }
 route('/edge/v1/connect','post',{schema:'Connect',join:true,summary:'Join with the owner key: upsert install device and agent, rotate its credential (201)'});
+route('/edge/v1/device/install-id','post',{schema:'InstallId',summary:'Adopt an install_id for the credential device so join connect keeps its identity and memories'});
 for(const name of ['protocol','directory','peers','capabilities','tasks','tasks/{id}','tasks/claim','tasks/{id}/result','tasks/{id}/cancel']){
  const prefix='/edge/v1/link/';
  if(name==='protocol')route(prefix+name,'get',{summary:'Negotiate AnyLink protocol 2.0 and delivery semantics'});

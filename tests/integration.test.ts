@@ -134,6 +134,24 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
       const third=(await join()).json();assert.equal(third.device_id,first.device_id);assert.notEqual(third.token,first.token);
       assert.equal((await edge('GET','/edge/v1/identity',undefined,randomUUID(),third.token)).statusCode,200);
     });
+    await t.test('legacy device adopts an install_id so join connect keeps its memories',async()=>{
+      const install='android-adopt-0001';
+      const androidCredential=(await owner('POST',`/v1/devices/${android.id}/credential`,{})).json().token;
+      const adopt=(credential:string,body:unknown)=>instance.app.inject({method:'POST',url:'/edge/v1/device/install-id',headers:{authorization:`Bearer ${credential}`,'content-type':'application/json','idempotency-key':randomUUID()},payload:body});
+      assert.equal((await adopt(androidCredential,{install_id:'short'})).statusCode,400);
+      const first=await adopt(androidCredential,{install_id:install});assert.equal(first.statusCode,200);assert.equal(first.json().device_id,android.id);
+      assert.equal((await adopt(androidCredential,{install_id:install})).statusCode,200,'repeat adopt is a no-op');
+      assert.equal((await adopt(androidCredential,{install_id:'android-adopt-0002'})).statusCode,409);
+      assert.equal((await adopt(androidCredential,{install_id:'android-adopt-0002'})).json().error.code,'INSTALL_ID_ALREADY_SET');
+      const join=await instance.app.inject({method:'POST',url:'/edge/v1/connect',headers:{authorization:`Bearer ${joinKey}`},payload:{device:{install_id:install,name:'Adopted Phone',platform:'android'},agent:{key:'phone-agent',name:'Phone'}}});
+      assert.equal(join.statusCode,201);assert.equal(join.json().device_id,android.id,'connect lands on the adopted device');
+      const third=(await owner('POST','/v1/devices',{name:'Third fixture',platform:'other'})).json();
+      const thirdCredential=(await owner('POST',`/v1/devices/${third.id}/credential`,{})).json().token;
+      assert.equal((await adopt(thirdCredential,{install_id:install})).statusCode,409);
+      assert.equal((await adopt(thirdCredential,{install_id:install})).json().error.code,'INSTALL_ID_IN_USE');
+      const context=(await edge('GET','/edge/v1/context',undefined,randomUUID(),join.json().token)).json();
+      assert.ok(context.device.some((m:any)=>m.content.includes('Android-path')),'device-scope memories follow the adopted device');
+    });
     await t.test('service restart retains facts and quarantines uncertain proxy requests',async()=>{
       const credential=(await instance.db.query('SELECT id FROM edge_credentials LIMIT 1')).rows[0].id,id=randomUUID();
       await instance.db.query("INSERT INTO model_requests(id,credential_id,device_id,model,state) VALUES($1,$2,$3,'deepseek-flash','submitted')",[id,credential,device.id]);

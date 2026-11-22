@@ -15,7 +15,13 @@ if(values['credential-file']){
 }else{
   const joinKey=fs.readFileSync(values['join-key-file'],'utf8').trim();
   if(joinKey.length<24)throw new Error('Expected an owner join key of at least 24 characters');
-  const installId=existing?.install_id??`mac-${randomUUID()}`;
+  let installId=existing?.install_id??null;
+  if(!installId&&existing?.token){
+    installId=`mac-${randomUUID()}`;
+    const legacy=new AnyLinkClient({baseUrl:values.server,token:existing.token});
+    try{await legacy.adoptInstallId(installId);}catch(e){if(e.code==='INSTALL_ID_ALREADY_SET')throw new Error('The existing device already uses a different install_id; refusing to create a new device');throw e;}
+  }
+  installId??=`mac-${randomUUID()}`;
   if(!/^[A-Za-z0-9._:-]{8,128}$/.test(installId))throw new Error('Stored install_id is not a valid connect identifier');
   const device={name:(values.name??'Mac').slice(0,80),platform:'macos'};
   const openclaw=await AnyLinkClient.connect({baseUrl:values.server,joinKey,installId,device,agent:{key:'mac-openclaw',name:'Mac 大肥鱼',kind:'openclaw'}});

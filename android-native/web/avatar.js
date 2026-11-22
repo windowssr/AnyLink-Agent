@@ -2,7 +2,7 @@
    model access or Android execution bridge is exposed to the character. */
 (() => {
   const phases = new Set(['idle', 'listening', 'thinking', 'working', 'speaking', 'attention']);
-  const emotions = new Set(['neutral', 'happy', 'curious', 'comfort', 'apologetic', 'excited']);
+  const emotions = new Set(['neutral', 'happy', 'curious', 'comfort', 'apologetic', 'excited', 'shy']);
   let app, model, ready = false, paused = false, expressionKey = '', gestureSequence, actionEpoch = 0;
   let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false};
   let touch = 0, lastFrame = performance.now();
@@ -39,7 +39,7 @@
     const key = state.emotion + ':' + state.phase;
     if (key !== expressionKey) {
       expressionKey = key; model.internalModel.motionManager.expressionManager?.resetExpression();
-      const expression = {happy: 'blush', excited: 'smile', apologetic: 'concerned'}[state.emotion] || (state.phase === 'attention' ? 'concerned' : undefined);
+      const expression = {happy: 'blush', shy: 'blush', excited: 'smile', apologetic: 'concerned'}[state.emotion] || (state.phase === 'attention' ? 'concerned' : undefined);
       if (expression) model.expression(expression);
     }
     if (state.sequence != null && state.sequence !== gestureSequence) { gestureSequence = state.sequence; gesture(state.gesture); }

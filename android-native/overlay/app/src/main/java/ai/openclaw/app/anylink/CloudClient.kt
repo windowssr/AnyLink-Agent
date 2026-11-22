@@ -18,18 +18,55 @@ internal fun JsonObject.text(key: String): String = (get(key) as? JsonPrimitive)
 internal fun jsonObject(vararg values: Pair<String, JsonElement>): JsonObject = JsonObject(values.toMap())
 internal fun str(value: String): JsonPrimitive = JsonPrimitive(value)
 internal class LinkFailure(val code: String, message: String, val unknown: Boolean = false) : IOException(message)
-internal data class CloudConnection(val server: String, val token: String, val deviceId: String) {
+internal data class CloudConnection(val server: String, val token: String, val deviceId: String, val agentId: String = "", val installId: String = "") {
   companion object {
-    fun parse(server: String, credential: String): CloudConnection {
-      val url = server.trim().toHttpUrl()
+    private fun serverUrl(server: String) = server.trim().toHttpUrl().also { url ->
       require(url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null && url.encodedPath == "/") { "请填写服务器根地址，不含路径、账号或查询参数" }
       require(url.isHttps || url.host in setOf("localhost", "127.0.0.1", "::1")) { "远程连接需要 HTTPS；本机调试可用回环隧道" }
+    }
+    private val joinHttp = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
+      .retryOnConnectionFailure(false).connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(35, TimeUnit.SECONDS).build()
+    /** Join with the owner key: upserts this install's device and android-dafeiyu agent, returns a fresh credential. The join key is never persisted. */
+    suspend fun join(server: String, joinKey: String, installId: String, deviceName: String): CloudConnection = withContext(Dispatchers.IO) {
+      require(joinKey.length >= 24 && !joinKey.any { it == '\n' || it == '\r' }) { "请填写服务器签发的加入密钥" }
+      require(Regex("android-[0-9a-fA-F-]{36}").matches(installId)) { "安装标识无效" }
+      val base = serverUrl(server).toString().trimEnd('/')
+      val body = buildJsonObject {
+        put("device", jsonObject("install_id" to str(installId), "name" to str(deviceName.trim().ifBlank { "Android" }.take(80)), "platform" to str("android")))
+        put("agent", jsonObject("key" to str("android-dafeiyu"), "name" to str("手机大肥鱼"), "kind" to str("device-agent")))
+      }
+      val request = Request.Builder().url("$base/edge/v1/connect").header("Authorization", "Bearer $joinKey")
+        .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+      joinHttp.newCall(request).execute().use { response ->
+        val raw = response.body.string()
+        val data = runCatching { linkJson.parseToJsonElement(raw).jsonObject }.getOrNull()
+        if (response.code != 201 || data == null) {
+          val code = (data?.get("error") as? JsonObject)?.text("code") ?: "HTTP_${response.code}"
+          throw LinkFailure(code, "加入失败：$code", response.code >= 500)
+        }
+        val token = data.text("token")
+        require(Regex("ak_[A-Za-z0-9_-]{30,100}").matches(token)) { "服务器返回的凭据格式无效" }
+        UUID.fromString(data.text("device_id")); UUID.fromString(data.text("agent_id"))
+        CloudConnection(base, token, data.text("device_id"), data.text("agent_id"), installId)
+      }
+    }
+    /** Adopt an install_id onto the credential's existing device so join connect keeps its memories. Returns false on auth failure (caller proceeds with a fresh device). */
+    suspend fun adoptInstallId(transport: LinkTransport, installId: String): Boolean {
+      return try { transport.request("POST", "/edge/v1/device/install-id", jsonObject("install_id" to str(installId))); true }
+      catch (e: LinkFailure) { if (e.code == "EDGE_AUTH_REQUIRED" || e.code == "HTTP_401") false else throw e }
+    }
+    fun parse(server: String, credential: String): CloudConnection {
+      val url = serverUrl(server)
       val value = linkJson.parseToJsonElement(credential).jsonObject
       val token = value.text("token")
       require(Regex("ak_[A-Za-z0-9_-]{30,100}").matches(token)) { "请导入服务器签发的设备凭据 JSON" }
       val device = value.text("device_id")
       UUID.fromString(device)
-      return CloudConnection(url.toString().trimEnd('/'), token, device)
+      val agent = value.text("agent_id")
+      if (agent.isNotBlank()) UUID.fromString(agent)
+      val install = value.text("install_id")
+      if (install.isNotBlank()) require(Regex("android-[0-9a-fA-F-]{36}").matches(install)) { "安装标识无效" }
+      return CloudConnection(url.toString().trimEnd('/'), token, device, agent, install)
     }
   }
 }

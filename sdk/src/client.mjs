@@ -56,6 +56,8 @@ export class AnyLinkClient {
   peers(options){return this.#request('GET','edge/v1/link/peers',undefined,options);}
   directory(options){return this.#request('GET','edge/v1/link/directory',undefined,options);}
   persona(options){return this.#request('GET','edge/v1/persona',undefined,options);}
+  /** Adopt an install_id for this credential's device so join-key connect lands on the same device. Naturally idempotent; no Idempotency-Key. */
+  adoptInstallId(installId,options={}){return this.#request('POST','edge/v1/device/install-id',{install_id:installId},{idempotencyKey:false,...options});}
   identity(options){return this.#request('GET','edge/v1/identity',undefined,options);}
   context(options){return this.#request('GET','edge/v1/context',undefined,options);}
   searchMemories(query={},options){return this.#request('POST','edge/v1/memories/search',query,{...options,idempotencyKey:false});}

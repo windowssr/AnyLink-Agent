@@ -32,7 +32,7 @@ AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协
 
 ## 手机如何连接
 
-在服务器管理页注册本手机，生成设备凭据 JSON。在 App 的“服务器连接”中填写 **AnyLink HTTPS 地址**并导入 JSON，验证身份后即可使用；不需要 Mac 的地址、OpenClaw Token 或配对。服务器负责调用模型，手机自己完成工具循环。远程使用需要部署者提供可达的 HTTPS 入口，USB／SSH 只用于开发调试。详见[手机客户端连接与无域名 HTTPS](docs/open-source/phone-connection.md)和[客户端说明](docs/open-source/clients.md)。
+在 App 的“服务器连接”中填写 **AnyLink HTTPS 地址**和主人签发的**加入密钥**（可选填设备名称）。从 0.4.0-preview.1 起手机以 `android-dafeiyu` Agent 身份接入，加入密钥只用于本次请求、不落盘。旧版一次性设备凭据 JSON 仍可导入，存量旧凭据会先认领 install_id，使新 Agent 保留同一设备与设备级记忆。不需要 Mac 的地址、OpenClaw Token 或配对。服务器负责调用模型，手机自己完成工具循环。远程使用需要部署者提供可达的 HTTPS 入口，USB／SSH 只用于开发调试。详见[手机客户端连接与无域名 HTTPS](docs/open-source/phone-connection.md)和[客户端说明](docs/open-source/clients.md)。
 
 ## 展示
 

@@ -40,7 +40,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewModelScope
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -55,16 +57,44 @@ internal class AnyLinkViewModel(application: Application) : AndroidViewModel(app
   val error = MutableStateFlow("")
   val connecting = MutableStateFlow(false)
   val tasks = MutableStateFlow<List<JsonObject>>(emptyList())
+  val companionSay = MutableStateFlow<Pair<String, String>?>(null)
   private var cloud: CloudClient? = null
   private var turn: Job? = null
+  private var workerJob: Job? = null
   init {
-    try { profiles.load()?.let(::activate) } catch (_: Exception) { error.value = "无法解密原设备凭据，请重新导入；原会话和便笺保留。" }
+    try { profiles.load()?.let(::activate) } catch (_: Exception) { error.value = "无法解密原设备凭据，请重新连接；原会话和便笺保留。" }
   }
   private fun activate(value: CloudConnection) {
     connection.value = value
     val transport = CloudClient(value); cloud = transport
-    agent.value = DeviceAgent(value, transport, SqlAgentLedger(getApplication(), value)) {
+    agent.value = DeviceAgent(value, transport, SqlAgentLedger(getApplication(), value), {
       jsonObject("platform" to str("android"), "manufacturer" to str(Build.MANUFACTURER), "model" to str(Build.MODEL), "android_version" to str(Build.VERSION.RELEASE), "device_id" to str(value.deviceId), "runtime" to str("on-device-agent"), "mac_required" to JsonPrimitive(false))
+    }, PersonaProvider { readPersona() })
+  }
+  fun startWorker() { val value = connection.value ?: return; val transport = cloud ?: return; if (workerJob?.isActive == true) return; workerJob = viewModelScope.launch { workerLoop(transport, value) } }
+  fun stopWorker() { workerJob?.cancel(); workerJob = null }
+  private fun readPersona(): Pair<String, String> {
+    val assets = getApplication<Application>().assets
+    fun read(name: String) = runCatching { assets.open("anylink/$name").bufferedReader().use { it.readText() } }.getOrDefault("")
+    return read("persona-shared.md") to read("persona-android.md")
+  }
+  fun connectJoin(server: String, joinKey: String, deviceName: String, finished: () -> Unit) {
+    if (connecting.value || agent.value?.state?.value?.busy == true) return
+    connecting.value = true; error.value = ""
+    viewModelScope.launch {
+      try {
+        val install = profiles.installId()?.takeIf { Regex("android-[0-9a-fA-F-]{36}").matches(it) } ?: "android-${UUID.randomUUID()}"
+        // A stored legacy credential for this server keeps its device and memories: adopt the install_id first.
+        val legacy = try { profiles.load() } catch (_: Exception) { null }
+        if (legacy != null && legacy.installId.isBlank() && legacy.server == server.trim().trimEnd('/')) {
+          val adopted = CloudConnection.adoptInstallId(CloudClient(legacy), install)
+          if (!adopted) error.value = "旧设备凭据已失效，已按新设备接入；原设备记忆保留在服务器上。"
+        }
+        val value = CloudConnection.join(server, joinKey, install, deviceName)
+        val candidate = DeviceAgent(value, CloudClient(value), SqlAgentLedger(getApplication(), value), { JsonObject(emptyMap()) })
+        candidate.verify(); profiles.save(value); activate(value); tasks.value = emptyList(); finished()
+      } catch (failure: Exception) { error.value = (failure as? LinkFailure)?.message ?: "加入失败。检查 HTTPS 地址与加入密钥。" }
+      finally { connecting.value = false }
     }
   }
   fun connect(server: String, credential: String, finished: () -> Unit) {
@@ -73,12 +103,21 @@ internal class AnyLinkViewModel(application: Application) : AndroidViewModel(app
     viewModelScope.launch {
       try {
         val value = CloudConnection.parse(server, credential)
-        val candidate = DeviceAgent(value, CloudClient(value), SqlAgentLedger(getApplication(), value)) { JsonObject(emptyMap()) }
+        val candidate = DeviceAgent(value, CloudClient(value), SqlAgentLedger(getApplication(), value), { JsonObject(emptyMap()) })
         candidate.verify(); profiles.save(value); activate(value); tasks.value = emptyList(); finished()
       } catch (failure: Exception) { error.value = (failure as? LinkFailure)?.message ?: "连接未通过。检查 HTTPS 地址及手机自己的设备凭据 JSON。" }
       finally { connecting.value = false }
     }
   }
+  /** Foreground worker: advertise phone capabilities, claim routed tasks, journal before executing, resend results with stable keys. */
+  private suspend fun workerLoop(transport: CloudClient, value: CloudConnection) {
+    val ledger = SqlAgentLedger(getApplication(), value)
+    linkWorkerLoop(transport, ledger, { infoJson(value) }, { text, source ->
+      companionSay.value = text to source
+      agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
+    })
+  }
+  private fun infoJson(value: CloudConnection) = jsonObject("platform" to str("android"), "manufacturer" to str(Build.MANUFACTURER), "model" to str(Build.MODEL), "android_version" to str(Build.VERSION.RELEASE), "device_id" to str(value.deviceId), "runtime" to str("on-device-agent"), "mac_required" to JsonPrimitive(false))
   fun send(text: String) {
     val active = agent.value ?: return
     if (active.state.value.busy || text.isBlank()) return
@@ -91,11 +130,67 @@ internal class AnyLinkViewModel(application: Application) : AndroidViewModel(app
     // A separate read client must not replace the in-flight model cancellation handle.
     val value = connection.value ?: return
     try {
-      val result = CloudClient(value).request("GET", "/edge/v1/link/tasks")["items"]!!.jsonArray.map { it.jsonObject }
-      if (connection.value == value) tasks.value = result
+      val reader = CloudClient(value)
+      val merged = mutableListOf<JsonObject>()
+      for (role in listOf("source", "target")) {
+        val items = reader.request("GET", "/edge/v1/link/tasks?role=$role")["items"]!!.jsonArray.map { it.jsonObject }
+        merged += items.map { JsonObject(it + mapOf("_role" to str(role))) }
+      }
+      if (connection.value == value) tasks.value = merged
     } catch (_: Exception) { /* Keep the last confirmed task snapshot. */ }
   }
   override fun onCleared() { stop(); super.onCleared() }
+}
+
+/** Foreground claim loop. Journals `started` before executing; a started entry without a result reports unknown instead of re-executing; results re-send with the stable `result:<taskId>` key. */
+internal suspend fun linkWorkerLoop(transport: LinkTransport, ledger: AgentLedger, info: () -> JsonObject, say: suspend (String, String) -> Unit) {
+  suspend fun sendResult(taskId: String) {
+    val pending = ledger.workerTask(taskId)
+    if (pending?.text("state") == "resulted" && pending["sent"]?.jsonPrimitive?.booleanOrNull != true) {
+      try { transport.request("POST", "/edge/v1/link/tasks/$taskId/result", pending["result"]!!.jsonObject, "result:$taskId"); ledger.workerTask(taskId, JsonObject(pending + mapOf("sent" to JsonPrimitive(true)))) } catch (_: Exception) { }
+    }
+  }
+  fun interrupted(taskId: String) = jsonObject("task_id" to str(taskId), "state" to str("resulted"), "result" to jsonObject("state" to str("unknown"), "error" to jsonObject("code" to str("EXECUTION_INTERRUPTED"), "message" to str("上次执行被中断，结果未知，没有自动重跑"))), "sent" to JsonPrimitive(false))
+  val capabilities = jsonObject("capabilities" to JsonArray(listOf(
+    jsonObject("name" to str("phone.status"), "description" to str("读取这台手机的基础状态：型号、系统版本、电量等")),
+    jsonObject("name" to str("companion.say"), "description" to str("让手机上的大肥鱼用语音说一句话并显示在屏幕上，text 不超过 500 字")))))
+  try { transport.request("POST", "/edge/v1/link/capabilities", capabilities, "caps:${UUID.randomUUID()}") } catch (_: Exception) { }
+  while (true) {
+    try {
+      // Resend journaled results whose POST never confirmed; stable key makes replay safe.
+      for (record in ledger.workerTasks()) {
+        val taskId = record.text("task_id")
+        if (record.text("state") == "started") ledger.workerTask(taskId, interrupted(taskId))
+        sendResult(taskId)
+      }
+      val claim = transport.request("POST", "/edge/v1/link/tasks/claim", JsonObject(emptyMap()), "claim:${UUID.randomUUID()}")
+      val task = claim["task"]?.jsonObject ?: continue
+      val taskId = task.text("id")
+      val existing = ledger.workerTask(taskId)
+      if (existing?.text("state") == "started") { ledger.workerTask(taskId, interrupted(taskId)); sendResult(taskId); continue }
+      if (existing != null) { sendResult(taskId); continue }
+      ledger.workerTask(taskId, jsonObject("task_id" to str(taskId), "state" to str("started")))
+      val result = try { executeWorkerTask(task, info, say) } catch (failure: Exception) {
+        jsonObject("state" to str("failed"), "error" to jsonObject("code" to str((failure as? LinkFailure)?.code ?: "EXECUTION_FAILED"), "message" to str(failure.message.orEmpty().take(500))))
+      }
+      ledger.workerTask(taskId, jsonObject("task_id" to str(taskId), "state" to str("resulted"), "result" to result, "sent" to JsonPrimitive(false)))
+      sendResult(taskId)
+    } catch (error: CancellationException) { throw error } catch (_: Exception) { }
+    delay(3000)
+  }
+}
+private suspend fun executeWorkerTask(task: JsonObject, info: () -> JsonObject, say: suspend (String, String) -> Unit): JsonObject {
+  val input = task["input"]?.jsonObject ?: JsonObject(emptyMap())
+  return when (task.text("capability")) {
+    "phone.status" -> jsonObject("state" to str("succeeded"), "output" to info())
+    "companion.say" -> {
+      val text = input.text("text")
+      if (text.isBlank() || text.length > 500) throw LinkFailure("BAD_TOOL_INPUT", "companion.say 需要 1 到 500 字的 text")
+      say(text, task["source_device_id"]?.jsonPrimitive?.contentOrNull ?: "其他设备")
+      jsonObject("state" to str("succeeded"), "output" to jsonObject("spoken" to JsonPrimitive(true), "note" to str("已排队到手机语音播报与屏幕展示")))
+    }
+    else -> jsonObject("state" to str("failed"), "error" to jsonObject("code" to str("CAPABILITY_UNAVAILABLE"), "message" to str("这台手机没有能力 ${task.text("capability")}")))
+  }
 }
 
 /** Product launcher deliberately never creates NodeRuntime or a Gateway connection. */
@@ -121,7 +216,15 @@ class AnyLinkActivity : ComponentActivity() {
       override fun onDone(utteranceId: String?) { runOnUiThread { speaking.value = false } }
       @Deprecated("Required platform callback") override fun onError(utteranceId: String?) { runOnUiThread { speaking.value = false; voiceNotice.value = "播报失败，请查看文字结果。" } }
     })
-    lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { model.refreshTasks(); delay(4000) } } }
+    lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { model.startWorker(); while (true) { model.refreshTasks(); delay(4000) } } }
+    lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
+      model.companionSay.collect { incoming ->
+        val (text, source) = incoming ?: return@collect
+        voiceNotice.value = "来自 $source：$text"
+        if (speechReady) speech?.speak(text, TextToSpeech.QUEUE_ADD, null, "companion-${UUID.randomUUID()}")
+        model.companionSay.value = null
+      }
+    } }
     setContent {
       MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF468CAF), background = Color(0xFFF0F8FC))) {
         val agent by model.agent.collectAsState()
@@ -143,7 +246,7 @@ class AnyLinkActivity : ComponentActivity() {
           showConfiguration = configuration || profile == null,
           openConfiguration = { configuration = true },
           closeConfiguration = { configuration = false },
-          connect = { server, credential -> model.connect(server, credential) { configuration = false } },
+          connect = { server, joinKey, credential, deviceName -> if (joinKey.isNotBlank()) model.connectJoin(server, joinKey, deviceName) { configuration = false } else model.connect(server, credential) { configuration = false } },
           send = { text -> interrupt(); model.send(text) },
           stop = { interrupt() },
           listen = { interrupt(); if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen() else requestMic.launch(Manifest.permission.RECORD_AUDIO) },
@@ -175,7 +278,7 @@ class AnyLinkActivity : ComponentActivity() {
     })
     recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN").putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true).putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true))
   }
-  override fun onStop() { recognizer?.cancel(); listening.value = false; speech?.stop(); speaking.value = false; super.onStop() }
+  override fun onStop() { recognizer?.cancel(); listening.value = false; speech?.stop(); speaking.value = false; model.stopWorker(); super.onStop() }
   override fun onDestroy() { recognizer?.destroy(); speech?.shutdown(); super.onDestroy() }
 }
 
@@ -184,7 +287,7 @@ class AnyLinkActivity : ComponentActivity() {
 internal fun CloudCompanionScreen(
   state: LocalAgentState, server: String?, error: String, voiceNotice: String, connecting: Boolean,
   listening: Boolean, speaking: Boolean, tasks: List<JsonObject>, showConfiguration: Boolean,
-  openConfiguration: () -> Unit, closeConfiguration: () -> Unit, connect: (String, String) -> Unit,
+  openConfiguration: () -> Unit, closeConfiguration: () -> Unit, connect: (String, String, String, String) -> Unit,
   send: (String) -> Unit, stop: () -> Unit, listen: () -> Unit, newConversation: () -> Unit,
 ) {
   val context = LocalContext.current
@@ -200,7 +303,10 @@ internal fun CloudCompanionScreen(
   var draft by remember { mutableStateOf("") }
   var records by remember { mutableStateOf(false) }
   var address by remember(server) { mutableStateOf(server ?: "") }
+  var joinKey by remember { mutableStateOf("") }
+  var deviceName by remember { mutableStateOf("") }
   var credential by remember { mutableStateOf("") }
+  var legacyImport by remember { mutableStateOf(false) }
   val phase = when { speaking -> AnyLinkPhase.Speaking; listening -> AnyLinkPhase.Listening; state.phase == "working" -> AnyLinkPhase.Working; state.busy -> AnyLinkPhase.Thinking; state.notice.isNotEmpty() -> AnyLinkPhase.Attention; else -> AnyLinkPhase.Idle }
   Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF5FBFE), Color(0xFFD5ECF7))))) {
     AnyLinkPortrait(phase, state.emotion, state.gesture, state.sequence, Modifier.fillMaxSize())
@@ -226,11 +332,14 @@ internal fun CloudCompanionScreen(
   if (showConfiguration) ModalBottomSheet(onDismissRequest = closeConfiguration, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
       Text("连接 AnyLink 服务器", style = MaterialTheme.typography.titleLarge)
-      Text("为本手机注册独立的 Android 逻辑设备，导入其一次性凭据。这里不连接 Mac 或 OpenClaw Gateway。")
+      Text("填写服务器地址与主人签发的加入密钥即可接入；也可以导入旧版设备凭据 JSON。本机 Agent 不依赖 Mac 或 OpenClaw Gateway。")
       OutlinedTextField(address, { address = it }, label = { Text("HTTPS 服务器地址") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-      OutlinedTextField(credential, { credential = it }, label = { Text("设备凭据 JSON") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), maxLines = 4)
+      OutlinedTextField(joinKey, { joinKey = it }, label = { Text("加入密钥") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
+      OutlinedTextField(deviceName, { deviceName = it }, label = { Text("设备名称（可选，默认手机型号）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+      TextButton(onClick = { legacyImport = !legacyImport }) { Text(if (legacyImport) "收起旧版凭据导入" else "导入旧版设备凭据 JSON") }
+      if (legacyImport) OutlinedTextField(credential, { credential = it }, label = { Text("设备凭据 JSON") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), maxLines = 4)
       if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-      Button(onClick = { connect(address, credential); credential = "" }, enabled = !connecting && credential.isNotBlank()) { Text(if (connecting) "验证身份中…" else "验证并连接") }
+      Button(onClick = { if (legacyImport) connect(address, "", credential, deviceName) else connect(address, joinKey, "", deviceName); joinKey = ""; credential = "" }, enabled = !connecting && (if (legacyImport) credential.isNotBlank() else joinKey.isNotBlank())) { Text(if (connecting) "验证身份中…" else "验证并连接") }
       Text("开发时可用 USB 反向端口转发连接回环服务；正式远程使用部署者的 HTTPS 地址。凭据加密保存在手机，不包含模型 API Key。", style = MaterialTheme.typography.bodySmall)
       TextButton(onClick = { showLicenses = true }) { Text("开源许可") }
       Spacer(Modifier.height(20.dp))
@@ -241,7 +350,7 @@ internal fun CloudCompanionScreen(
       Text("当前手机的任务与记录", style = MaterialTheme.typography.titleLarge)
       TextButton(onClick = { newConversation(); records = false }, enabled = !state.busy) { Text("开启新对话，共同记忆保留") }
       for (task in tasks) {
-        Text((if (task.text("capability") == "files.search") "搜索电脑文件" else "跨设备任务") + " · " + statusLabel(task.text("state")), style = MaterialTheme.typography.titleMedium)
+        Text((if (task.text("_role") == "target") "发给这台手机的任务 · " else "我发出的任务 · ") + (when (task.text("capability")) { "files.search" -> "搜索电脑文件"; "phone.status" -> "读取手机状态"; "companion.say" -> "让大肥鱼说话"; else -> "跨设备任务" }) + " · " + statusLabel(task.text("state")), style = MaterialTheme.typography.titleMedium)
         Text(task.text("id"), style = MaterialTheme.typography.labelSmall)
         TaskReceipt(task)
         HorizontalDivider()
@@ -281,7 +390,7 @@ private fun toolLabel(name: String): String = when (name) {
   "note_read" -> "读取便笺"
   "memory_search" -> "查找共同记忆"
   "memory_save", "memory_update", "memory_delete" -> "更新共同记忆"
-  "link_peers" -> "查找已授权设备"
+  "link_directory" -> "查看在线设备"
   "task_create" -> "安排跨设备任务"
   "task_status" -> "查看任务进展"
   "task_cancel" -> "停止任务"

@@ -12,6 +12,12 @@ test('split SSE preserves tool deltas and refuses incomplete streams',async()=>{
   const values=[];for await(const v of client.streamChatCompletions({}))values.push(v);assert.equal(values[0].choices[0].delta.tool_calls[0].id,'test');
   wire='data: {"choices":[]}\n\n';await assert.rejects(async()=>{for await(const _ of client.streamChatCompletions({})){}},e=>e.code==='STREAM_INCOMPLETE'&&e.submissionUnknown);
 });
+test('adoptInstallId posts the install id without an idempotency key',async()=>{
+  let seen;const client=new AnyLinkClient({baseUrl:'https://example.test',token:'ak_fixture',fetch:async(url,options)=>{seen={url:String(url),options,body:JSON.parse(options.body)};return Response.json({device_id:'d',install_id:'android-x'});}});
+  const result=await client.adoptInstallId('android-x');
+  assert.equal(result.install_id,'android-x');assert.equal(seen.url,'https://example.test/edge/v1/device/install-id');
+  assert.equal(seen.body.install_id,'android-x');assert.equal(seen.options.headers['Idempotency-Key'],undefined);
+});
 test('credentials are absent from errors and cannot follow redirects',async()=>{
   assert.throws(()=>new AnyLinkClient({baseUrl:'http://remote.example',token:'private-token'}),/HTTPS/);
   const client=new AnyLinkClient({baseUrl:'https://example.test',token:'private-token',fetch:async(_u,o)=>{assert.equal(o.redirect,'error');return Response.json({error:{code:'DENIED',message:'Denied'}},{status:403});}});

@@ -39,6 +39,6 @@ if(!testing&&!process.argv.includes('--dependencies')){
   if(metadata.elements.length!==1||metadata.elements[0].versionName!==version+'-debug'||metadata.elements[0].versionCode!==3001)throw new Error('APK output metadata does not match the selected debug version');
   const name=metadata.elements[0].outputFile;
   if(!name)throw new Error('No built APK was produced');
-  const target=path.join(output,'AnyLink-Android-'+version+'.apk');fs.copyFileSync(path.join(dir,name),target);
+  const target=path.join(output,'AnyLink-Android-'+version+(privateCharacter?'-private':'')+'.apk');fs.copyFileSync(path.join(dir,name),target);
   console.log('Built '+target+' (development debug signature; independent on-device Agent).');
 }

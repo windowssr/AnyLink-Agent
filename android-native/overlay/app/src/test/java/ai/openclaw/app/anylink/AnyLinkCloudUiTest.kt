@@ -32,11 +32,13 @@ class AnyLinkCloudUiTest {
     assertNull(app.packageManager.resolveActivity(Intent().setClassName(app, "ai.openclaw.app.MainActivity"), 0))
     compose.setContent {
       MaterialTheme {
-        CloudCompanionScreen(LocalAgentState(), null, "", "", false, false, false, emptyList(), true, {}, {}, { _, _ -> }, {}, {}, {}, {})
+        CloudCompanionScreen(LocalAgentState(), null, "", "", false, false, false, emptyList(), true, {}, {}, { _, _, _, _ -> }, {}, {}, {}, {})
       }
     }
     compose.onNodeWithText("连接 AnyLink 服务器").assertExists()
     compose.onNodeWithText("HTTPS 服务器地址").assertExists()
+    compose.onNodeWithText("加入密钥").assertExists()
+    compose.onNodeWithText("导入旧版设备凭据 JSON").performClick()
     compose.onNodeWithText("设备凭据 JSON").assertExists()
     compose.onNodeWithText("连接我的 Mac").assertDoesNotExist()
     System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
@@ -47,7 +49,7 @@ class AnyLinkCloudUiTest {
   @Test fun `cloud file results show real filenames and coverage instead of internal JSON`() {
     val task = linkJson.parseToJsonElement("""{"id":"33333333-3333-4333-8333-333333333333","capability":"files.search","state":"succeeded","result":{"state":"succeeded","output":{"matches":[{"name":"report.txt","path":"/Workspace/report.txt"}],"partial":true}}}""").jsonObject
     compose.setContent {
-      MaterialTheme { CloudCompanionScreen(LocalAgentState(), "https://example.invalid", "", "", false, false, false, listOf(task), false, {}, {}, { _, _ -> }, {}, {}, {}, {}) }
+      MaterialTheme { CloudCompanionScreen(LocalAgentState(), "https://example.invalid", "", "", false, false, false, listOf(task), false, {}, {}, { _, _, _, _ -> }, {}, {}, {}, {}) }
     }
     compose.onNodeWithText("任务与记录").performClick()
     compose.onNodeWithText("report.txt").assertExists()

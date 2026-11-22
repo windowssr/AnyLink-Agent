@@ -22,6 +22,9 @@ internal interface AgentLedger {
   fun run(id: String, value: JsonObject)
   fun operation(id: String): JsonObject?
   fun operation(id: String, value: JsonObject)
+  fun workerTask(id: String): JsonObject?
+  fun workerTask(id: String, value: JsonObject)
+  fun workerTasks(): List<JsonObject>
   fun saveNote(name: String, content: String)
   fun readNote(name: String): String?
 }
@@ -51,6 +54,9 @@ internal class SqlAgentLedger(context: Context, connection: CloudConnection) : A
   override fun run(id: String, value: JsonObject) = set("run", id, value.toString())
   override fun operation(id: String): JsonObject? = get("operation", id)?.let { linkJson.parseToJsonElement(it).jsonObject }
   override fun operation(id: String, value: JsonObject) = set("operation", id, value.toString())
+  override fun workerTask(id: String): JsonObject? = get("workertask", id)?.let { linkJson.parseToJsonElement(it).jsonObject }
+  override fun workerTask(id: String, value: JsonObject) = set("workertask", id, value.toString())
+  override fun workerTasks(): List<JsonObject> = database.readableDatabase.query("records", arrayOf("value"), "kind=?", arrayOf("workertask"), null, null, "rowid DESC", "200").use { rows -> buildList { while (rows.moveToNext()) add(linkJson.parseToJsonElement(rows.getString(0)).jsonObject) } }
   override fun saveNote(name: String, content: String) = set("note", name, content)
   override fun readNote(name: String): String? = get("note", name)
 }
@@ -67,14 +73,16 @@ internal class ConnectionStore(context: Context) {
   fun save(connection: CloudConnection) {
     val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
     val secret = cipher.doFinal(connection.token.toByteArray())
-    val value = buildJsonObject { put("server", connection.server); put("device_id", connection.deviceId); put("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP)); put("encrypted_token", Base64.encodeToString(secret, Base64.NO_WRAP)) }
+    val value = buildJsonObject { put("server", connection.server); put("device_id", connection.deviceId); put("agent_id", connection.agentId); put("install_id", connection.installId); put("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP)); put("encrypted_token", Base64.encodeToString(secret, Base64.NO_WRAP)) }
     database.writableDatabase.insertWithOnConflict("records", null, ContentValues().apply { put("kind", "connection"); put("id", "active"); put("value", value.toString()) }, SQLiteDatabase.CONFLICT_REPLACE)
+    if (connection.installId.isNotBlank()) database.writableDatabase.insertWithOnConflict("records", null, ContentValues().apply { put("kind", "install"); put("id", "android"); put("value", connection.installId) }, SQLiteDatabase.CONFLICT_REPLACE)
   }
+  fun installId(): String? = database.readableDatabase.query("records", arrayOf("value"), "kind=? AND id=?", arrayOf("install", "android"), null, null, null).use { if (it.moveToFirst()) it.getString(0) else null }
   fun load(): CloudConnection? = database.readableDatabase.query("records", arrayOf("value"), "kind=? AND id=?", arrayOf("connection", "active"), null, null, null).use { rows ->
     if (!rows.moveToFirst()) return@use null
     val data = linkJson.parseToJsonElement(rows.getString(0)).jsonObject
     val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(data.text("iv"), Base64.NO_WRAP))) }
-    CloudConnection(data.text("server"), cipher.doFinal(Base64.decode(data.text("encrypted_token"), Base64.NO_WRAP)).decodeToString(), data.text("device_id"))
+    CloudConnection(data.text("server"), cipher.doFinal(Base64.decode(data.text("encrypted_token"), Base64.NO_WRAP)).decodeToString(), data.text("device_id"), data.text("agent_id"), data.text("install_id"))
   }
   fun clear() { database.writableDatabase.delete("records", "kind=?", arrayOf("connection")) }
 }

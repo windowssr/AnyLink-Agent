@@ -81,6 +81,8 @@ for(const [relative,expected] of Object.entries(prior)) {
 }
 const assets=path.join(source,'apps/android/app/src/main/assets/anylink');fs.mkdirSync(assets,{recursive:true});
 fs.copyFileSync(path.join(root,'LICENSE'),path.join(assets,'AnyLink-LICENSE.txt'));
+fs.copyFileSync(path.join(root,'persona/dafeiyu.md'),path.join(assets,'persona-shared.md'));
+fs.copyFileSync(path.join(home,'persona.md'),path.join(assets,'persona-android.md'));
 fs.copyFileSync(path.join(home,'licenses/OpenClaw-MIT.txt'),path.join(assets,'OpenClaw-MIT.txt'));
 for(const name of ['model','live2dcubismcore.min.js','pixi.min.js','cubism4-colors.min.js','public-avatar.js'])fs.rmSync(path.join(assets,name),{recursive:true,force:true});
 const drawable=path.join(source,'apps/android/app/src/main/res/drawable');fs.mkdirSync(drawable,{recursive:true});

@@ -25,6 +25,9 @@ function scan(dir){for(const item of fs.readdirSync(dir,{withFileTypes:true})){
 }}
 scan(app);fs.mkdirSync(out,{recursive:true});
 const apkName=`AnyLink-Android-${apk.version}.apk`,macName='AnyLink-macOS-arm64-0.8.1-preview.zip';
+if(apkName.includes('private')||apk.version.includes('private'))throw new Error('Private character APK can never enter the public release');
+const apkBuildInfo=JSON.parse(execFileSync('/usr/bin/unzip',['-p',path.join(root,'artifacts/android-native',apkName),'assets/anylink/build-info.json'],{encoding:'utf8'}));
+if(apkBuildInfo.private_character!==false)throw new Error('Public release APK must be the asset-free character build');
 fs.copyFileSync(path.join(root,'artifacts/android-native',apkName),path.join(out,apkName));
 run('/usr/bin/ditto',['-c','-k','--keepParent','--norsrc',app,path.join(out,macName)]);
 const packages=JSON.parse(run('npm',['pack','./sdk','--pack-destination',out,'--cache',path.join(root,'data/public-release/npm-cache'),'--json']));

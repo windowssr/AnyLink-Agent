@@ -1,6 +1,6 @@
 # AnyLink Android：手机本地 Agent
 
-从 **0.3.0-preview.1** 起，Android 自己管理会话、模型工具循环和执行记录，统一连接 AnyLink 服务器。**Mac 关机不影响手机聊天或手机工具**，只会让交给 Mac 的任务等待。旧的 0.2.x 是依赖 Mac Gateway 的形象／交互预览，不是当前产品的接入方式。
+从 **0.4.0-preview.1** 起，Android 自己管理会话、模型工具循环和执行记录，统一连接 AnyLink 服务器。**Mac 关机不影响手机聊天或手机工具**，只会让交给 Mac 的任务等待。旧的 0.2.x 是依赖 Mac Gateway 的形象／交互预览，不是当前产品的接入方式。
 
 工程复用固定 OpenClaw `v2026.11.6` 的 Android 构建底座和人物呈现组件，产品入口是 `ai.openclaw.app.anylink.AnyLinkActivity`。它不会创建 `NodeRuntime`、连接 Gateway、做 OpenClaw 配对或启动旧节点服务。上游源码按固定提交获取，不复制到本仓库；产品源码集只编译本地 Agent、人物呈现、动画设置读取和许可加载，不编译旧 Gateway 节点运行时。Android 12 / API31+。
 
@@ -12,18 +12,20 @@ Android：原生人物 / 文字 / 系统语音
     → AnyLink HTTPS 服务器：设备身份、统一记忆、模型 SSE、任务中继
       → DeepSeek Flash（模型 Key 只在服务器）
 
-跨设备：手机 task_create → 云端排队 → Mac SDK Worker 领取
-       → 本机策略限制的 files.search → 云端持久回执 → 手机任务面板
+跨设备：手机 task_create → 云端路由 → Mac/其他设备 Agent 领取
+       → 本机策略限制的执行 → 云端持久回执 → 手机任务面板
+反向：其他设备把 phone.status / companion.say 路由到这台手机
+       → 前台 worker 领取并执行 → 结果回传云端
 ```
 
-当前手机工具是基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除、表情动作，以及已授权的跨设备任务创建／查询／取消。没有沿用旧 Gateway 的手机操作能力，不能宣称能点击其他 App、读相册或操控全屏。后续逐项接原生能力和权限。
+当前手机工具是基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除（global／device／agent 三层）、表情动作，以及跨设备的 link_directory／task_create／task_status／task_cancel。App 在前台时还会声明 `phone.status`（读取型号、系统版本、电量等）和 `companion.say`（让大肥鱼用语音说一句话并显示在屏幕上，text ≤500 字）两个能力供其他设备派发。没有沿用旧 Gateway 的手机操作能力，不能宣称能点击其他 App、读相册或操控全屏。后续逐项接原生能力和权限。
 
 ## 连接
 
 1. 部署 AnyLink 服务，准备远程 **HTTPS 根地址**。服务器仅监听回环时，需要由部署者提供受保护入口；不能把 Mac 的 `127.0.0.1` 地址直接填到手机。
-2. 主人管理页注册 Android 逻辑设备，为真实手机生成自己的设备凭据 JSON。开发预览身份不等于已认证的物理手机。
-3. 在 App 的“服务器连接”填写地址、粘贴该 JSON，点击“验证并连接”。校验服务器协议与返回的设备 ID 后才保存。无需 OpenClaw 地址和 Token，无需重新编译来绑定设备。
-4. 凭据以 Android Keystore AES-GCM 加密，密文保存到应用私有 SQLite；会话、操作回执和便笺按服务器＋设备身份分库。APK 不内置任何密钥。
+2. 在 App 的“服务器连接”填写地址和主人签发的**加入密钥**（可选填设备名称，默认手机型号），点击“验证并连接”。手机以 `android-dafeiyu` Agent 身份接入；加入密钥只用于本次请求，**不会写入磁盘**，保存的只有加密后的设备令牌。无需 OpenClaw 地址和 Token，无需重新编译来绑定设备。
+3. 旧版设备凭据 JSON 仍可通过“导入旧版设备凭据 JSON”导入；此时 Agent 身份从 `/edge/v1/identity` 读取。若手机上存有同一服务器的旧凭据，加入流程会先用旧令牌调用 `POST /edge/v1/device/install-id` 认领 install_id，使新 Agent 落在**同一台设备**上、保留设备级记忆；旧令牌已撤销时自动按新设备接入并提示。
+4. 凭据以 Android Keystore AES-GCM 加密，密文保存到应用私有 SQLite；会话、操作回执和便笺按服务器＋设备身份分库（新设备 ID 视为新分库，旧记录保留）。`install_id` 单独持久化，重连复用同一安装标识。APK 不内置任何密钥。
 
 开发用 USB 只转发**服务器服务**，不是转发 Gateway：
 
@@ -57,6 +59,17 @@ node android-native/scripts/build.mjs --test
 node android-native/scripts/inspect-apk.mjs
 node android-native/scripts/preview.mjs --public
 ```
+
+### 私人角色构建（仅主人自己的手机）
+
+公开 APK 使用占位图形，不含 Live2D 模型与 Cubism 核心。主人自己的设备可以构建包含私人形象的版本：
+
+```bash
+npm --prefix android-native run build:private   # 等价于 ANYLINK_CHARACTER_MODE=private + prepare + build
+node android-native/scripts/inspect-apk.mjs --private
+```
+
+产物为 `artifacts/android-native/AnyLink-Android-<version>-private.apk`（gitignore）。`--private` 检查会断言模型文件与 Cubism 核心存在且 `build-info.json` 的 `private_character:true`；默认公开检查保持原有断言。公开打包脚本 `scripts/package-public-release.mjs` 显式拒绝任何 `-private` APK 或 `private_character!==false` 的产物。
 
 公开 APK 使用原创占位形象，不含大肥鱼模型、纹理、派生头像与 Cubism Core。人物半身效果需要自行取得许可允许的素材；私有构建使用 `ANYLINK_CHARACTER_MODE=private`，不得未经授权公开分发。上游 MIT 和素材说明随包保留。
 

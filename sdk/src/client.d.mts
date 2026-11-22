@@ -23,6 +23,7 @@ export class AnyLinkClient {
  peers(options?:RequestOptions):Promise<{items:{id:string;name:string;platform:string;capabilities:Capability[];last_seen_at:string|null}[]}>;
  directory(options?:RequestOptions):Promise<{items:{device:DirectoryDevice;agents:DirectoryAgent[]}[]}>;
  persona(options?:RequestOptions):Promise<Persona>;
+ adoptInstallId(installId:string,options?:RequestOptions):Promise<{device_id:string;install_id:string}>;
  identity(options?:RequestOptions):Promise<{device:{id:string;name:string;platform:string};agent:Agent;scopes:string[]}>;
  context(options?:RequestOptions):Promise<{device_id:string;agent_id:string;global:Memory[];device:Memory[];agent:Memory[];persona:Persona|null;directory:Payload}>;
  searchMemories(query?:{q?:string;scope?:MemoryScope;device_id?:string},options?:RequestOptions):Promise<{items:Memory[]}>;

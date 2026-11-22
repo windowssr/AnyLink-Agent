@@ -5,7 +5,7 @@ import { basename, resolve } from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { type Config, OWNER_ID } from './config.js';
-import { ApiError, createDb, hash, idempotent, migrate } from './db.js';
+import { ApiError, createDb, hash, idempotent, migrate, transaction } from './db.js';
 import { createDevice, deleteMemory, deviceSchema, editMemory, getMemory, listDevices, memoryDirectory, memoryPatchSchema, memorySchema, memorySearchSchema, saveMemory, searchMemories } from './store.js';
 import { authenticateEdge,registerConnectRoute,registerCredentialRoutes } from './edge-auth.js';
 import { registerModelProxy } from './model-proxy.js';
@@ -78,6 +78,20 @@ export async function createApp(config:Config,{logger=true}:{logger?:boolean}={}
     const me=req.edgeIdentity!;
     const agent=(await db.query('SELECT id,key,name,kind,capabilities FROM agents WHERE id=$1',[me.agent_id])).rows[0];
     return {device:(await listDevices(db)).find(d=>d.id===me.device_id),agent,scopes:['memory','model','link','persona']};
+  });
+  app.post('/edge/v1/device/install-id',async req=>{
+    const me=req.edgeIdentity!;
+    const {install_id}=z.object({install_id:z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)}).strict().parse(req.body);
+    return transaction(db,async c=>{
+      await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`connect:${install_id}`]);
+      const device=(await c.query('SELECT id,install_id,revoked_at FROM devices WHERE id=$1 FOR UPDATE',[me.device_id])).rows[0];
+      if(!device)throw new ApiError(404,'DEVICE_NOT_FOUND','设备不存在');
+      if(device.install_id===install_id)return {device_id:device.id,install_id};
+      if(device.install_id)throw new ApiError(409,'INSTALL_ID_ALREADY_SET','This device already has a different install_id');
+      if((await c.query('SELECT 1 FROM devices WHERE install_id=$1',[install_id])).rowCount)throw new ApiError(409,'INSTALL_ID_IN_USE','Another device already uses this install_id');
+      await c.query('UPDATE devices SET install_id=$1 WHERE id=$2',[install_id,device.id]);
+      return {device_id:device.id,install_id};
+    });
   });
   app.get('/edge/v1/persona',async(_req,reply)=>{
     if(!persona)throw new ApiError(404,'PERSONA_NOT_CONFIGURED','Persona is not configured on this deployment');
