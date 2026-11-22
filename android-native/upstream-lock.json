@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/openclaw/openclaw.git",
+  "tag": "v2026.11.6",
+  "commit": "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+  "sourceDirectory": "data/android-native/openclaw",
+  "license": "MIT",
+  "sparseDirectories": [
+    "apps/android",
+    "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources",
+    "apps/shared/mermaid/assets",
+    "apps/.i18n",
+    "scripts",
+    "src/gateway/protocol",
+    "ui/public/provider-icons",
+    "ui/src/i18n",
+    "packages/gateway-protocol",
+    "packages/normalization-core",
+    "src/gateway/methods",
+    "src/infra",
+    "src/shared",
+    "config"
+  ]
+}

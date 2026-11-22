@@ -1,7 +1,7 @@
 {
   "id": "anylink-memory",
   "name": "AnyLink Cloud Memory",
-  "description": "Shared cloud facts for the local Mac agent. Never runs a cloud agent.",
+  "description": "Shared cloud facts for Mac-hosted agents and explicitly selected logical device contexts. Never runs a cloud agent.",
   "version": "0.2.0",
   "contracts": {
     "tools": [
@@ -16,6 +16,20 @@
     "properties": {
       "connectionFile": {
         "type": "string"
+      },
+      "deviceConnections": {
+        "type": "object",
+        "description": "Exact host-configured agent IDs mapped to logical device credentials; this is not physical input-device authentication.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "connectionFile": {"type": "string", "minLength": 1},
+            "label": {"type": "string", "minLength": 1, "maxLength": 80},
+            "platform": {"type": "string", "enum": ["android", "macos", "other"]}
+          },
+          "required": ["connectionFile"],
+          "additionalProperties": false
+        }
       }
     },
     "required": [

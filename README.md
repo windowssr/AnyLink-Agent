@@ -8,7 +8,7 @@ Mac 上运行成熟 OpenClaw，自己服务器提供统一记忆和模型 API。
               └⇄ ywc 记忆 API ⇄ PostgreSQL
 ```
 
-当前服务版本 V0.3，Mac 桌面版本 V0.7，使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行；正常比例的蓝色大肥鱼 Live2D 伙伴已加入身边输入与任务结果、聊天表情与动作、主动招呼、桌面漫游、中文播报及原生语音入口。Android V0.1 已新增 HBuilderX / uni-app 工程和电脑预览，并通过真实 Flash 与统一记忆联调，详见 [Android 启动说明](android/README.md)；已接通手机预览到真实 Mac 的只读文件搜索，手机真机和通用设备协作仍待后续验收。旧 V0.1 云端 Agent 已退役，历史状态保留。
+当前服务版本 V0.3，Mac 桌面版本 V0.7，使用独立 Node 24.22.3、OpenClaw 2026.11.6、AnyLink memory 和电脑控制插件。电脑控制通过固定版本的官方签名 Peekaboo 4.9.10 执行；正常比例的蓝色大肥鱼 Live2D 伙伴已加入身边输入与任务结果、聊天表情与动作、主动招呼、桌面漫游、中文播报及原生语音入口。Android 主线现已转向基于官方 OpenClaw Android 的原生半身伙伴，复用官方聊天、语音和节点能力；工程、构建与预览见 [Android 原生说明](android-native/README.md)。旧 HBuilderX / uni-app 工程保留为历史参考；手机真机和通用设备操作仍待硬件验收。旧 V0.1 云端 Agent 已退役，历史状态保留。
 
 ## 在当前 Mac 使用
 

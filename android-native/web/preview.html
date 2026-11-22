@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大肥鱼 · 原生 Android 形象预览</title><link rel="stylesheet" href="./preview.css"></head>
+<body>
+  <aside class="preview-note">原生 Android 界面预览 · 这里演示形象与状态，语音在手机 App 中运行</aside>
+  <main class="phone">
+    <iframe id="portrait" src="./avatar/portrait.html" title="大肥鱼半身形象"></iframe>
+    <header><div><h1>大肥鱼</h1><span>今天也一起吧。</span></div><span class="presence"><i></i>我在</span></header>
+    <div class="bottom-fade"></div>
+    <section class="voice-panel"><div class="state"><span id="state-light"></span><span id="state-label">想聊什么，或想让我做点什么？</span></div><div id="waveform" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div><div class="controls"><button id="text-button" aria-label="文字输入">⌨</button><button id="voice-button">演示倾听</button><button id="results-button" aria-label="结果与记录">≡</button></div><p>聊天，或者交给我一件事。</p></section>
+    <section id="results" hidden><button id="close-results" aria-label="收起结果">×</button><h2>处理结果</h2><p>这里会显示同一位 Agent 返回的真实任务结果。</p><span>电脑预览未执行任务</span></section>
+    <section id="text-panel" hidden><input placeholder="想让我做什么？" maxlength="500"><button id="close-text">收起</button><p>这是界面预览，输入不会提交给模型。</p></section>
+  </main>
+  <nav class="states" aria-label="人物状态演示"><button data-phase="idle">陪伴</button><button data-phase="listening">倾听</button><button data-phase="thinking">思考</button><button data-phase="working">做事</button><button data-phase="speaking">说话</button><button data-phase="attention">需要你</button></nav>
+  <script src="./preview.js"></script>
+</body></html>

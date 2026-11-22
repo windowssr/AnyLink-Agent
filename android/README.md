@@ -1,3 +1,5 @@
+> Android 主线已迁移到 [官方原生伙伴改版](../android-native/README.md)。本目录保留早期 uni-app / Pi 工程供参考，下面是该阶段的历史说明。
+
 # AnyLink Android · V0.1 工程基线
 
 HBuilderX 5.34、uni-app Vue 3。手机持有自己的会话和工具循环，使用固定的 `@earendil-works/pi-agent-core@1.6.0`；服务器继续只提供模型代理与统一记忆。界面里只有一个“大肥鱼”，人物动作由同一个本地 Agent 驱动。

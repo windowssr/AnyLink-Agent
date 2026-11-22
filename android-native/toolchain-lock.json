@@ -1,0 +1,24 @@
+{
+  "javaHome": "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home",
+  "sdkDirectory": "data/android-native/sdk",
+  "gradleCacheDirectory": "data/android-native/gradle",
+  "commandLineTools": {
+    "url": "https://dl.google.com/android/repository/commandlinetools-mac_arm64-15859902_latest.zip",
+    "sha256": "835b62a26162b229b441d1f6d4680383815a270809eb33522c0d480fa5002c4e",
+    "revision": "15859902",
+    "bytes": 156083281
+  },
+  "sdkPackages": [
+    "platform-tools",
+    "platforms;android-37.0",
+    "build-tools;37.0.0"
+  ],
+  "license": "https://developer.android.com/studio/terms",
+  "installEmulator": false,
+  "gradle": {
+    "url": "https://services.gradle.org/distributions/gradle-9.7.1-bin.zip",
+    "sha256": "acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a",
+    "bytes": 151433392,
+    "version": "9.7.1"
+  }
+}

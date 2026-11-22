@@ -44,13 +44,16 @@ export default {
   register(api){
     const root=api.pluginConfig?.projectRoot;if(!root)throw new Error('Companion projectRoot required');
     const persona=fs.readFileSync(path.join(root,'mac/companion/persona.md'),'utf8');
+    const mobilePersonaFile=path.join(root,'android-native/persona.md');
+    const mobilePersona=fs.existsSync(mobilePersonaFile)?fs.readFileSync(mobilePersonaFile,'utf8'):'';
+    const mobile=ctx=>/^anylink-android(?:-|$)/.test(ctx.agentId??'');
     const bridge=createBridge(root),turns=new Map();
     api.on('before_prompt_build',(event,ctx)=>{
       const prompt=event.currentUserMessage??event.prompt??'';
       if(ctx.runId){turns.set(ctx.runId,{prompt:prompt.slice(0,1600),text:'',explicit:false});if(turns.size>80)turns.delete(turns.keys().next().value);}
       bridge.emit('user',ctx,{...classify(prompt)});
       const desktop=ctx.sessionKey?.startsWith('agent:main:anylink:desktop:')?'\n当前通过桌面人物身边的轻量交互接待主人。简短自然地回复；找本机文件优先使用 anylink_mac_search_files，真实结构化结果会显示在人物身边。不要为了接待而打开完整聊天窗口。遇到失败或审批要明确说明，不能用表演代替执行。':'';
-      return {appendSystemContext:persona+desktop,...(ctx.agentId==='companion'?{toolsAllow:['anylink_companion_expression','anylink_companion_control']}: {})};
+      return {appendSystemContext:mobile(ctx)?mobilePersona:persona+desktop,...(ctx.agentId==='companion'?{toolsAllow:['anylink_companion_expression','anylink_companion_control']}: {})};
     });
     api.on('llm_output',(event,ctx)=>{
       const turn=turns.get(ctx.runId??event.runId);if(turn)turn.text=(event.assistantTexts??[]).filter(text=>typeof text==='string').join('\n').slice(-6000);
@@ -78,6 +81,7 @@ export default {
       async execute(_id,params){
         if(!emotions.includes(params.emotion)||!gestures.includes(params.gesture))throw new Error('Unsupported companion expression');
         const turn=turns.get(ctx.runId);if(turn){turn.explicit=true;turn.expression={emotion:params.emotion,gesture:params.gesture};}
+        if(mobile(ctx))return {content:[{type:'text',text:JSON.stringify({requested:true,presentation_target:'android-client',render_confirmed:false})}]};
         const delivered=bridge.emit('expression',ctx,{emotion:params.emotion,gesture:params.gesture});
         return {content:[{type:'text',text:JSON.stringify({queued:delivered,desktop_only:true})}]};
       },

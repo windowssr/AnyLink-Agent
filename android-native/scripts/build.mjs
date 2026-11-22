@@ -1,0 +1,31 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {spawn,execFileSync} from 'node:child_process';
+import {root,home,source,sdk,output,environment,lock,tools} from './layout.mjs';
+const prepare=!process.argv.includes('--no-prepare');
+if(prepare)execFileSync(process.execPath,[path.join(home,'scripts/prepare.mjs')],{stdio:'inherit'});
+fs.mkdirSync(output,{recursive:true});
+const env=environment(),agent=process.env.ANYLINK_AGENT_ID??'anylink-android-preview';
+if(!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(agent))throw new Error('Invalid configured Android agent ID');
+if(!process.argv.includes('--dependencies')&&!fs.existsSync(path.join(sdk,'platforms/android-37.0/android.jar')))throw new Error('Install the authorized SDK first: node android-native/scripts/install-toolchain.mjs --accept-sdk-license');
+const app=path.join(source,'apps/android'),version=JSON.parse(fs.readFileSync(path.join(home,'package.json'),'utf8')).version;
+const revision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
+fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,agent_context:agent},null,2)+'\n');
+const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=2001','-PANYLINK_AGENT_ID='+agent];
+if(process.argv.includes('--dependencies'))args.push('help');
+else if(process.argv.includes('--test'))args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.ui.AnyLinkPresenceTest','--tests','ai.openclaw.app.ui.AnyLinkNativeTalkTest','--tests','ai.openclaw.app.ui.AnyLinkContentEntryTest');
+else args.push(':app:assembleThirdPartyDebug');
+const logPath=path.join(output,process.argv.includes('--test')?'test.log':'build.log'),log=fs.openSync(logPath,'w');
+console.log('Building pinned official Android source with AnyLink UI; log: '+path.relative(root,logPath));
+await new Promise((resolve,reject)=>{
+  const installation=path.join(root,'data/android-native/gradle-distribution/gradle-'+tools.gradle.version);
+  let verified=false;try{verified=JSON.parse(fs.readFileSync(path.join(installation,'anylink-verified.json'))).sha256===tools.gradle.sha256;}catch{}
+  const child=verified?spawn(path.join(installation,'bin/gradle'),args.slice(1),{cwd:app,env,stdio:['ignore',log,log]}):spawn('/bin/sh',args,{cwd:app,env,stdio:['ignore',log,log]});
+  child.on('error',reject);child.on('exit',code=>code===0?resolve():reject(new Error('Android Gradle task failed; inspect '+path.relative(root,logPath))));
+});fs.closeSync(log);
+if(!process.argv.includes('--test')&&!process.argv.includes('--dependencies')){
+  const dir=path.join(app,'app/build/outputs/apk/thirdParty/debug'),name=fs.readdirSync(dir).find(n=>n.endsWith('.apk'));
+  if(!name)throw new Error('No built APK was produced');
+  const target=path.join(output,'AnyLink-Android-'+version+'.apk');fs.copyFileSync(path.join(dir,name),target);
+  console.log('Built '+target+' (private debug signature; not an official OpenClaw distribution).');
+}

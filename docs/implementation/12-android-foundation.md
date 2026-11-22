@@ -1,5 +1,7 @@
 # Android V0.1：本地 Agent、HBuilderX 工程和电脑预览
 
+> 后续主线已改为 [官方 Android 原生伙伴](16-android-native-companion.md)；本文保留当时的架构和验收记录。
+
 修订：2026-11-22。交付范围依主人选择为“先做工程和电脑预览，稍后再连手机”。Mac 和 ywc 现有部署不改动。
 
 ## 架构

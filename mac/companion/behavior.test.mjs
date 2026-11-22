@@ -56,3 +56,17 @@ test('companion can express and stroll but cannot change owner preferences or ex
     assert.equal(fs.existsSync(path.join(root,'data/mac/companion/events')),false);
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
+test('Android expressions target the native client without notifying the Mac companion or claiming rendering',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-mobile-expression-'));
+  try{
+    fs.mkdirSync(path.join(root,'mac/companion'),{recursive:true});fs.writeFileSync(path.join(root,'mac/companion/persona.md'),'desktop-only');
+    fs.mkdirSync(path.join(root,'android-native'));fs.writeFileSync(path.join(root,'android-native/persona.md'),'phone persona');
+    const callbacks={},factories=[];
+    plugin.register({pluginConfig:{projectRoot:root},on:(name,fn)=>callbacks[name]=fn,registerTool:fn=>factories.push(fn)});
+    const ctx={agentId:'anylink-android-preview',runId:'mobile-turn'};
+    assert.equal(callbacks.before_prompt_build({currentUserMessage:'你好'},ctx).appendSystemContext,'phone persona');
+    const result=JSON.parse((await factories[0](ctx).execute('one',{emotion:'happy',gesture:'wave'})).content[0].text);
+    assert.deepEqual(result,{requested:true,presentation_target:'android-client',render_confirmed:false});
+    assert.equal(fs.existsSync(path.join(root,'data/mac/companion/events')),false);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
