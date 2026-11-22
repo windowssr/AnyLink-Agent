@@ -38,6 +38,7 @@ node android-native/scripts/prepare.mjs
 node --test android-native/tests/*.test.mjs mac/plugin/device-context.test.mjs
 node android-native/scripts/build.mjs --test
 node android-native/scripts/build.mjs
+node android-native/scripts/inspect-apk.mjs
 ```
 
 上游 compileSdk=37、targetSdk=36、minSdk=31；Google 仓库的平台包现名为 `platforms;android-37.0`。工具锁定见 `toolchain-lock.json`；下载校验失败不会执行。`install-gradle` 使用与官方 wrapper 相同的版本及 SHA-256，为低速连接提供可恢复的分段下载。官方代码准备脚本验证完整上游 SHA，以固定上下文打补丁，遇到其他本地修改会停止，避免重置覆盖。
