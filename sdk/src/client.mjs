@@ -3,17 +3,36 @@ export class AnyLinkError extends Error {
     super(message,{cause});this.name='AnyLinkError';Object.assign(this,{code,status,requestId,idempotencyKey,submissionUnknown});
   }
 }
+function checkBaseUrl(baseUrl){
+  const base=new URL(baseUrl);
+  if(base.username||base.password||base.search||base.hash||!['http:','https:'].includes(base.protocol))throw new TypeError('Use an HTTP(S) base URL without credentials, query or fragment');
+  if(base.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(base.hostname))throw new TypeError('Remote AnyLink connections require HTTPS or a loopback tunnel');
+  return base.href.replace(/\/$/,'')+'/';
+}
 /** No background retries: callers retain write keys and reconcile uncertain outcomes. */
 export class AnyLinkClient {
   #base;#token;#fetch;#timeout;
   get baseUrl(){return this.#base;}
   constructor({baseUrl,token,fetch:transport=globalThis.fetch,timeoutMs=30000}) {
-    const base=new URL(baseUrl);
-    if(base.username||base.password||base.search||base.hash||!['http:','https:'].includes(base.protocol))throw new TypeError('Use an HTTP(S) base URL without credentials, query or fragment');
-    if(base.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(base.hostname))throw new TypeError('Remote AnyLink connections require HTTPS or a loopback tunnel');
     if(typeof token!=='string'||!token.trim()||/[\r\n]/.test(token))throw new TypeError('A device credential is required');
     if(!Number.isFinite(timeoutMs)||timeoutMs<1)throw new TypeError('timeoutMs must be positive');
-    this.#base=base.href.replace(/\/$/,'')+'/';this.#token=token;this.#fetch=transport;this.#timeout=timeoutMs;
+    this.#base=checkBaseUrl(baseUrl);this.#token=token;this.#fetch=transport;this.#timeout=timeoutMs;
+  }
+  /** Join with the owner key: upserts the install's device and agent, returns a fresh credential. Reconnect rotates the token safely. */
+  static async connect({baseUrl,joinKey,installId,device,agent,fetch:transport=globalThis.fetch,timeoutMs=30000}){
+    const base=checkBaseUrl(baseUrl);
+    if(typeof joinKey!=='string'||!joinKey.trim()||/[\r\n]/.test(joinKey))throw new TypeError('A join key is required');
+    if(!Number.isFinite(timeoutMs)||timeoutMs<1)throw new TypeError('timeoutMs must be positive');
+    let response;
+    try{
+      response=await transport(new URL('edge/v1/connect',base),{method:'POST',redirect:'error',signal:AbortSignal.timeout(timeoutMs),headers:{Authorization:`Bearer ${joinKey}`,'Content-Type':'application/json'},body:JSON.stringify({device:{install_id:installId,name:device?.name,platform:device?.platform},agent:{key:agent?.key,name:agent?.name,...(agent?.kind!==undefined?{kind:agent.kind}:{})}})});
+    }catch(cause){throw new AnyLinkError('AnyLink connect failed',{code:'TRANSPORT_ERROR',cause});}
+    const requestId=response.headers.get('x-anylink-request-id')??undefined;
+    if(!response.ok){
+      let data;try{data=await response.json();}catch{}
+      throw new AnyLinkError(data?.error?.message??`AnyLink HTTP ${response.status}`,{code:data?.error?.code??'HTTP_ERROR',status:response.status,requestId:data?.request_id??requestId});
+    }
+    try{return await response.json();}catch(cause){throw new AnyLinkError('AnyLink response was incomplete',{code:'INVALID_RESPONSE',requestId,cause});}
   }
   async #request(method,path,body,{idempotencyKey,signal,raw=false,headers={}}={}) {
     const writing=!['GET','HEAD'].includes(method),key=writing&&idempotencyKey!==false?(idempotencyKey??crypto.randomUUID()):undefined;
@@ -33,7 +52,10 @@ export class AnyLinkClient {
     try{return await response.json();}catch(cause){throw new AnyLinkError('AnyLink response was incomplete',{code:writing?'SUBMISSION_UNKNOWN':'INVALID_RESPONSE',requestId,idempotencyKey:key,submissionUnknown:writing,cause});}
   }
   protocol(options){return this.#request('GET','edge/v1/link/protocol',undefined,options);}
+  /** @deprecated Compatibility shim returning per-device capability unions; use directory() for agent routing. */
   peers(options){return this.#request('GET','edge/v1/link/peers',undefined,options);}
+  directory(options){return this.#request('GET','edge/v1/link/directory',undefined,options);}
+  persona(options){return this.#request('GET','edge/v1/persona',undefined,options);}
   identity(options){return this.#request('GET','edge/v1/identity',undefined,options);}
   context(options){return this.#request('GET','edge/v1/context',undefined,options);}
   searchMemories(query={},options){return this.#request('POST','edge/v1/memories/search',query,{...options,idempotencyKey:false});}

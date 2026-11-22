@@ -5,6 +5,7 @@ COPY package.json package-lock.json ./
 COPY --chown=node:node dist/runtime-node_modules ./node_modules
 COPY --chown=node:node dist/server ./dist/server
 COPY --chown=node:node dist/web ./dist/web
+COPY --chown=node:node persona ./persona
 USER node
 EXPOSE 3180
 CMD ["node", "dist/server/index.js"]

@@ -48,7 +48,7 @@ Install the public APK on Android 12+. It uses `com.anylink.agent.debug`, a prev
 
 Register a separate Android device in your server's owner console and save its one-time credential JSON. In the phone's **Server connection** panel, enter your server's HTTPS root URL and import that JSON. The app verifies protocol and device identity before storing the credential with Android Keystore encryption. No provider key is sent to the phone. No Mac pairing or device-specific rebuild is needed.
 
-The phone owns conversation history, streamed model/tool rounds and SQLite operation receipts. Current phone tools are device information, private AnyLink notes, shared memory and granted cross-device tasks. General control of other phone apps is not implemented by this cutover. With the Mac offline, phone chat and phone tools continue; only Mac-directed tasks remain queued.
+The phone owns conversation history, streamed model/tool rounds and SQLite operation receipts. Current phone tools are device information, private AnyLink notes, shared memory and cross-device tasks routed by capability. General control of other phone apps is not implemented by this cutover. With the Mac offline, phone chat and phone tools continue; only Mac-directed tasks remain queued.
 
 For USB **development** testing, forward the server service rather than a Mac Gateway:
 
@@ -62,7 +62,7 @@ A normal remote install uses an operator-provided HTTPS endpoint directly and do
 
 Speech uses Android recognition and TTS services, preferring on-device recognition when available. The system provider may process audio/text online. Explicit Stop and tapping Speak interrupt current playback/model work; hands-free full-duplex barge-in, voice quality and latency are not promised. Physical phone microphone, playback, GPU and lifecycle behavior remain unverified.
 
-Mac file search uses `mac/peer/link-worker.mjs`: it advertises `files.search` through AnyLink, reads the existing Mac-owned root policy, and keeps its own durable SDK execution journal. Missing local policy opens no folders. `node mac/peer/configure-link.mjs` prepares a workspace-only policy or preserves an existing one; use `--workspace YOUR_DIRECTORY` only for a fresh policy. Grant source-phone → target-Mac → `files.search` using `scripts/grant-capability.mjs`; no direct phone-to-Mac address is configured. `mac/start.mjs` supervises that worker alongside the local Gateway.
+Mac file search uses `mac/peer/link-worker.mjs`: it advertises `files.search` through AnyLink, reads the existing Mac-owned root policy, and keeps its own durable SDK execution journal. Missing local policy opens no folders. `node mac/peer/configure-link.mjs` prepares a workspace-only policy or preserves an existing one; use `--workspace YOUR_DIRECTORY` only for a fresh policy. Any joined agent can then dispatch `files.search` to the Mac agent — target it by agent or device; no direct phone-to-Mac address is configured. `mac/start.mjs` supervises that worker alongside the local Gateway.
 
 The public build does not currently have a character-import UI. To use a permitted model on Android, configure it privately in the checkout and build locally with `ANYLINK_CHARACTER_MODE=private node android-native/scripts/build.mjs`. That private build must not be uploaded or mirrored without the author's distribution permission. The default build is asset-free, and the public inspector rejects a private-character package. See [Android engineering instructions](../../android-native/README.md) for the pinned toolchain and source.
 

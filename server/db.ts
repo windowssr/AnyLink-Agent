@@ -51,6 +51,7 @@ INSERT INTO schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING;
 export async function migrate(db: Db) {
   await transaction(db, async c => {
     await c.query('SELECT pg_advisory_xact_lock(3180001)');await c.query(schema);
+    if(!(await c.query('SELECT 1 FROM schema_migrations WHERE version=2')).rowCount)
     await c.query(`CREATE TABLE IF NOT EXISTS edge_credentials(
       id uuid PRIMARY KEY,device_id uuid NOT NULL REFERENCES devices(id),token_hash text NOT NULL UNIQUE,
       created_at timestamptz NOT NULL DEFAULT now(),last_used_at timestamptz,revoked_at timestamptz);
@@ -61,6 +62,7 @@ export async function migrate(db: Db) {
       prompt_tokens integer,completion_tokens integer,error_code text,created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz);
       CREATE INDEX IF NOT EXISTS model_device_recent ON model_requests(device_id,created_at);
       INSERT INTO schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING;`);
+    if(!(await c.query('SELECT 1 FROM schema_migrations WHERE version=3')).rowCount)
     await c.query(`CREATE TABLE IF NOT EXISTS link_capabilities(device_id uuid PRIMARY KEY REFERENCES devices(id),capabilities jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now());
       CREATE TABLE IF NOT EXISTS link_grants(source_device_id uuid NOT NULL REFERENCES devices(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,enabled boolean NOT NULL DEFAULT false,PRIMARY KEY(source_device_id,target_device_id,capability));
       CREATE TABLE IF NOT EXISTS link_tasks(id uuid PRIMARY KEY,owner_id uuid NOT NULL,source_device_id uuid NOT NULL REFERENCES devices(id),source_credential_id uuid NOT NULL REFERENCES edge_credentials(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,input jsonb NOT NULL,
@@ -68,6 +70,39 @@ export async function migrate(db: Db) {
       CREATE INDEX IF NOT EXISTS link_task_queue ON link_tasks(target_device_id,created_at) WHERE state='queued';
       CREATE INDEX IF NOT EXISTS link_task_source ON link_tasks(source_device_id,created_at);
       INSERT INTO schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING;`);
+    if(!(await c.query('SELECT 1 FROM schema_migrations WHERE version=4')).rowCount){
+      await c.query(`ALTER TABLE devices ADD COLUMN install_id text;
+        ALTER TABLE devices ADD CONSTRAINT devices_install_id_key UNIQUE(install_id);
+        CREATE TABLE agents(id uuid PRIMARY KEY,owner_id uuid NOT NULL,device_id uuid NOT NULL REFERENCES devices(id),key text NOT NULL,name text NOT NULL,kind text NOT NULL DEFAULT 'agent',capabilities jsonb NOT NULL DEFAULT '[]',capabilities_updated_at timestamptz,last_seen_at timestamptz,revoked_at timestamptz,created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(device_id,key));
+        INSERT INTO agents(id,owner_id,device_id,key,name,kind) SELECT gen_random_uuid(),owner_id,id,'default',name,'legacy' FROM devices d WHERE NOT EXISTS(SELECT 1 FROM agents a WHERE a.device_id=d.id);
+        UPDATE agents a SET capabilities=lc.capabilities,capabilities_updated_at=lc.updated_at FROM link_capabilities lc WHERE lc.device_id=a.device_id AND a.key='default';
+        DROP TABLE link_capabilities;DROP TABLE link_grants;
+        ALTER TABLE edge_credentials ADD COLUMN agent_id uuid REFERENCES agents(id);
+        UPDATE edge_credentials e SET agent_id=a.id FROM agents a WHERE a.device_id=e.device_id AND a.key='default' AND e.agent_id IS NULL;
+        ALTER TABLE edge_credentials ALTER COLUMN agent_id SET NOT NULL;
+        DROP INDEX one_edge_credential;
+        CREATE UNIQUE INDEX one_agent_credential ON edge_credentials(agent_id) WHERE revoked_at IS NULL;
+        ALTER TABLE link_tasks ADD COLUMN source_agent_id uuid REFERENCES agents(id);
+        ALTER TABLE link_tasks ADD COLUMN target_agent_id uuid REFERENCES agents(id);
+        ALTER TABLE link_tasks ADD COLUMN claimed_by_agent_id uuid REFERENCES agents(id);
+        UPDATE link_tasks t SET source_agent_id=e.agent_id FROM edge_credentials e WHERE e.id=t.source_credential_id AND t.source_agent_id IS NULL;
+        ALTER TABLE link_tasks ALTER COLUMN source_agent_id SET NOT NULL;
+        UPDATE link_tasks t SET claimed_by_agent_id=a.id FROM agents a WHERE a.device_id=t.target_device_id AND a.key='default' AND t.state<>'queued' AND t.claimed_by_agent_id IS NULL;
+        ALTER TABLE link_tasks ALTER COLUMN target_device_id DROP NOT NULL;
+        DROP INDEX link_task_queue;DROP INDEX link_task_source;
+        CREATE INDEX link_task_agent_queue ON link_tasks(target_agent_id,created_at) WHERE state='queued';
+        CREATE INDEX link_task_device_queue ON link_tasks(target_device_id,capability,created_at) WHERE state='queued';
+        CREATE INDEX link_task_any_queue ON link_tasks(capability,created_at) WHERE state='queued' AND target_agent_id IS NULL AND target_device_id IS NULL;
+        CREATE INDEX link_task_source_agent ON link_tasks(source_agent_id,created_at);
+        ALTER TABLE memories ADD COLUMN applicable_agent_id uuid REFERENCES agents(id);
+        ALTER TABLE memories ADD COLUMN source_agent_id uuid REFERENCES agents(id);
+        DO $$ DECLARE r record; BEGIN FOR r IN SELECT conname FROM pg_constraint WHERE conrelid='memories'::regclass AND contype='c' LOOP EXECUTE format('ALTER TABLE memories DROP CONSTRAINT %I',r.conname); END LOOP; END $$;
+        ALTER TABLE memories ADD CONSTRAINT memories_scope_check CHECK(scope IN ('global','device','agent'));
+        ALTER TABLE memories ADD CONSTRAINT memories_scope_applicability CHECK((scope='global' AND applicable_device_id IS NULL AND applicable_agent_id IS NULL) OR (scope='device' AND applicable_device_id IS NOT NULL AND applicable_agent_id IS NULL) OR (scope='agent' AND applicable_agent_id IS NOT NULL AND applicable_device_id IS NOT NULL));
+        DROP INDEX memories_active_scope;
+        CREATE INDEX memories_active_scope ON memories(owner_id,scope,applicable_device_id,applicable_agent_id) WHERE NOT deleted;
+        INSERT INTO schema_migrations(version) VALUES(4)`);
+    }
     // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
     await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");
   });

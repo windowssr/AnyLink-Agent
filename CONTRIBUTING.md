@@ -5,7 +5,7 @@ AnyLink is a protocol and SDK project with independently maintained reference cl
 1. Fork either mirror and work on a topic branch. Submit pull requests to GitHub; the maintainer reconciles Gitee changes before synchronizing `main`.
 2. Install Node 24 and run `npm ci`, `npm run check`, `npm run test:sdk`, and `npm run protocol:check`.
 3. Run `npm run test:integration` against a disposable database named **anylink_test**. The suite rebuilds that database schema. Never point it at product data.
-4. Protocol changes need a corresponding SDK/contract update and a boundary test. Preserve explicit grants, revision checks, durable receipts, and unknown-outcome behavior.
+4. Protocol changes need a corresponding SDK/contract update and a boundary test. Preserve revision checks, durable receipts, agent-scoped memory isolation, and unknown-outcome behavior.
 5. Do not commit credentials, model assets, Cubism Core, user transcripts, databases, or host-specific profiles. Public Android builds are asset-free by default. Run `npm run release:audit` before publishing.
 
 English and Chinese README files must describe the same shipping capabilities. Label mockups, browser previews, reference implementations, and hardware validation accurately. Keep license notices when copying third-party code.

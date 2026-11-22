@@ -8,14 +8,16 @@ export class AnyLinkWorker {
     if(!journalPath||journalPath===':memory:')throw new TypeError('Use a persistent private journalPath');
     closeSync(openSync(journalPath,'a',0o600));chmodSync(journalPath,0o600);
     this.#client=client;this.#handlers=handlers;this.#db=new DatabaseSync(journalPath);
-    this.#db.exec('PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS executions(task_id TEXT PRIMARY KEY,state TEXT NOT NULL,result TEXT); CREATE TABLE IF NOT EXISTS worker_binding(singleton INTEGER PRIMARY KEY CHECK(singleton=1),server TEXT NOT NULL,device_id TEXT NOT NULL);');
+    this.#db.exec('PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS executions(task_id TEXT PRIMARY KEY,state TEXT NOT NULL,result TEXT); CREATE TABLE IF NOT EXISTS worker_binding(singleton INTEGER PRIMARY KEY CHECK(singleton=1),server TEXT NOT NULL,device_id TEXT NOT NULL,agent_id TEXT);');
+    if(!this.#db.prepare('PRAGMA table_info(worker_binding)').all().some(c=>c.name==='agent_id'))this.#db.exec('ALTER TABLE worker_binding ADD COLUMN agent_id TEXT');
   }
   async #bound(){
     this.#binding??=(async()=>{
-      const {device}=await this.#client.identity();
-      this.#db.prepare('INSERT OR IGNORE INTO worker_binding VALUES(1,?,?)').run(this.#client.baseUrl,device.id);
-      const owner=this.#db.prepare('SELECT server,device_id FROM worker_binding WHERE singleton=1').get();
-      if(owner.server!==this.#client.baseUrl||owner.device_id!==device.id)throw new Error('Journal belongs to another service or device; use its original identity or a separate journal');
+      const {device,agent}=await this.#client.identity(),agentId=agent?.id??null;
+      this.#db.prepare('INSERT OR IGNORE INTO worker_binding(singleton,server,device_id,agent_id) VALUES(1,?,?,?)').run(this.#client.baseUrl,device.id,agentId);
+      const owner=this.#db.prepare('SELECT server,device_id,agent_id FROM worker_binding WHERE singleton=1').get();
+      if(owner.server!==this.#client.baseUrl||owner.device_id!==device.id||(owner.agent_id!==null&&agentId!==null&&owner.agent_id!==agentId))throw new Error('Journal belongs to another service or device; use its original identity or a separate journal');
+      if(owner.agent_id===null&&agentId!==null)this.#db.prepare('UPDATE worker_binding SET agent_id=? WHERE singleton=1').run(agentId);
     })();
     const binding=this.#binding;
     try{await binding;}catch(error){

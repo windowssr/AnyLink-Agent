@@ -16,14 +16,23 @@ The package is distributed as a release tarball; it has not been published to th
 
 ## Connect your application
 
+Devices join with the owner **join key** (`ANYLINK_JOIN_KEY` on the server). `connect()` upserts the install's device and agent and returns a fresh credential; reconnecting with the same install and agent key rotates the token safely. Any join-key holder can immediately share context and dispatch to any agent — there is no grant step. Keep the join key in server secrets and serve clients over HTTPS.
+
 ```js
 import { AnyLinkClient } from '@anylink-agent/sdk';
 
-const link = new AnyLinkClient({
+const joined = await AnyLinkClient.connect({
   baseUrl: process.env.ANYLINK_BASE_URL,
-  token: process.env.ANYLINK_DEVICE_TOKEN,
+  joinKey: process.env.ANYLINK_JOIN_KEY,
+  installId: process.env.ANYLINK_INSTALL_ID,
+  device: { name: 'Build server', platform: 'other' },
+  agent: { key: 'builder', name: 'Build agent' },
 });
-const context = await link.context(); // global + this logical device
+const link = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: joined.token });
+const context = await link.context(); // global + device + own-agent tiers + persona
+
+// Or reuse a saved credential issued earlier by connect or the owner console:
+// const link = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: process.env.ANYLINK_DEVICE_TOKEN });
 
 // Store only when your application has explicit user intent/authority.
 const fact = await link.saveMemory({
@@ -32,7 +41,7 @@ const fact = await link.saveMemory({
 await link.updateMemory(fact.id, fact.revision, { content: 'Chinese and English' });
 ```
 
-Register a logical device in the self-hosted owner console and securely save its one-time credential. Do not use the owner token as a device token. The reference service is single-owner: device identities share an owner trust domain, rather than providing multi-tenant isolation.
+A device can host several agents: each agent has its own key, capabilities, tasks and agent-scoped memories. Legacy owner-issued credentials still work and bind the device's `default` agent. The reference service is single-owner: device identities share an owner trust domain, rather than providing multi-tenant isolation.
 
 ## Receive work in your project
 
@@ -61,21 +70,12 @@ await worker.run({ signal: shutdownSignal });
 
 `shutdownSignal` is your application's AbortSignal. For a complete runnable program with signal handling and directory creation, see [examples/worker.mjs](examples/worker.mjs).
 
-After the target has advertised its capabilities, the owner grants a source device permission to use a specific target capability:
-
-```bash
-node scripts/grant-capability.mjs \
-  --server http://127.0.0.1:3180 \
-  --owner-token-file secrets/local-dev-owner-token \
-  --source SOURCE_DEVICE_UUID --target TARGET_DEVICE_UUID \
-  --capability text.reverse
-```
-
-This command belongs to the reference server checkout. Add `--revoke` to stop future admission. A sender can then create and poll a task:
+After the worker has advertised its capabilities, any agent can dispatch work to it — target a specific agent, a whole device, or leave the target open and let any capable agent claim:
 
 ```js
+const directory = await link.directory(); // live agents per device
 const task = await link.createTask({
-  target_device_id: targetDeviceId,
+  target: { agent_id: targetAgentId }, // or { device_id } or omit target
   capability: 'text.reverse',
   input: { text: 'AnyLink' },
 }, { idempotencyKey: crypto.randomUUID() });
@@ -104,7 +104,7 @@ The current reference server supports DeepSeek Flash. This is an optional SDK su
 
 - No automatic HTTP/model replay. `AnyLinkError` exposes `code`, `status`, `requestId`, `idempotencyKey` and `submissionUnknown`.
 - Reuse the same mutation key to reconcile a lost response; use a new key for each new claim/poll. Empty claims do not consume a persistent key; only admitted tasks are cached.
-- Task admission is at most once. The server never automatically requeues running work. The local journal prevents replay of an admitted handler; keep one journal for each service/device identity. The SDK binds it before sending receipts.
+- Task admission is at most once. The server never automatically requeues running work. The local journal binds the service, device and agent identity and prevents replay of an admitted handler; keep one journal for each service/device/agent identity. The SDK binds it before sending receipts.
 - Saved completed results can be resent. A durable `started` receipt without a result is an unknown external outcome: inspect the host and settle it explicitly. It is not safe to promise exactly-once external effects.
 - Cancellation is cooperative. Interrupted handlers report `unknown` unless the host can prove cancellation. Register your own host-specific policy checks before side effects.
 - Task input/output objects are limited to 64 KiB. Task lists return the newest 100 records; pagination and streaming task events are not yet implemented.
@@ -117,4 +117,4 @@ A handler exception can occur after an external effect completed. The worker the
 
 ## Device-local reference architecture
 
-Each device connects to the AnyLink server and owns its Agent conversation and tool loop. Android 0.3+ no longer connects to a Mac Gateway. `client.peers()` / `GET /edge/v1/link/peers` discovers only targets and capabilities granted to the authenticated source; `last_seen_at` is credential activity, not a worker-online guarantee. Other hosts can implement the same HTTP contract without OpenClaw or the reference UI.
+Each device connects to the AnyLink server and owns its Agent conversation and tool loop. Android 0.3+ no longer connects to a Mac Gateway. `client.directory()` / `GET /edge/v1/link/directory` discovers live agents, capabilities and presence per device; `client.peers()` / `GET /edge/v1/link/peers` remains as a deprecated device-level view; `last_seen_at` is credential activity, not a worker-online guarantee. Other hosts can implement the same HTTP contract without OpenClaw or the reference UI.

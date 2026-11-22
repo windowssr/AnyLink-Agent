@@ -16,14 +16,23 @@ npm install ./sdk
 
 ## 在你的项目中使用
 
+设备使用主人**加入密钥**（服务器上的 `ANYLINK_JOIN_KEY`）接入。`connect()` 对安装对应的设备和 Agent 执行 upsert 并返回新凭据；用同一安装与 Agent 键重连会安全轮换令牌。任何持有加入密钥的设备都能立即共享上下文并向任意 Agent 派发任务——没有授权步骤。加入密钥请保存在服务器密钥中，并通过 HTTPS 为客户端服务。
+
 ```js
 import { AnyLinkClient } from '@anylink-agent/sdk';
 
-const link = new AnyLinkClient({
+const joined = await AnyLinkClient.connect({
   baseUrl: process.env.ANYLINK_BASE_URL,
-  token: process.env.ANYLINK_DEVICE_TOKEN,
+  joinKey: process.env.ANYLINK_JOIN_KEY,
+  installId: process.env.ANYLINK_INSTALL_ID,
+  device: { name: '构建服务器', platform: 'other' },
+  agent: { key: 'builder', name: '构建 Agent' },
 });
-const context = await link.context(); // 全局事实 + 当前逻辑设备事实
+const link = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: joined.token });
+const context = await link.context(); // 全局 + 设备 + 本 Agent 三层事实与人设
+
+// 也可以复用 connect 或主人控制台此前签发的凭据：
+// const link = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: process.env.ANYLINK_DEVICE_TOKEN });
 
 // 由你的应用确认用户有明确保存意图，再写入长期记忆。
 const fact = await link.saveMemory({
@@ -32,7 +41,7 @@ const fact = await link.saveMemory({
 await link.updateMemory(fact.id, fact.revision, { content: '中英文都可以' });
 ```
 
-先在自部署服务的管理页注册逻辑设备，妥善保存一次性显示的设备凭据。主人管理令牌不应交给普通设备。当前是单主人参考服务，各设备位于同一主人信任域；默认上下文按设备选择事实，不代表多租户强隔离。
+一台设备可以承载多个 Agent：各自有独立的键、能力、任务和 Agent 级记忆。旧版主人签发的设备凭据仍然有效，绑定该设备的 `default` Agent。当前是单主人参考服务，各设备位于同一主人信任域；默认上下文按设备选择事实，不代表多租户强隔离。
 
 ## 让自己的应用接收任务
 
@@ -58,21 +67,12 @@ await worker.recoverResults();
 await worker.run({ signal: shutdownSignal });
 ```
 
-`shutdownSignal` 是应用自己的 AbortSignal。[完整可运行示例](examples/worker.mjs) 包含目录创建、环境变量和退出信号处理。设备先声明能力，主人再为“来源设备 → 目标设备 → 指定能力”授权：
-
-```bash
-node scripts/grant-capability.mjs \
-  --server http://127.0.0.1:3180 \
-  --owner-token-file secrets/local-dev-owner-token \
-  --source 来源设备UUID --target 目标设备UUID \
-  --capability text.reverse
-```
-
-该命令在参考服务工程中执行；加 `--revoke` 可停止后续领取。发送方随后可以创建任务、查询回执：
+`shutdownSignal` 是应用自己的 AbortSignal。[完整可运行示例](examples/worker.mjs) 包含目录创建、环境变量和退出信号处理。Worker 声明能力后，任意 Agent 都可以向它派发任务——可以指定某个 Agent、一台设备，或不指定目标让任意具备能力的 Agent 领取：
 
 ```js
+const directory = await link.directory(); // 按设备列出在线 Agent
 const task = await link.createTask({
-  target_device_id: targetDeviceId,
+  target: { agent_id: targetAgentId }, // 也可是 { device_id }，或省略 target
   capability: 'text.reverse', input: { text: 'AnyLink' },
 }, { idempotencyKey: crypto.randomUUID() });
 const current = await link.task(task.id);
@@ -86,7 +86,7 @@ AnyLink 只搬运结构化任务，不把一句提示词当作执行任意命令
 
 - SDK 不自动重试模型请求或未知提交。错误对象带有 `code`、`status`、`requestId`、`idempotencyKey`、`submissionUnknown`。
 - 丢失响应时用原幂等键核对结果；新一次领取使用新键。空领取不持久占用幂等键，只有实际领取任务才记录结果。
-- 服务端不会自动重排已领取任务；本地持久回执阻止同一任务重新执行。保留每个服务／设备身份的同一份 SQLite journal；SDK 会在回传前核对绑定。
+- 服务端不会自动重排已领取任务；本地持久回执阻止同一任务重新执行。journal 绑定服务、设备和 Agent 身份；为每个服务／设备／Agent 身份保留同一份 SQLite journal，SDK 会在回传前核对绑定。
 - 已保存的结果可以重发；只有 `started`、没有结果的记录需要检查宿主后显式处理。外部副作用无法承诺绝对的“恰好一次”。
 - 取消是协作请求。中断不等于外部动作被撤销；无法证明的结果报告 `unknown`。
 - 输入和结果对象各限制 64 KiB，任务列表目前只返回最近 100 项，暂未提供分页和流式任务事件。
@@ -99,4 +99,4 @@ AnyLink 只搬运结构化任务，不把一句提示词当作执行任意命令
 
 ## 各设备独立运行
 
-每台设备连接 AnyLink 服务器，并在本机管理 Agent 会话和工具循环。Android 0.3+ 不再连接 Mac Gateway。`client.peers()`／`GET /edge/v1/link/peers` 只发现已授权给当前来源设备的目标能力；`last_seen_at` 是凭据活动，不是 Worker 在线保证。其他项目可独立实现该 HTTP 协议，无需 OpenClaw 或参考形象界面。
+每台设备连接 AnyLink 服务器，并在本机管理 Agent 会话和工具循环。Android 0.3+ 不再连接 Mac Gateway。`client.directory()`／`GET /edge/v1/link/directory` 按设备发现在线 Agent、能力与在线状态；`client.peers()`／`GET /edge/v1/link/peers` 保留为已弃用的设备级视图；`last_seen_at` 是凭据活动，不是 Worker 在线保证。其他项目可独立实现该 HTTP 协议，无需 OpenClaw 或参考形象界面。

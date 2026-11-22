@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AnyLink Protocol",
-    "version": "1.0.0",
-    "description": "Preview, single-owner reference service. Hosts own execution, approvals and per-operation authorization. Cloud relays data; it does not run an agent."
+    "version": "2.0.0",
+    "description": "Preview, single-owner reference service. One join key connects devices and agents; the cloud relays shared memory, model passthrough and routed tasks. Hosts own execution, approvals and local policy. It does not run an agent."
   },
   "servers": [
     {
@@ -12,9 +12,56 @@
     }
   ],
   "paths": {
+    "/edge/v1/connect": {
+      "post": {
+        "summary": "Join with the owner key: upsert install device and agent, rotate its credential (201)",
+        "security": [
+          {
+            "joinKey": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Connect"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          },
+          "503": {
+            "description": "Join disabled"
+          }
+        }
+      }
+    },
     "/edge/v1/link/protocol": {
       "get": {
-        "summary": "Negotiate AnyLink protocol and delivery semantics",
+        "summary": "Negotiate AnyLink protocol 2.0 and delivery semantics",
         "security": [
           {
             "deviceBearer": []
@@ -25,6 +72,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -32,20 +82,54 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/link/directory": {
+      "get": {
+        "summary": "List live agents per device with capabilities, presence and self marker",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/link/peers": {
       "get": {
-        "summary": "Discover only owner-granted targets and capabilities; last_seen_at is not worker presence",
+        "summary": "Deprecated device-level compatibility view; use directory for agent routing",
         "security": [
           {
             "deviceBearer": []
@@ -56,6 +140,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -63,20 +150,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/link/capabilities": {
       "post": {
-        "summary": "Replace this device capability manifest",
+        "summary": "Replace this agent capability manifest",
         "security": [
           {
             "deviceBearer": []
@@ -108,6 +195,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -115,20 +205,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/link/tasks": {
       "get": {
-        "summary": "List this device tasks (role=source|target, optional state; newest 100)",
+        "summary": "List this agent tasks (role=source|target, optional state; newest 100)",
         "security": [
           {
             "deviceBearer": []
@@ -169,6 +259,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -176,18 +269,18 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       },
       "post": {
-        "summary": "Create a task under an explicit owner grant",
+        "summary": "Create a task routed to an agent, a device, or any capable agent",
         "security": [
           {
             "deviceBearer": []
@@ -226,6 +319,9 @@
               }
             }
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -233,20 +329,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/link/tasks/{id}": {
       "get": {
-        "summary": "Read a source or target task",
+        "summary": "Read a task visible to source, target or claiming agent",
         "security": [
           {
             "deviceBearer": []
@@ -274,6 +370,9 @@
               }
             }
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -281,20 +380,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/link/tasks/claim": {
       "post": {
-        "summary": "Atomically claim one task, or return {task:null}; never auto-requeue",
+        "summary": "Atomically claim one routed task, or return {task:null}; never auto-requeue",
         "security": [
           {
             "deviceBearer": []
@@ -316,6 +415,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -323,20 +425,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/link/tasks/{id}/result": {
       "post": {
-        "summary": "Persist an executor result",
+        "summary": "Persist an executor result; only the claiming agent",
         "security": [
           {
             "deviceBearer": []
@@ -384,6 +486,9 @@
               }
             }
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -391,20 +496,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/link/tasks/{id}/cancel": {
       "post": {
-        "summary": "Cancel queued work or request cooperative cancellation",
+        "summary": "Cancel queued work or request cooperative cancellation; only the source agent",
         "security": [
           {
             "deviceBearer": []
@@ -442,57 +547,8 @@
               }
             }
           },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Capability not granted"
-          },
-          "404": {
-            "description": "Not visible to this device"
-          },
-          "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/v1/link/grants": {
-      "post": {
-        "summary": "Create, update or revoke an owner-managed capability grant",
-        "security": [
-          {
-            "ownerSession": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Grant"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation"
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
           },
           "400": {
             "description": "Invalid input"
@@ -501,49 +557,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
-          }
-        }
-      },
-      "get": {
-        "summary": "List owner-managed grants",
-        "security": [
-          {
-            "ownerSession": []
-          }
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Successful operation"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Capability not granted"
-          },
-          "404": {
-            "description": "Not visible to this device"
-          },
-          "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/identity": {
       "get": {
-        "summary": "Read authenticated device identity",
+        "summary": "Read authenticated agent identity",
         "security": [
           {
             "deviceBearer": []
@@ -554,6 +581,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -561,20 +591,20 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/context": {
       "get": {
-        "summary": "Read authenticated device context",
+        "summary": "Read authenticated agent context",
         "security": [
           {
             "deviceBearer": []
@@ -585,6 +615,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -592,20 +625,54 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/persona": {
+      "get": {
+        "summary": "Read authenticated persona document",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/memories": {
       "post": {
-        "summary": "Save an explicit owner fact",
+        "summary": "Save an explicit owner fact; agent scope binds the caller agent",
         "security": [
           {
             "deviceBearer": []
@@ -637,6 +704,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -644,13 +714,13 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
@@ -698,6 +768,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -705,13 +778,13 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       },
@@ -756,6 +829,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -763,13 +839,13 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
@@ -797,6 +873,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -804,13 +883,13 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
@@ -838,6 +917,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -845,18 +927,50 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/v1/devices": {
+      "get": {
+        "summary": "List owner devices with their agents",
+        "security": [
+          {
+            "ownerSession": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      },
       "post": {
         "summary": "Register a logical device",
         "security": [
@@ -890,6 +1004,9 @@
           "200": {
             "description": "Successful operation"
           },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -897,20 +1014,142 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/v1/agents": {
+      "get": {
+        "summary": "List all agents across devices",
+        "security": [
+          {
+            "ownerSession": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}/revoke": {
+      "post": {
+        "summary": "Revoke an agent and its credentials; queued targeted tasks stop routing",
+        "security": [
+          {
+            "ownerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}/restore": {
+      "post": {
+        "summary": "Restore a revoked agent; it must reconnect for a new credential",
+        "security": [
+          {
+            "ownerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
     },
     "/v1/devices/{id}/credential": {
       "post": {
-        "summary": "Issue a one-time device credential (201); not replayable",
+        "summary": "Issue a one-time credential bound to the device default agent (201); not replayable",
         "security": [
           {
             "ownerSession": []
@@ -929,7 +1168,7 @@
         ],
         "responses": {
           "201": {
-            "description": "One-time secret: device_id, credential_id and token. Store privately."
+            "description": "One-time secret: device_id, agent_id, credential_id and token. Store privately."
           },
           "400": {
             "description": "Invalid input"
@@ -938,13 +1177,13 @@
             "description": "Invalid or revoked credential"
           },
           "403": {
-            "description": "Capability not granted"
+            "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this device"
+            "description": "Not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency or terminal-state conflict"
+            "description": "Revision, idempotency, routing or terminal-state conflict"
           }
         }
       }
@@ -990,16 +1229,85 @@
       "deviceBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Revocable device service credential, not an LLM provider key"
+        "description": "Revocable agent credential issued by connect or the owner console"
+      },
+      "joinKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Owner join key from server secrets; any holder may connect an install and dispatch to any agent"
       },
       "ownerSession": {
         "type": "apiKey",
         "in": "cookie",
         "name": "anylink_session",
-        "description": "Session from POST /v1/auth/login; provision devices and credentials through /v1/devices"
+        "description": "Session from POST /v1/auth/login; inspect devices, agents and status through /v1"
       }
     },
     "schemas": {
+      "Connect": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "object",
+            "properties": {
+              "install_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "macos",
+                  "android",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "install_id",
+              "name",
+              "platform"
+            ],
+            "additionalProperties": false
+          },
+          "agent": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "kind": {
+                "default": "agent",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "key",
+              "name",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "device",
+          "agent"
+        ],
+        "additionalProperties": false
+      },
       "Capabilities": {
         "type": "object",
         "properties": {
@@ -1035,6 +1343,38 @@
       "TaskInput": {
         "type": "object",
         "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "required": [
+                  "agent_id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "device_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "required": [
+                  "device_id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
           "target_device_id": {
             "type": "string",
             "format": "uuid",
@@ -1060,7 +1400,6 @@
           }
         },
         "required": [
-          "target_device_id",
           "capability",
           "input",
           "ttl_seconds"
@@ -1124,10 +1463,46 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
-          "target_device_id": {
+          "source_agent_id": {
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "target_agent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claimed_by_agent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "capability": {
             "type": "string",
@@ -1227,6 +1602,9 @@
         "required": [
           "id",
           "source_device_id",
+          "source_agent_id",
+          "target_agent_id",
+          "claimed_by_agent_id",
           "target_device_id",
           "capability",
           "input",
@@ -1236,36 +1614,6 @@
           "expires_at",
           "started_at",
           "finished_at"
-        ],
-        "additionalProperties": false
-      },
-      "Grant": {
-        "type": "object",
-        "properties": {
-          "source_device_id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "target_device_id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "capability": {
-            "type": "string",
-            "maxLength": 100,
-            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"
-          },
-          "enabled": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "source_device_id",
-          "target_device_id",
-          "capability",
-          "enabled"
         ],
         "additionalProperties": false
       },
@@ -1286,10 +1634,23 @@
             "type": "string",
             "enum": [
               "global",
-              "device"
+              "device",
+              "agent"
             ]
           },
           "applicable_device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "applicable_agent_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -1344,7 +1705,8 @@
             "type": "string",
             "enum": [
               "global",
-              "device"
+              "device",
+              "agent"
             ]
           },
           "device_id": {

@@ -2,14 +2,16 @@
 
 The local quickstart in the root README starts a loopback-only server and a PostgreSQL 16 container. `scripts/init-local.mjs` creates private random database/owner credentials and refuses to replace an existing `.env`. Configure your own provider key only if using model passthrough; memory and task services work without it. The database's development port is `127.0.0.1:54329`; this differs from the disposable integration-test port.
 
-The owner UI registers logical devices and displays each credential JSON only once. Save it in an ignored file with owner-only permissions. Devices use `/edge/v1/*` and `/model/v1/*`; owner session cookies authenticate `/v1/*`. To grant a capability, use `scripts/grant-capability.mjs` with an owner-token **file**, not a token command-line argument.
+The owner UI registers logical devices, lists their agents, and displays each credential JSON only once. Save it in an ignored file with owner-only permissions. Devices and agents use `/edge/v1/*` and `/model/v1/*`; owner session cookies authenticate `/v1/*`.
+
+Any device can also join with the owner **join key**: set `ANYLINK_JOIN_KEY` (minimum 24 characters) in `secrets/app.env` — or `ANYLINK_JOIN_KEY_FILE` pointing at a secret file — and `POST /edge/v1/connect` upserts the install's device and agent, returning a fresh `ak_` credential. Every join-key holder can share context and dispatch to any agent; the real execution boundary is each host's local policy, and remote access still requires HTTPS. Leave the key unset or a `REPLACE_`/`CONFIGURE_` placeholder to disable joins; owner-issued `/v1/devices/{id}/credential` credentials keep working and bind the device's `default` agent.
 
 ## Production reference
 
 Existing Linux/amd64 deployment scripts target an operator-managed directory at `/opt/anylink-agent`. They are not a first-time server provisioner. Prepare these ignored server secrets first:
 
 - `secrets/postgres.env`: PostgreSQL user/database/password.
-- `secrets/app.env`: `DATABASE_URL`, `OWNER_TOKEN`, `HOST=0.0.0.0`, `PORT=3180`, `APP_ORIGIN`.
+- `secrets/app.env`: `DATABASE_URL`, `OWNER_TOKEN`, `HOST=0.0.0.0`, `PORT=3180`, `APP_ORIGIN`, optional `ANYLINK_JOIN_KEY` (or `ANYLINK_JOIN_KEY_FILE`).
 - `secrets/model.env`: `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`.
 - `secrets/owner-token`: the same owner token for local administrative scripts.
 
@@ -27,7 +29,7 @@ The release builder pins the app and PostgreSQL image identities. Deployment ver
 
 Back up PostgreSQL and the worker's **local SQLite execution journal**. They have different owners: cloud task state alone cannot prove whether an external host action completed. Do not automatically restart/requeue uncertain work as a new task. Retain original idempotency keys to recover responses.
 
-This service supports one owner. Same-owner device memory endpoints are not a tenant security boundary. Target execution is separately gated by source/target/capability grants. Model passthrough currently supports DeepSeek Flash, with one active request per device and a small global concurrency limit. Provider availability is separate from database liveness.
+This service supports one owner. Same-owner device memory endpoints are not a tenant security boundary; agent-scoped memories are isolated per agent. Task routing is open to any joined agent that advertises the capability — execution is gated by each host's local policy, and revoking an agent stops its credentials and targeted queued tasks. Model passthrough currently supports DeepSeek Flash, with one active request per device and a small global concurrency limit. Provider availability is separate from database liveness.
 
 `/healthz` is process liveness. `/readyz` checks database reachability and reports whether optional provider credentials are configured; it does not spend a model request to verify upstream availability. No public hosted AnyLink endpoint or shared credentials are supplied by this repository.
 

@@ -4,7 +4,7 @@ Report a vulnerability through [GitHub private vulnerability reporting](https://
 
 The current server is a **single-owner reference deployment**. Device credentials belong to that owner's trust domain. Default memory context selects global and current-device facts; the legacy memory API permits explicit same-owner cross-device access. It is not a multi-tenant or hardware-attested isolation boundary.
 
-Task execution additionally requires an owner-created source/target/capability grant and a target capability manifest. Revocation stops subsequent admission; it does not undo an already-admitted external effect. Cancellation is cooperative. The host must enforce workspace, application, command and approval policy at its own point of effect.
+Task routing is open to any joined agent advertising the capability; there is no per-pair grant. Revoking an agent stops subsequent admission and its targeted queued tasks; it does not undo an already-admitted external effect. Cancellation is cooperative. The join key lets any holder connect and dispatch to any agent, so keep it in server secrets and serve clients over HTTPS. The host must enforce workspace, application, command and approval policy at its own point of effect.
 
 Use HTTPS for remote connections or a loopback SSH tunnel. Keep the owner token, device credentials and provider keys on trusted hosts. Do not expose the current loopback OpenClaw Gateway directly to the Internet. The server can read memory, task payloads, results and forwarded model requests; this is not end-to-end encrypted storage.
 

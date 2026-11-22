@@ -11,7 +11,7 @@ AnyLink provides self-hosted memory, optional model passthrough, a device task p
 ## What works
 
 - **Standalone SDK**: read global/device context, save and revise facts, stream model responses, advertise capabilities, submit tasks and retrieve real results.
-- **Device task flow**: the owner explicitly grants a source/target/capability tuple; the target claims work, executes locally and reports a durable receipt.
+- **Device task flow**: any joined agent advertises a capability and claims work routed to it by agent, device or capability; it executes locally and reports a durable receipt.
 - **Failure semantics**: idempotent mutations, revision preconditions, local execution journals and explicit unknown outcomes. Unknown model requests or external effects are never silently rerun.
 - **Self-hosted service**: TypeScript, Fastify and PostgreSQL. The cloud does not run an agent tool loop.
 - **Reference clients**: a Mac `.app` with chat, computer control and a desktop companion; an Android-local Agent with private notes, shared memory, cross-device tasks and character states. System speech and OS permissions still need hardware verification.
@@ -53,19 +53,23 @@ npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-
 ```js
 import { AnyLinkClient } from '@anylink-agent/sdk';
 
-const link = new AnyLinkClient({
+const joined = await AnyLinkClient.connect({
   baseUrl: process.env.ANYLINK_BASE_URL,
-  token: process.env.ANYLINK_DEVICE_TOKEN,
+  joinKey: process.env.ANYLINK_JOIN_KEY,
+  installId: process.env.ANYLINK_INSTALL_ID,
+  device: { name: 'Build server', platform: 'other' },
+  agent: { key: 'builder', name: 'Build agent' },
 });
+const link = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: joined.token });
 const context = await link.context();
 const task = await link.createTask({
-  target_device_id: targetDeviceId,
+  target: { agent_id: targetAgentId },
   capability: 'text.reverse',
   input: { text: 'AnyLink' },
 }, { idempotencyKey: crypto.randomUUID() });
 ```
 
-The target must advertise the capability and the owner must grant access first. See the [SDK guide](sdk/README.md) for a runnable worker, grants, receipt recovery and optional model streaming. If you only need shared memory, use the context/memory methods without replacing your harness or provider.
+One join key connects any device and agent — no per-pair grants. See the [SDK guide](sdk/README.md) for a runnable worker, agent routing, receipt recovery and optional model streaming. If you only need shared memory, use the context/memory methods without replacing your harness or provider.
 
 ## Self-host the reference service
 
@@ -82,7 +86,7 @@ npm run build
 node --env-file=.env dist/server/index.js
 ```
 
-Open `http://127.0.0.1:3180`. Log in using the owner token in `secrets/local-dev-owner-token`. Register logical devices under **设备访问**, generate their one-time credential JSON and store it privately. Configure each SDK instance with its own device token. Owner, device and model-provider credentials are separate.
+Open `http://127.0.0.1:3180`. Log in using the owner token in `secrets/local-dev-owner-token`. `init-local.mjs` also writes `secrets/local-dev-join-key`; devices join through `AnyLinkClient.connect` or `POST /edge/v1/connect`. The owner console under **设备访问** lists devices and their agents for inspection and revocation, and can still issue legacy one-time credentials bound to a device's `default` agent. Owner, join, device and model-provider credentials are separate.
 
 The default is loopback-only. Use HTTPS or an SSH tunnel for remote access. Deployment and rollback tooling lives in `deploy/` and `scripts/`; read [self-hosting](docs/open-source/self-hosting.md) before production use.
 
@@ -105,7 +109,7 @@ TEST_DATABASE_URL=postgresql://USER:PASS@127.0.0.1:5432/anylink_test npm run tes
 
 ## Current boundaries
 
-This is a **single-owner reference deployment**. Logical devices share one owner trust domain. Default context selection is not multi-tenant data isolation or proof of physical pairing. Execution also requires capability grants and host policy. Cancellation is cooperative; exactly-once effects in external systems cannot be guaranteed. The server can read stored memory/tasks and forwarded model content.
+This is a **single-owner reference deployment**. Logical devices share one owner trust domain. Default context selection is not multi-tenant data isolation or proof of physical pairing. The join key lets any holder connect and dispatch to any agent; the real execution boundary is each host's local policy. Cancellation is cooperative; exactly-once effects in external systems cannot be guaranteed. The server can read stored memory/tasks and forwarded model content.
 
 The native Android Agent speaks the generic cloud protocol; a standalone Kotlin SDK is not published. Current phone tools cover device information, private notes, shared memory and cross-device tasks; general control of other apps is not implemented. Existing Codex desktop-chat control and end-to-end realtime voice are not implemented. Phone speech, GPU and lifecycle behavior still require hardware verification. See [SECURITY](SECURITY.md).
 

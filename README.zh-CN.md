@@ -11,7 +11,7 @@ AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协
 ## 已实现
 
 - **通用 SDK**：读取全局／设备上下文，保存与修订记忆，流式模型调用，注册能力，下发任务并查询真实结果。
-- **设备任务通路**：主人明确授予“来源设备 → 目标设备 → 能力”，目标宿主领取任务、本机执行、回传持久回执。
+- **设备任务通路**：任意接入的 Agent 声明能力并领取按 Agent、设备或能力路由来的任务，本机执行并回传持久回执。
 - **失败语义**：幂等写入、revision 条件、持久执行 journal、未知结果显式报告；不会自动重跑未知模型请求或外部操作。
 - **自部署服务**：TypeScript、Fastify、PostgreSQL；云端不运行 Agent 工具循环。
 - **参考客户端**：Mac `.app` 的聊天、电脑控制和桌面伙伴；Android 手机上的本地 Agent、私有便笺、统一记忆、跨设备任务与形象状态。系统语音与权限仍需真机验证。
@@ -53,19 +53,23 @@ npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-
 ```js
 import { AnyLinkClient } from '@anylink-agent/sdk';
 
-const link = new AnyLinkClient({
+const joined = await AnyLinkClient.connect({
   baseUrl: process.env.ANYLINK_BASE_URL,
-  token: process.env.ANYLINK_DEVICE_TOKEN,
+  joinKey: process.env.ANYLINK_JOIN_KEY,
+  installId: process.env.ANYLINK_INSTALL_ID,
+  device: { name: '构建服务器', platform: 'other' },
+  agent: { key: 'builder', name: '构建 Agent' },
 });
+const link = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: joined.token });
 const context = await link.context();
 const task = await link.createTask({
-  target_device_id: targetDeviceId,
+  target: { agent_id: targetAgentId },
   capability: 'text.reverse',
   input: { text: 'AnyLink' },
 }, { idempotencyKey: crypto.randomUUID() });
 ```
 
-目标宿主需先注册能力，主人需明确授权。完整 Worker、授权步骤、结果恢复和可选模型调用见 [SDK 中文说明](sdk/README.zh-CN.md)。只需接记忆时，使用 `context()` 等接口即可，不需要替换已有 Agent 或模型。
+一个加入密钥即可连接任意设备和 Agent，没有逐对授权。完整 Worker、Agent 路由、结果恢复和可选模型调用见 [SDK 中文说明](sdk/README.zh-CN.md)。只需接记忆时，使用 `context()` 等接口即可，不需要替换已有 Agent 或模型。
 
 ## 自部署参考服务
 
@@ -82,7 +86,7 @@ npm run build
 node --env-file=.env dist/server/index.js
 ```
 
-访问 `http://127.0.0.1:3180`，使用 `secrets/local-dev-owner-token` 中的主人令牌登录。在“设备访问”注册逻辑设备，生成并私下保存一次性凭据 JSON；将设备 Token 配给自己的 SDK 实例。主人令牌、设备凭据与模型 Key 各自独立。
+访问 `http://127.0.0.1:3180`，使用 `secrets/local-dev-owner-token` 中的主人令牌登录。`init-local.mjs` 同时生成 `secrets/local-dev-join-key`；设备通过 `AnyLinkClient.connect` 或 `POST /edge/v1/connect` 接入。“设备访问”页面列出设备及其 Agent 供查看和吊销，也仍可为设备 `default` Agent 签发旧版一次性凭据。主人令牌、加入密钥、设备凭据与模型 Key 各自独立。
 
 默认端口仅监听回环。远程使用 HTTPS 或 SSH 隧道；不要直接公开当前本机 Gateway。生产 Compose、发布与回退脚本保留在 `deploy/`、`scripts/`，先阅读[部署说明](docs/open-source/self-hosting.md)。
 
@@ -105,7 +109,7 @@ TEST_DATABASE_URL=postgresql://USER:PASS@127.0.0.1:5432/anylink_test npm run tes
 
 ## 当前边界
 
-服务是**单主人参考部署**。逻辑设备处于同一主人信任域，默认上下文选择不等于多租户数据隔离，也不证明物理设备已配对。执行还受能力授权与宿主本地策略控制。取消是协作请求，外部副作用不能承诺绝对“恰好一次”。服务器可读取记忆、任务和转发的模型内容。
+服务是**单主人参考部署**。逻辑设备处于同一主人信任域，默认上下文选择不等于多租户数据隔离，也不证明物理设备已配对。加入密钥让任何持有者都能连接并向任意 Agent 派发任务，真正的执行边界是每台宿主的本地策略。取消是协作请求，外部副作用不能承诺绝对“恰好一次”。服务器可读取记忆、任务和转发的模型内容。
 
 Android 原生 Agent 已接通通用云端协议；尚未发布独立 Kotlin SDK。手机工具当前限于基础状态、私有便笺、统一记忆与跨设备任务，尚不能通用控制其他 App。没有 Codex 现有桌面会话控制或端到端实时语音承诺；APK 的收音、播放、GPU 和后台生命周期仍待真机验收。详见[安全边界](SECURITY.md)。
 

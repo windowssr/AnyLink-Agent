@@ -22,10 +22,11 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
     }else{res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{role:'assistant',content:'回复中文',tool_calls:[{id:'call_x',type:'function',function:{name:'read',arguments:'{"path":"note.txt"}'}}]}}],usage:{prompt_tokens:12,completion_tokens:3}}));}
   });
   await new Promise<void>(r=>upstream.listen(0,'127.0.0.1',r));
-  const config:Config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/v1`,origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180};
+  const joinKey='integration-join-key-0123456789abcdef';
+  const config:Config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/v1`,origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md'};
   let instance=await createApp(config,{logger:false});let cookie='',device:any,android:any,token='',memory:any;
   async function owner(method:string,path:string,body?:unknown,key=randomUUID(),headers:Record<string,string>={}){return instance.app.inject({method:method as any,url:path,headers:{cookie,'idempotency-key':key,...headers},payload:body as any});}
-  async function edge(method:string,path:string,body?:unknown,key=randomUUID(),credential=token){return instance.app.inject({method:method as any,url:path,headers:{authorization:`Bearer ${credential}`,'idempotency-key':key},payload:body as any});}
+  async function edge(method:string,path:string,body?:unknown,key=randomUUID(),credential=token,headers:Record<string,string>={}){return instance.app.inject({method:method as any,url:path,headers:{authorization:`Bearer ${credential}`,'idempotency-key':key,...headers},payload:body as any});}
   const model=(content:string,stream=false,extra={})=>edge('POST','/model/v1/chat/completions',{model:'deepseek-flash',messages:[{role:'user',content}],stream,...extra});
   try{
     await t.test('owner authentication and no cloud agent endpoint',async()=>{
@@ -53,7 +54,32 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
       assert.equal((await edge('POST','/edge/v1/memories',{...body,content:'other'},key)).statusCode,409);
       await owner('POST','/v1/memories',{title:'手机目录',content:'Android-path',scope:'device',applicable_device_id:android.id});
       await owner('POST','/v1/memories',{title:'偏好',content:'中文',scope:'global'});
-      const c=(await edge('GET','/edge/v1/context')).json();assert.equal(c.device.length,1);assert.equal(c.global.length,1);assert.equal(c.directory.entries[0].id,memory.id);
+      const c=(await edge('GET','/edge/v1/context')).json();assert.equal(c.device.length,1);assert.equal(c.global.length,1);assert.equal(c.directory.entries[0].id,memory.id);assert.equal(c.agent.length,0);assert.equal(c.agent_id!==undefined,true);assert.equal(c.persona.name,'dafeiyu');
+    });
+    await t.test('agent-scoped memories isolate per agent; device and global stay shared',async()=>{
+      const connect=async(installId:string,agentKey:string)=>{const r=await instance.app.inject({method:'POST',url:'/edge/v1/connect',headers:{authorization:`Bearer ${joinKey}`},payload:{device:{install_id:installId,name:'Iso '+installId,platform:'other'},agent:{key:agentKey,name:agentKey}}});assert.equal(r.statusCode,201,r.body);const j=r.json();return {device_id:j.device_id,agent_id:j.agent_id,token:j.token};};
+      const a=await connect('install-iso-0001','agent-a'),b=await connect('install-iso-0001','agent-b'),remote=await connect('install-iso-0002','agent-c');
+      assert.equal(a.device_id,b.device_id);assert.notEqual(a.device_id,remote.device_id);
+      const ea=(m:string,p:string,body?:unknown,key=randomUUID(),headers={})=>edge(m,p,body,key,a.token,headers),eb=(m:string,p:string,body?:unknown,key=randomUUID(),headers={})=>edge(m,p,body,key,b.token,headers),er=(m:string,p:string,body?:unknown,key=randomUUID(),headers={})=>edge(m,p,body,key,remote.token,headers);
+      const secret=(await ea('POST','/edge/v1/memories',{title:'A secret',content:'only agent A',scope:'agent'},randomUUID())).json();
+      assert.equal(secret.scope,'agent');assert.equal(secret.applicable_agent_id,a.agent_id);assert.equal(secret.applicable_device_id,a.device_id);assert.equal(secret.source_agent_id,a.agent_id);
+      await ea('POST','/edge/v1/memories',{title:'Device fact',content:'shared on device',scope:'device',applicable_device_id:a.device_id},randomUUID());
+      const ca=(await ea('GET','/edge/v1/context')).json(),cb=(await eb('GET','/edge/v1/context')).json(),cr=(await er('GET','/edge/v1/context')).json();
+      assert.equal(ca.agent.length,1);assert.equal(cb.agent.length,0);assert.equal(cr.agent.length,0);
+      assert.ok(!JSON.stringify(cb).includes('only agent A'));
+      assert.equal(cb.device.filter((m:any)=>m.title==='Device fact').length,1);assert.equal(cr.device.length,0);
+      const found=(await eb('POST','/edge/v1/memories/search',{q:'only agent A'})).json();assert.equal(found.items.length,0);
+      assert.equal((await eb('GET',`/edge/v1/memories/${secret.id}`)).statusCode,404);
+      assert.equal((await eb('PATCH',`/edge/v1/memories/${secret.id}`,{content:'hijack',expected_revision:1})).statusCode,404);
+      assert.equal((await eb('DELETE',`/edge/v1/memories/${secret.id}`,undefined,randomUUID(),{'if-match':'1'})).statusCode,404);
+      assert.equal((await ea('GET',`/edge/v1/memories/${secret.id}`)).statusCode,200);
+      assert.equal((await ea('PATCH',`/edge/v1/memories/${secret.id}`,{content:'A edited',expected_revision:1})).statusCode,200);
+      await ea('DELETE',`/edge/v1/memories/${secret.id}`,undefined,randomUUID(),{'if-match':'2'});
+      // Edge cannot write another agent's scope; owner must supply applicable_agent_id.
+      assert.equal((await eb('POST','/edge/v1/memories',{title:'x',content:'y',scope:'agent',applicable_agent_id:a.agent_id})).statusCode,403);
+      assert.equal((await owner('POST','/v1/memories',{title:'owner agent fact',content:'z',scope:'agent'})).statusCode,400);
+      const own=(await owner('POST','/v1/memories',{title:'owner agent fact',content:'z',scope:'agent',applicable_agent_id:b.agent_id})).json();
+      assert.equal(own.applicable_device_id,b.device_id);
     });
     await t.test('memory CAS and immediate tombstone visibility',async()=>{
       assert.equal((await edge('PATCH',`/edge/v1/memories/${memory.id}`,{content:'new-path',expected_revision:1})).json().revision,2);
@@ -96,7 +122,7 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
       const credential=(await instance.db.query('SELECT id FROM edge_credentials LIMIT 1')).rows[0].id,id=randomUUID();
       await instance.db.query("INSERT INTO model_requests(id,credential_id,device_id,model,state) VALUES($1,$2,$3,'deepseek-flash','submitted')",[id,credential,device.id]);
       const before=calls;await instance.app.close();instance=await createApp(config,{logger:false});assert.equal(calls,before);
-      assert.equal((await instance.db.query('SELECT state FROM model_requests WHERE id=$1',[id])).rows[0].state,'submission_unknown');assert.equal((await owner('GET','/v1/memories')).json().items.length,2);
+      assert.equal((await instance.db.query('SELECT state FROM model_requests WHERE id=$1',[id])).rows[0].state,'submission_unknown');assert.ok((await owner('GET','/v1/memories')).json().items.length>=2);
     });
   }finally{hold?.();await instance.app.close();await new Promise<void>(r=>upstream.close(()=>r()));}
 });
