@@ -23,7 +23,7 @@ fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/buil
 const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=3001','-PANYLINK_AGENT_ID='+agent];
 if(process.argv.includes('--dependencies'))args.push('help');
 else if(live)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkLiveTest');
-else if(testing)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkAgentTest','--tests','ai.openclaw.app.anylink.AnyLinkCloudUiTest');
+else if(testing)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkAgentTest','--tests','ai.openclaw.app.anylink.AnyLinkCloudUiTest','--tests','ai.openclaw.app.anylink.AnyLinkPhoneTest');
 else args.push(':app:assembleThirdPartyDebug');
 const logPath=path.join(output,live?'live.log':testing?'test.log':'build.log'),log=fs.openSync(logPath,'w');
 console.log('Building pinned official Android source with AnyLink UI; log: '+path.relative(root,logPath));

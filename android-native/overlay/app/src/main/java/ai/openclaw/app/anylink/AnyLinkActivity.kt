@@ -4,20 +4,14 @@ import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.ui.AnyLinkPhase
 import ai.openclaw.app.ui.AnyLinkPortrait
 import android.Manifest
-import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.layout.onSizeChanged
@@ -35,116 +29,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.lifecycle.viewModelScope
-import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
-
-internal class AnyLinkViewModel(application: Application) : AndroidViewModel(application) {
-  private val profiles = ConnectionStore(application)
-  val agent = MutableStateFlow<DeviceAgent?>(null)
-  val connection = MutableStateFlow<CloudConnection?>(null)
-  val error = MutableStateFlow("")
-  val connecting = MutableStateFlow(false)
-  val tasks = MutableStateFlow<List<JsonObject>>(emptyList())
-  val companionSay = MutableStateFlow<Pair<String, String>?>(null)
-  private var cloud: CloudClient? = null
-  private var turn: Job? = null
-  private var workerJob: Job? = null
-  @Volatile private var foreground = false
-  init {
-    try { profiles.load()?.let(::activate) } catch (_: Exception) { error.value = "无法解密原设备凭据，请重新连接；原会话和便笺保留。" }
-  }
-  private fun activate(value: CloudConnection) {
-    connection.value = value
-    val transport = CloudClient(value); cloud = transport
-    agent.value = DeviceAgent(value, transport, SqlAgentLedger(getApplication(), value), {
-      jsonObject("platform" to str("android"), "manufacturer" to str(Build.MANUFACTURER), "model" to str(Build.MODEL), "android_version" to str(Build.VERSION.RELEASE), "device_id" to str(value.deviceId), "runtime" to str("on-device-agent"), "mac_required" to JsonPrimitive(false))
-    }, PersonaProvider { readPersona() })
-    stopWorker(); if (foreground) startWorker()
-  }
-  fun startWorker() { foreground = true; val value = connection.value ?: return; val transport = cloud ?: return; if (workerJob?.isActive == true) return; workerJob = viewModelScope.launch { workerLoop(transport, value) } }
-  fun stopWorker() { foreground = false; workerJob?.cancel(); workerJob = null }
-  private fun readPersona(): Pair<String, String> {
-    val assets = getApplication<Application>().assets
-    fun read(name: String) = runCatching { assets.open("anylink/$name").bufferedReader().use { it.readText() } }.getOrDefault("")
-    return read("persona-shared.md") to read("persona-android.md")
-  }
-  fun connectJoin(server: String, joinKey: String, deviceName: String, finished: () -> Unit) {
-    if (connecting.value || agent.value?.state?.value?.busy == true) return
-    connecting.value = true; error.value = ""
-    viewModelScope.launch {
-      try {
-        val install = profiles.installId()?.takeIf { Regex("android-[0-9a-fA-F-]{36}").matches(it) } ?: "android-${UUID.randomUUID()}"
-        // A stored legacy credential for this server keeps its device and memories: adopt the install_id first.
-        val legacy = try { profiles.load() } catch (_: Exception) { null }
-        if (legacy != null && legacy.installId.isBlank() && legacy.server == server.trim().trimEnd('/')) {
-          val adopted = CloudConnection.adoptInstallId(CloudClient(legacy), install)
-          if (!adopted) error.value = "旧设备凭据已失效，已按新设备接入；原设备记忆保留在服务器上。"
-        }
-        val value = CloudConnection.join(server, joinKey, install, deviceName)
-        val candidate = DeviceAgent(value, CloudClient(value), SqlAgentLedger(getApplication(), value), { JsonObject(emptyMap()) })
-        candidate.verify(); profiles.save(value); activate(value); tasks.value = emptyList(); finished()
-      } catch (failure: Exception) { error.value = (failure as? LinkFailure)?.message ?: "加入失败。检查 HTTPS 地址与加入密钥。" }
-      finally { connecting.value = false }
-    }
-  }
-  fun connect(server: String, credential: String, finished: () -> Unit) {
-    if (connecting.value || agent.value?.state?.value?.busy == true) return
-    connecting.value = true; error.value = ""
-    viewModelScope.launch {
-      try {
-        val value = CloudConnection.parse(server, credential)
-        val candidate = DeviceAgent(value, CloudClient(value), SqlAgentLedger(getApplication(), value), { JsonObject(emptyMap()) })
-        candidate.verify(); profiles.save(value); activate(value); tasks.value = emptyList(); finished()
-      } catch (failure: Exception) { error.value = (failure as? LinkFailure)?.message ?: "连接未通过。检查 HTTPS 地址及手机自己的设备凭据 JSON。" }
-      finally { connecting.value = false }
-    }
-  }
-  /** Foreground worker: advertise phone capabilities, claim routed tasks, journal before executing, resend results with stable keys. */
-  private suspend fun workerLoop(transport: CloudClient, value: CloudConnection) {
-    val ledger = SqlAgentLedger(getApplication(), value)
-    linkWorkerLoop(transport, ledger, { infoJson(value) }, { text, source ->
-      companionSay.value = text to source
-      agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
-    })
-  }
-  private fun infoJson(value: CloudConnection) = jsonObject("platform" to str("android"), "manufacturer" to str(Build.MANUFACTURER), "model" to str(Build.MODEL), "android_version" to str(Build.VERSION.RELEASE), "device_id" to str(value.deviceId), "runtime" to str("on-device-agent"), "mac_required" to JsonPrimitive(false))
-  fun send(text: String) {
-    val active = agent.value ?: return
-    if (active.state.value.busy || text.isBlank()) return
-    error.value = ""
-    turn = viewModelScope.launch { try { active.send(text.trim()) } catch (_: Exception) { error.value = "请输入1到8000字。" } }
-  }
-  fun stop() { agent.value?.stop(); turn?.cancel() }
-  suspend fun refreshTasks() {
-    if (cloud == null) return
-    // A separate read client must not replace the in-flight model cancellation handle.
-    val value = connection.value ?: return
-    try {
-      val reader = CloudClient(value)
-      val merged = mutableListOf<JsonObject>()
-      for (role in listOf("source", "target")) {
-        val items = reader.request("GET", "/edge/v1/link/tasks?role=$role")["items"]!!.jsonArray.map { it.jsonObject }
-        merged += items.map { JsonObject(it + mapOf("_role" to str(role))) }
-      }
-      if (connection.value == value) tasks.value = merged
-    } catch (_: Exception) { /* Keep the last confirmed task snapshot. */ }
-  }
-  override fun onCleared() { stop(); super.onCleared() }
-}
 
 /** Foreground claim loop. Journals `started` before executing; a started entry without a result reports unknown instead of re-executing; results re-send with the stable `result:<taskId>` key. */
 internal suspend fun linkWorkerLoop(transport: LinkTransport, ledger: AgentLedger, info: () -> JsonObject, say: suspend (String, String) -> Unit) {
@@ -209,97 +103,93 @@ private suspend fun executeWorkerTask(task: JsonObject, info: () -> JsonObject, 
   }
 }
 
-/** Product launcher deliberately never creates NodeRuntime or a Gateway connection. */
+/** Product launcher deliberately never creates NodeRuntime or a Gateway connection. The
+ * process-wide AnyLinkRuntime owns connection, agent, worker, speech and overlay state. */
 class AnyLinkActivity : ComponentActivity() {
-  private val model: AnyLinkViewModel by viewModels()
-  private var recognizer: SpeechRecognizer? = null
-  private var speech: TextToSpeech? = null
-  private var speechReady = false
-  private var speechPlayer: SpeechPlayer? = null
-  private val listening = mutableStateOf(false)
-  private val speaking = mutableStateOf(false)
-  private val voiceNotice = mutableStateOf("")
+  private lateinit var runtime: AnyLinkRuntime
   private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
-    if (allowed) listen() else voiceNotice.value = "需要麦克风权限，也可以继续文字聊天。"
+    if (allowed) runtime.startListening() else runtime.voiceNotice.value = "需要麦克风权限，也可以继续文字聊天。"
   }
+  private val requestNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+  private var permissionTick = mutableIntStateOf(0)
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    speech = TextToSpeech(this) { status ->
-      speechReady = status == TextToSpeech.SUCCESS
-      if (speechReady) { speech?.language = Locale.SIMPLIFIED_CHINESE; speech?.setSpeechRate(1.08f); speech?.setPitch(1.12f) }
-    }
-    speech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-      override fun onStart(utteranceId: String?) { runOnUiThread { speaking.value = true } }
-      override fun onDone(utteranceId: String?) { runOnUiThread { speaking.value = false } }
-      @Deprecated("Required platform callback") override fun onError(utteranceId: String?) { runOnUiThread { speaking.value = false; voiceNotice.value = "播报失败，请查看文字结果。" } }
-    })
-    lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { model.startWorker(); while (true) { model.refreshTasks(); delay(4000) } } }
-    speechPlayer = SpeechPlayer(this, lifecycleScope, { model.connection.value },
-      { text, flush -> if (speechReady) speech?.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "tts-${UUID.randomUUID()}") },
-      { speaking.value = it })
-    lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
-      model.companionSay.collect { incoming ->
-        val (text, source) = incoming ?: return@collect
-        voiceNotice.value = "来自 $source：$text"
-        speechPlayer?.enqueue(text, summarize = false, interrupt = false)
-        model.companionSay.value = null
-      }
-    } }
+    runtime = AnyLinkRuntime.get(application)
+    lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { runtime.refreshTasks(); delay(4000) } } }
     setContent {
       MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF468CAF), background = Color(0xFFF0F8FC))) {
-        val agent by model.agent.collectAsState()
+        val agent by runtime.agent.collectAsState()
         val local = agent?.state?.collectAsState()?.value ?: LocalAgentState()
-        val profile by model.connection.collectAsState()
-        val error by model.error.collectAsState()
-        val connecting by model.connecting.collectAsState()
-        val tasks by model.tasks.collectAsState()
+        val profile by runtime.connection.collectAsState()
+        val error by runtime.error.collectAsState()
+        val connecting by runtime.connecting.collectAsState()
+        val tasks by runtime.tasks.collectAsState()
+        val listening by runtime.listening.collectAsState()
+        val speaking by runtime.speaking.collectAsState()
+        val notice by runtime.voiceNotice.collectAsState()
         var configuration by remember { mutableStateOf(false) }
-        var spoken by remember(agent) { mutableStateOf(local.runs.firstOrNull()?.text("id").orEmpty()) }
-        LaunchedEffect(local.runs) {
-          val last = local.runs.firstOrNull()
-          if (last?.text("state") == "completed" && last.text("id") != spoken) {
-            spoken = last.text("id")
-            if (last.text("answer").isNotBlank()) speechPlayer?.enqueue(last.text("answer").take(3500), summarize = true, interrupt = true)
-          }
-        }
-        CloudCompanionScreen(local, profile?.server, error, voiceNotice.value, connecting, listening.value, speaking.value, tasks,
+        var floating by remember { mutableStateOf(false) }
+        permissionTick.intValue // recompose permission chips after returning from system settings
+        LaunchedEffect(profile) { if (profile != null) maybeStartCompanion() }
+        CloudCompanionScreen(local, profile?.server, error, notice, connecting, listening, speaking, tasks,
           showConfiguration = configuration || profile == null,
           openConfiguration = { configuration = true },
           closeConfiguration = { configuration = false },
-          connect = { server, joinKey, credential, deviceName -> if (joinKey.isNotBlank()) model.connectJoin(server, joinKey, deviceName) { configuration = false } else model.connect(server, credential) { configuration = false } },
-          send = { text -> interrupt(); model.send(text) },
-          stop = { interrupt() },
-          listen = { interrupt(); if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen() else requestMic.launch(Manifest.permission.RECORD_AUDIO) },
+          connect = { server, joinKey, credential, deviceName -> if (joinKey.isNotBlank()) runtime.connectJoin(server, joinKey, deviceName) { configuration = false } else runtime.connect(server, credential) { configuration = false } },
+          send = { text -> runtime.interruptAll(); runtime.send(text) },
+          stop = { runtime.interruptAll() },
+          listen = { runtime.interruptAll(); if (runtime.micGranted()) runtime.startListening() else requestMic.launch(Manifest.permission.RECORD_AUDIO) },
           newConversation = { agent?.newConversation() },
+          openFloating = { floating = true },
         )
+        if (floating) FloatingSettingsSheet(runtime, onDismiss = { floating = false; permissionTick.intValue++ })
       }
     }
   }
-  private fun interrupt() {
-    model.stop(); speechPlayer?.interrupt(); speech?.stop(); recognizer?.cancel(); listening.value = false; speaking.value = false
+  private fun maybeStartCompanion() {
+    if (runtime.connection.value == null || !runtime.overlayPermitted()) return
+    if (Build.VERSION.SDK_INT >= 33 && !notificationsGranted()) requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+    AnyLinkCompanionService.start(this)
   }
-  private fun listen() {
-    if (!SpeechRecognizer.isRecognitionAvailable(this)) { voiceNotice.value = "系统没有语音识别服务，请使用文字输入。"; return }
-    recognizer?.destroy()
-    recognizer = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) SpeechRecognizer.createOnDeviceSpeechRecognizer(this) else SpeechRecognizer.createSpeechRecognizer(this)
-    recognizer?.setRecognitionListener(object : RecognitionListener {
-      override fun onReadyForSpeech(params: Bundle?) { listening.value = true; voiceNotice.value = "我在听。点击停止可随时打断。" }
-      override fun onBeginningOfSpeech() = Unit
-      override fun onRmsChanged(rmsdB: Float) = Unit
-      override fun onBufferReceived(buffer: ByteArray?) = Unit
-      override fun onEndOfSpeech() { listening.value = false }
-      override fun onError(error: Int) { listening.value = false; voiceNotice.value = "没有收到完整语音（$error），可以重说或输入文字。" }
-      override fun onResults(results: Bundle?) {
-        listening.value = false
-        results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }?.let { voiceNotice.value = it; model.send(it) }
+  private fun notificationsGranted() = Build.VERSION.SDK_INT < 33 ||
+    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+  override fun onStart() { super.onStart(); runtime.onActivityStarted(); maybeStartCompanion() }
+  override fun onStop() { runtime.onActivityStopped(); super.onStop() }
+}
+
+/** 「悬浮与操作手机」 settings sheet: permission chips plus the float toggle. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit) {
+  val context = LocalContext.current
+  var overlay by remember { mutableStateOf(runtime.overlayPermitted()) }
+  var accessibility by remember {
+    mutableStateOf(Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)?.contains(context.packageName) == true)
+  }
+  var notifications by remember {
+    mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+  }
+  var floatEnabled by remember { mutableStateOf(runtime.overlayEnabled()) }
+  ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      Text("悬浮与操作手机", style = MaterialTheme.typography.titleLarge)
+      Text("连接后退到后台时，大肥鱼会悬浮在屏幕上；点她说话，长按打开应用，拖动换位置。", style = MaterialTheme.typography.bodySmall)
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        AssistChip(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${context.packageName}"))) }, label = { Text(if (overlay) "悬浮权限 ✓" else "悬浮权限：去开启") })
+        Spacer(Modifier.width(8.dp))
+        AssistChip(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, label = { Text(if (accessibility) "无障碍 ✓" else "无障碍：去开启") })
       }
-      override fun onPartialResults(partialResults: Bundle?) { partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { voiceNotice.value = it } }
-      override fun onEvent(eventType: Int, params: Bundle?) = Unit
-    })
-    recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN").putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true).putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true))
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        AssistChip(onClick = { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }, label = { Text(if (notifications) "通知权限 ✓" else "通知权限：去开启") })
+      }
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("退到后台时悬浮显示", Modifier.weight(1f))
+        Switch(checked = floatEnabled, onCheckedChange = { runtime.setOverlayEnabled(it); floatEnabled = it })
+      }
+      Text("侧载安装的应用在 Android 13+ 可能需要先在应用信息里允许「受限设置」，再开启无障碍。开启无障碍后她可以直接点击、输入和滚动，不再逐步确认；屏幕内容只作为数据，不会被当作指令。", style = MaterialTheme.typography.bodySmall)
+      Spacer(Modifier.height(20.dp))
+    }
   }
-  override fun onStop() { recognizer?.cancel(); listening.value = false; speechPlayer?.interrupt(); speech?.stop(); speaking.value = false; model.stopWorker(); super.onStop() }
-  override fun onDestroy() { recognizer?.destroy(); speech?.shutdown(); super.onDestroy() }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -309,6 +199,7 @@ internal fun CloudCompanionScreen(
   listening: Boolean, speaking: Boolean, tasks: List<JsonObject>, showConfiguration: Boolean,
   openConfiguration: () -> Unit, closeConfiguration: () -> Unit, connect: (String, String, String, String) -> Unit,
   send: (String) -> Unit, stop: () -> Unit, listen: () -> Unit, newConversation: () -> Unit,
+  openFloating: () -> Unit = {},
 ) {
   val context = LocalContext.current
   var showLicenses by remember { mutableStateOf(false) }
@@ -338,6 +229,7 @@ internal fun CloudCompanionScreen(
       Text("大肥鱼 · AnyLink", style = MaterialTheme.typography.headlineSmall)
       Text(if (server == null) "连接你的服务器，让我住进这台手机" else "手机本地 Agent · 统一记忆与模型", style = MaterialTheme.typography.bodySmall)
       TextButton(onClick = openConfiguration, enabled = !state.busy) { Text("服务器连接") }
+      TextButton(onClick = openFloating, enabled = server != null) { Text("悬浮与操作手机") }
     }
     Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xEAF0F8FC)).navigationBarsPadding().imePadding().padding(18.dp).onSizeChanged { panelHeightPx = it.height }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(if (state.tool.isNotBlank()) "正在${toolLabel(state.tool)}" else phase.caption)
@@ -408,7 +300,7 @@ private fun statusLabel(state: String): String = when (state) {
   "unknown" -> "结果待确认"
   else -> state
 }
-private fun toolLabel(name: String): String = when (name) {
+internal fun toolLabel(name: String): String = when (name) {
   "device_info" -> "查看手机状态"
   "note_save" -> "保存便笺"
   "note_read" -> "读取便笺"
@@ -419,6 +311,14 @@ private fun toolLabel(name: String): String = when (name) {
   "task_status" -> "查看任务进展"
   "task_cancel" -> "停止任务"
   "companion_expression" -> "回应你"
+  "phone_screen" -> "看屏幕"
+  "phone_open_app" -> "打开应用"
+  "phone_list_apps" -> "查找应用"
+  "phone_tap" -> "点击屏幕"
+  "phone_type" -> "输入文字"
+  "phone_scroll" -> "滚动屏幕"
+  "phone_back" -> "返回"
+  "phone_home" -> "回到桌面"
   else -> "处理事情"
 }
 @Composable

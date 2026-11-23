@@ -1,6 +1,6 @@
 # Agent Mesh v2：加入密钥、Agent 路由与三层记忆
 
-修订：2026-11-23。分支 `feat/agent-mesh-v2`，协议 2.0，服务 0.5.0，SDK 0.2.0，Android 0.4.0-preview.1。取代第 19 篇中的逐对授权（grants）部分。
+修订：2026-11-23。分支 `feat/agent-mesh-v2`，协议 2.0，服务 0.5.0，SDK 0.2.0，Android 0.5.0-preview.1。取代第 19 篇中的逐对授权（grants）部分。
 
 ## 决策
 
@@ -12,7 +12,14 @@
 ## 客户端
 
 - Mac：`node mac/connect.mjs --server URL --join-key-file FILE --ssh-host ywc` 在同一设备上接入 `mac-openclaw` 与 `mac-files` 两个 Agent；已有安装只改凭据文件，不重写 OpenClaw 配置。OpenClaw 插件新增目录与任务工具；`configure-companion.mjs` 用共享人设＋宿主补充生成 SOUL.md（v0.6 迁移，有备份）。
-- Android：服务器地址＋加入密钥接入为 `android-dafeiyu`；系统提示＝服务器人设＋`android-native/persona.md`＋三层记忆；前台时作为任务目标提供 `phone.status`、`companion.say`，执行前写 journal，中断不重跑。`npm --prefix android-native run build:private` 生成带大肥鱼 Live2D 的自用 `-private` APK，公开发布脚本拒收。
+- Android：服务器地址＋加入密钥接入为 `android-dafeiyu`；系统提示＝服务器人设＋`android-native/persona.md`＋三层记忆；前台或伴随服务运行时作为任务目标提供 `phone.status`、`companion.say`，执行前写 journal，中断不重跑。`npm --prefix android-native run build:private` 生成带大肥鱼 Live2D 的自用 `-private` APK，公开发布脚本拒收。
+
+## Android 悬浮陪伴与本机手机操作（0.5.0-preview.1）
+
+- `AnyLinkRuntime` 进程单例持有连接、CloudClient、DeviceAgent、任务 worker、SpeechPlayer、语音识别与悬浮状态；Activity、前台服务 `AnyLinkCompanionService`（specialUse＋microphone，常驻通知）与悬浮窗 `CompanionOverlay` 都是它的视图。worker 在 Activity 启动或伴随服务运行期间存活。
+- 退到后台且已授权悬浮权限时显示约 120×180dp 的 `TYPE_APPLICATION_OVERLAY` 悬浮窗（同一 Live2D，mini 取景）；点按说话、长按开 App、拖动换位（记住位置、限制屏幕内）、拖到底部 × 隐藏。每次只保留一个 WebView。
+- `AnyLinkAccessibilityService` 提供本机工具 `phone_screen`/`phone_open_app`/`phone_list_apps`/`phone_tap`/`phone_type`/`phone_scroll`/`phone_back`/`phone_home`：节点编号只在下次读屏前有效，读屏排除自身包名、可见节点上限 150 个／约 12KB；动作后约 600ms 返回 `{ok, screen}` 新屏幕。**动作直接执行、无确认**；屏幕内容按不可信数据处理。未开启无障碍时报 `ACCESSIBILITY_DISABLED`。工具只在本机对话可用，不进跨设备能力声明。
+- 每轮模型调用上限 6→20；持久化历史时除最新一份屏幕回执外其余替换为「[旧屏幕已省略]」，避免 100k 上下文被界面转储占满。
 
 ## 部署记录（ywc）
 

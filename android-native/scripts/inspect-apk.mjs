@@ -17,6 +17,10 @@ assert.ok(badging.includes("application-label:'大肥鱼 · AnyLink'"));
 for(const permission of ['READ_SMS','SEND_SMS','READ_CALL_LOG','ACCESS_BACKGROUND_LOCATION','READ_MEDIA_IMAGES','CAMERA'])assert.ok(!badging.includes("uses-permission: name='android.permission."+permission+"'"),'Unexpected legacy phone permission '+permission);
 const manifest=execFileSync(path.join(buildTools,'aapt'),['dump','xmltree',apk,'AndroidManifest.xml'],{encoding:'utf8'});
 for(const component of ['ai.openclaw.app.MainActivity','NodeForegroundService','VoiceE2eReceiver','VoiceE2eService','OpenClawAccessibilityService'])assert.ok(!manifest.includes(component),'Legacy component is still registered: '+component);
+for(const permission of ['SYSTEM_ALERT_WINDOW','FOREGROUND_SERVICE','FOREGROUND_SERVICE_SPECIAL_USE','FOREGROUND_SERVICE_MICROPHONE','POST_NOTIFICATIONS'])assert.ok(badging.includes("uses-permission: name='android.permission."+permission+"'"),'Missing required permission '+permission);
+for(const component of ['ai.openclaw.app.anylink.AnyLinkCompanionService','ai.openclaw.app.anylink.AnyLinkAccessibilityService'])assert.ok(manifest.includes(component),'Missing component '+component);
+assert.ok(manifest.includes('PROPERTY_SPECIAL_USE_FGS_SUBTYPE'),'Missing specialUse FGS subtype property');
+assert.ok(manifest.includes('"android.accessibilityservice"'),'Missing accessibility service meta-data');
 
 const signature=execFileSync('/bin/sh',[path.join(buildTools,'apksigner'),'verify','--verbose','--print-certs',apk],{env:environment(),encoding:'utf8'});
 const buildInfo=JSON.parse(execFileSync('/usr/bin/unzip',['-p',apk,'assets/anylink/build-info.json'],{encoding:'utf8'}));

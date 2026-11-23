@@ -45,6 +45,7 @@ internal fun AnyLinkPortrait(
   sequence: String?,
   safeTopPx: Int = 0,
   safeBottomPx: Int = 0,
+  mini: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   var web by remember { mutableStateOf<WebView?>(null) }
@@ -63,6 +64,7 @@ internal fun AnyLinkPortrait(
       put("reducedMotion", !animationsEnabled)
       put("safeTop", safeTopPx)
       put("safeBottom", safeBottomPx)
+      put("mini", mini)
     }.toString()
   val currentPayload by rememberUpdatedState(payload)
   DisposableEffect(lifecycle) {

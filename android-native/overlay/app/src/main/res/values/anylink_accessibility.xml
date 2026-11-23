@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="anylink_accessibility_description">让大肥鱼读取屏幕内容并代你点击、输入、滚动和打开应用。屏幕内容仅作为数据，不会被当作指令执行。</string>
+</resources>

@@ -4,7 +4,7 @@
   const phases = new Set(['idle', 'listening', 'thinking', 'working', 'speaking', 'attention']);
   const emotions = new Set(['neutral', 'happy', 'curious', 'comfort', 'apologetic', 'excited', 'shy']);
   let app, model, ready = false, paused = false, expressionKey = '', gestureSequence, actionEpoch = 0;
-  let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false, safeTop: 0, safeBottom: 0};
+  let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false, safeTop: 0, safeBottom: 0, mini: false};
   let touch = 0, lastFrame = performance.now();
   const pose = {x: 0, y: 0, tilt: 0, pitch: 0, mouth: 0, body: 0};
   function fit() {
@@ -16,10 +16,13 @@
     const top = Number.isFinite(state.safeTop) ? Math.max(0, state.safeTop) : 0;
     const bottom = Number.isFinite(state.safeBottom) ? Math.max(0, state.safeBottom) : 0;
     const region = Math.max(1, innerHeight - top - bottom);
-    const scale = Math.max(innerWidth * 1.12 / model.width, region * 2.28 / model.height);
+    // Mini mode (floating overlay) crops to head and shoulders in a small window.
+    const scale = state.mini
+      ? Math.max(innerWidth * 1.5 / model.width, region * 1.5 / model.height)
+      : Math.max(innerWidth * 1.12 / model.width, region * 2.28 / model.height);
     // This model's canvas includes empty space above the head. Offset that
     // padding while retaining headroom, so the visible region ends near the waist.
-    model.scale.set(scale); model.position.set(innerWidth / 2, top - region * 0.15);
+    model.scale.set(scale); model.position.set(innerWidth / 2, state.mini ? top - region * 0.52 : top - region * 0.15);
   }
   async function gesture(name) {
     if (!ready || state.reducedMotion) return;
@@ -51,7 +54,7 @@
   window.anylinkMobileAvatar = {
     update(value) {
       if (!value || !phases.has(value.phase)) return;
-      state = {phase: value.phase, emotion: emotions.has(value.emotion) ? value.emotion : 'neutral', level: Number.isFinite(value.level) ? Math.max(0, Math.min(1, value.level)) : 0, reducedMotion: !!value.reducedMotion, gesture: value.gesture, sequence: value.sequence, safeTop: (Number(value.safeTop) || 0) / (window.devicePixelRatio || 1), safeBottom: (Number(value.safeBottom) || 0) / (window.devicePixelRatio || 1)};
+      state = {phase: value.phase, emotion: emotions.has(value.emotion) ? value.emotion : 'neutral', level: Number.isFinite(value.level) ? Math.max(0, Math.min(1, value.level)) : 0, reducedMotion: !!value.reducedMotion, gesture: value.gesture, sequence: value.sequence, safeTop: (Number(value.safeTop) || 0) / (window.devicePixelRatio || 1), safeBottom: (Number(value.safeBottom) || 0) / (window.devicePixelRatio || 1), mini: value.mini === true};
       fit();
       paused = value.paused === true; apply();
     },

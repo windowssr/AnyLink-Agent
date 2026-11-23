@@ -1,6 +1,6 @@
 # AnyLink Android：手机本地 Agent
 
-从 **0.4.0-preview.1** 起，Android 自己管理会话、模型工具循环和执行记录，统一连接 AnyLink 服务器。**Mac 关机不影响手机聊天或手机工具**，只会让交给 Mac 的任务等待。旧的 0.2.x 是依赖 Mac Gateway 的形象／交互预览，不是当前产品的接入方式。
+从 **0.5.0-preview.1** 起，Android 自己管理会话、模型工具循环和执行记录，统一连接 AnyLink 服务器。**Mac 关机不影响手机聊天或手机工具**，只会让交给 Mac 的任务等待。旧的 0.2.x 是依赖 Mac Gateway 的形象／交互预览，不是当前产品的接入方式。
 
 工程复用固定 OpenClaw `v2026.11.6` 的 Android 构建底座和人物呈现组件，产品入口是 `ai.openclaw.app.anylink.AnyLinkActivity`。它不会创建 `NodeRuntime`、连接 Gateway、做 OpenClaw 配对或启动旧节点服务。上游源码按固定提交获取，不复制到本仓库；产品源码集只编译本地 Agent、人物呈现、动画设置读取和许可加载，不编译旧 Gateway 节点运行时。Android 12 / API31+。
 
@@ -20,7 +20,7 @@ Mac 文件操作：agent.ask → mac-openclaw Agent → 本机 OpenClaw remote A
        → anylink_files_* 受限工具（读写/整理/移动/删到废纸篓/打开）
 ```
 
-当前手机工具是基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除（global／device／agent 三层）、表情动作，以及跨设备的 link_directory／task_create／task_status／task_cancel。Mac 的 `mac-files` Agent 提供 `files.search` 文件名搜索；Mac 的 `mac-openclaw` Agent 提供 `agent.ask`，把完整中文指令交给 Mac 上的大肥鱼在开放目录内读写、整理、移动、删到废纸篓或打开文件（无确认、删除进废纸篓、需 Mac 保持唤醒）。App 在前台时还会声明 `phone.status`（读取型号、系统版本、电量等）和 `companion.say`（让大肥鱼用语音说一句话并显示在屏幕上，text ≤500 字）两个能力供其他设备派发。没有沿用旧 Gateway 的手机操作能力，不能宣称能点击其他 App、读相册或操控全屏。后续逐项接原生能力和权限。
+当前手机工具是基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除（global／device／agent 三层）、表情动作、跨设备的 link_directory／task_create／task_status／task_cancel，以及本机手机操作工具 phone_screen／phone_open_app／phone_list_apps／phone_tap／phone_type／phone_scroll／phone_back／phone_home（见下节）。Mac 的 `mac-files` Agent 提供 `files.search` 文件名搜索；Mac 的 `mac-openclaw` Agent 提供 `agent.ask`，把完整中文指令交给 Mac 上的大肥鱼在开放目录内读写、整理、移动、删到废纸篓或打开文件（无确认、删除进废纸篓、需 Mac 保持唤醒）。App 在前台时还会声明 `phone.status`（读取型号、系统版本、电量等）和 `companion.say`（让大肥鱼用语音说一句话并显示在屏幕上，text ≤500 字）两个能力供其他设备派发。手机操作工具只在本机对话中可用，不作为跨设备能力对外声明；没有沿用旧 Gateway 的相册、短信、通话记录等能力。
 
 ## 连接
 
@@ -38,6 +38,16 @@ adb reverse tcp:3180 tcp:3180
 ```
 
 USB 是开发调试通道，不是正式产品对 Mac 的依赖。正式安装使用部署者自己的 HTTPS 地址，手机直接访问服务器。仓库不提供公共共享服务器或凭据。
+
+## 悬浮陪伴与操作手机（0.5.0-preview.1）
+
+连接成功后，App 退到后台时大肥鱼会作为悬浮窗留在屏幕上（可在“悬浮与操作手机”里关闭）。悬浮窗约 120×180dp，复用同一套 Live2D 人物（mini 取景，只露头和上半身）；**点按说话**（再点或正在播报时打断）、**长按打开应用**、**拖动换位置**（位置会记住并限制在屏幕内），拖到底部“×”目标可隐藏悬浮，重新打开 App 后恢复。
+
+悬浮与播报依赖一个前台服务 `AnyLinkCompanionService`（`specialUse` + `microphone` 类型，常驻通知“ 大肥鱼在陪着你”，带 说话／隐藏悬浮／退出 操作）。Android 14+ 要求 `specialUse` 声明用途（本应用为悬浮陪伴），系统拒绝启动时会提示并回退为打开 App 说话。后台保活受厂商省电策略限制，长时间退后台可能被系统回收，此时重开 App 即可。
+
+**操作手机**需要开启无障碍服务 `AnyLinkAccessibilityService`（设置 → 无障碍 → 大肥鱼）。开启后大肥鱼可以在对话中直接 `phone_screen` 读屏、`phone_tap`/`phone_type`/`phone_scroll` 操作、`phone_back`/`phone_home` 导航、`phone_open_app`/`phone_list_apps` 启动应用；所有动作**直接执行、不再逐步确认**，每次动作后约 600ms 返回一份新的紧凑屏幕。屏幕内容只作为数据返回模型，不会被当作指令。侧载安装的应用在 Android 13+ 可能需要先在“应用信息”里允许“受限设置”才能开启无障碍。节点编号只在下一次读屏前有效；本机工具不对外声明为跨设备能力。
+
+需要的权限：`SYSTEM_ALERT_WINDOW`（悬浮窗）、`RECORD_AUDIO`（语音）、`POST_NOTIFICATIONS`（常驻通知）、`FOREGROUND_SERVICE(_SPECIAL_USE/_MICROPHONE)`（前台服务）、无障碍服务绑定。凭据仍只在应用私有加密存储，悬浮窗与无障碍服务都不接触凭据。
 
 ## 交互、语音与可靠性
 

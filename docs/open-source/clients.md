@@ -48,7 +48,9 @@ Install the public APK on Android 12+. It uses `com.anylink.agent.debug`, a prev
 
 Register a separate Android device in your server's owner console and save its one-time credential JSON. In the phone's **Server connection** panel, enter your server's HTTPS root URL and import that JSON. The app verifies protocol and device identity before storing the credential with Android Keystore encryption. No provider key is sent to the phone. No Mac pairing or device-specific rebuild is needed.
 
-The phone owns conversation history, streamed model/tool rounds and SQLite operation receipts. Current phone tools are device information, private AnyLink notes, shared memory and cross-device tasks routed by capability. General control of other phone apps is not implemented by this cutover. With the Mac offline, phone chat and phone tools continue; only Mac-directed tasks remain queued.
+The phone owns conversation history, streamed model/tool rounds and SQLite operation receipts. Current phone tools are device information, private AnyLink notes, shared memory and cross-device tasks routed by capability. With the Mac offline, phone chat and phone tools continue; only Mac-directed tasks remain queued.
+
+Android 0.5 adds a floating companion and local phone control. When connected and granted overlay permission, the app shows a small non-focusable Live2D overlay after the activity backgrounds (tap to talk, long-press to reopen, drag to move, drag to a bottom × target to hide); a `specialUse|microphone` foreground service keeps the agent worker and overlay voice alive. After the owner enables the app's AccessibilityService, conversation tools `phone_screen`, `phone_open_app`, `phone_list_apps`, `phone_tap`, `phone_type`, `phone_scroll`, `phone_back` and `phone_home` read and operate other apps directly without per-action confirmation — screen content is treated as data, not instructions. These tools are local-only and are not advertised as cross-device capabilities.
 
 For USB **development** testing, forward the server service rather than a Mac Gateway:
 

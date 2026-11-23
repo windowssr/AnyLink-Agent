@@ -33,14 +33,14 @@ internal class MemoryLedger : AgentLedger {
   override fun saveNote(name: String, content: String) { notes[name] = content }
   override fun readNote(name: String) = notes[name]
 }
-private val testDevice = "11111111-1111-4111-8111-111111111111"
-private val testToken = "ak_" + "x".repeat(32)
-private fun response(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
-private fun sse(content: String = "", call: String? = null, terminal: Boolean = true): String {
+internal val testDevice = "11111111-1111-4111-8111-111111111111"
+internal val testToken = "ak_" + "x".repeat(32)
+internal fun response(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
+internal fun sse(content: String = "", call: String? = null, terminal: Boolean = true): String {
   val delta = if (call != null) """{"tool_calls":[{"index":0,"id":"call_1","function":$call}]}""" else """{"content":${str(content)}}"""
   return "data: {\"choices\":[{\"delta\":$delta,\"finish_reason\":null}]}\n\n" + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"${if (call != null) "tool_calls" else "stop"}\"}]}\n\n" + if (terminal) "data: [DONE]\n\n" else ""
 }
-private fun stream(body: String) = MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body)
+internal fun stream(body: String) = MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body)
 private fun prepare(server: MockWebServer) {
   server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
   server.enqueue(response("""{"protocol":"anylink","version":"1.0"}"""))
