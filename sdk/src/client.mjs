@@ -180,10 +180,11 @@ export class AnyLinkClient {
     this.#timeout = timeoutMs;
   }
 
-  /** Join with the owner key: upserts the install's device and agent, returns a fresh credential. */
-  static async connect({ baseUrl, joinKey, installId, device, agent, fetch: transport = globalThis.fetch, timeoutMs = 30000 }) {
+  /** Join with the owner join key or login password: upserts the install's device and agent, returns a fresh credential. */
+  static async connect({ baseUrl, joinKey, password, installId, device, agent, fetch: transport = globalThis.fetch, timeoutMs = 30000 }) {
     const base = checkBaseUrl(baseUrl);
-    if (typeof joinKey !== 'string' || !joinKey.trim() || /[\r\n]/.test(joinKey)) throw new TypeError('A join key is required');
+    const secret = joinKey ?? password;
+    if (typeof secret !== 'string' || !secret.trim() || /[\r\n]/.test(secret)) throw new TypeError('A join key or login password is required');
     if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new TypeError('timeoutMs must be positive');
     let response;
     try {
@@ -191,7 +192,7 @@ export class AnyLinkClient {
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.timeout(timeoutMs),
-        headers: { Authorization: `Bearer ${joinKey}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           device: {
             install_id: installId,

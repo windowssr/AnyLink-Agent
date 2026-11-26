@@ -62,6 +62,7 @@
   <img src="docs/assets/boundary-learning.svg" alt="Capability-free invocation and automatic boundary learning" width="100%" />
 </p>
 
+- **快捷登录密码（`ANYLINK_LOGIN_PASSWORD`）**：面向普通用户，服务端可选配置一个好记的预设密码（至少 6 位）；在手机端、电脑端或 Web 管理后台直接输入服务器地址和该密码即可一键连接，云端自动签发高熵加密设备令牌（密码不落盘）。
 - **唯一短别名（`device_slug`）**：即使你有两台同名的 Mac，也能用 `@home-mac`、`@office-mac` 精确寻址；同名歧义自动返回 `409 AMBIGUOUS_TARGET_DEVICE` 并提示候选别名。
 - **去抖动 + 闲聊过滤**：连续对话按会话窗口（默认 15 秒 / 6 轮）合并为**单次**云端记忆整理调用，短闲聊（“好的 / 你好 / 嗯”）直接跳过 0 消耗；而设备拒绝/失败边界会**立即落盘学习**。
 - **可靠执行语义**：所有写操作带幂等键，边缘本地零依赖持久化 JSONL 回执日志（`FileJournal`），崩溃或超租约转为 `unknown`，绝不盲目重跑带副作用的操作。
@@ -146,12 +147,34 @@ const done = await client.waitForTask(task.id);
 
 ---
 
-## 蓝色大肥鱼参考客户端
+## 蓝色大肥鱼参考客户端（隔离于 `examples/`）
 
-除了中立、通用的核心协议与 SDK，仓库内置了以**深海蓝白鲸鱼娘「大肥鱼」**为交互卖点的配套参考客户端（核心协议层与角色完全解耦，开源接入无需携带角色）：
+AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protocol v3）与云端中枢/SDK**。为了方便直接体验，仓库在 [`examples/`](examples/README.md) 目录下额外隔离提供了两款以深海蓝白鲸鱼娘「大肥鱼」为交互卖点的完整展示客户端（核心协议层与角色完全解耦，二次开发可完全不引入 `examples/`）：
 
-- **电脑端（Mac + OpenClaw）**：基于 OpenClaw 挂载记忆与文件工具插件，搭配桌面 Live2D 桌宠与本地语音交互。
-- **手机端（Android 原生独立 Agent）**：手机端独立运行对话与无障碍控屏、后台 Live2D 悬浮陪伴与语音播报，不依赖 Mac 在线；需要操作电脑时通过云端无缝协同。
+1. **电脑端（Mac + OpenClaw 后台常驻 Agent）** — 详见配置文档：[`examples/mac-openclaw/README.md`](examples/mac-openclaw/README.md)
+   - 基于 OpenClaw + Protocol v3 插件与 WebSocket Worker，由 macOS LaunchAgent 后台常驻运行，支持云端记忆同步、免能力表 `anylink_invoke`、默认白名单安全沙箱或 `--full-access` 全权限模式、可选桌面 Live2D 桌宠与本地语音。
+2. **手机端（Android 原生独立 Agent）** — 详见配置文档：[`examples/android-native/README.md`](examples/android-native/README.md)
+   - 手机本地运行完整对话循环与 SQLite 账本，**不依赖 Mac 在线**；独立无遮挡形象舞台 + 完整可滚动对话流 + 预设密码一键登录 + 后台前台服务常驻保活 + 轻量化悬浮球 + 可选无障碍控屏；需要操作电脑时经云端实时协同并主动语音播报回执。
+
+### Mac 端常用控制小技巧
+
+- **看实时后台日志**：`tail -f data/mac/logs/service.log`
+- **电脑端打开对话界面**：浏览器访问 `http://127.0.0.1:18791/openclaw/`
+- **查看云端管理后台**（记忆大脑、跨设备任务记录、设备在线状态）：浏览器访问 `http://127.0.0.1:3181/`（使用预设登录密码 `ANYLINK_LOGIN_PASSWORD` 或 `OWNER_TOKEN` 登录）
+- **临时暂停 / 恢复后台服务**：
+  - 暂停：`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anylink.openclaw.plist`
+  - 恢复：`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.anylink.openclaw.plist`
+  - 重启：`launchctl kickstart -k gui/$(id -u)/com.anylink.openclaw`
+
+### 区分项目里的密钥与登录密码（避免填混）
+
+| 密钥 / 密码 | 存放位置 | 用途 |
+| :--- | :--- | :--- |
+| **登录密码（推荐，可选）** | 服务器 `app.env` / `.env` (`ANYLINK_LOGIN_PASSWORD`，≥6 位) | **普通用户最简方式**：手机端、电脑端一键接入，以及登录云端管理后台 `127.0.0.1:3181/` |
+| **Gateway Token** | 本地 `secrets/mac-gateway-token` | 登录本机电脑端 OpenClaw 网页 `127.0.0.1:18791/openclaw/` |
+| **Owner Token** | 服务器 `/opt/anylink-agent/secrets/app.env` (`OWNER_TOKEN`) | 登录云端管理后台 `127.0.0.1:3181/`（管理员长随机令牌） |
+| **Join Key** | 本地 `secrets/ywc-join-key`（同服务器 `ANYLINK_JOIN_KEY`） | 手机、其他电脑或 SDK 接入云端网络时的长随机「加入密钥」 |
+| **Device Token (`ak_...`)** | 本地 `secrets/mac-connection.json` / 手机 Keystore 加密库 | 单个设备 Agent 自动认证云端用，连接成功后自动签发保存，平时无需手动填写 |
 
 <p align="center">
   <img src="docs/assets/android-public.jpg" alt="公开版原创占位形象预览" width="42%" />
@@ -187,14 +210,16 @@ node --env-file=.env dist/server/index.js
 ## 仓库结构与路线图
 
 ```text
-protocol/     # Protocol v3 规范文档与自动生成的 OpenAPI 3.1 契约
-server/       # 云端中枢（记忆大脑 + 多模型网关 + WebSocket 实时总线 + 管理台 API）
-sdk/          # @anylink-agent/sdk — 零依赖 TypeScript/JS SDK (npm)
-sdk-python/   # anylink-agent — Python 异步 SDK 与装饰器边缘节点 (PyPI)
-mcp/          # @anylink-agent/mcp — Claude Code / Cursor / Codex MCP 适配器
-web/          # 云端管理后台（React + Vite）
-mac/          # 参考展示：Mac OpenClaw 插件、文件沙箱与大肥鱼桌宠
-android-native/ # 参考展示：Android 原生大肥鱼客户端与悬浮陪伴
+├── protocol/           # 核心：Protocol v3 规范文档与自动生成的 OpenAPI 3.1 契约
+├── server/             # 核心：云端中枢（记忆大脑 + 多模型网关 + WebSocket 实时总线 + 管理台 API）
+├── sdk/                # 核心：@anylink-agent/sdk — 零依赖 TypeScript/JS SDK (npm)
+├── sdk-python/         # 核心：anylink-agent — Python 异步 SDK 与装饰器边缘节点 (PyPI)
+├── mcp/                # 核心：@anylink-agent/mcp — Claude Code / Cursor / Codex MCP 适配器
+├── web/                # 核心：云端管理后台（React + Vite）
+└── examples/           # 隔离的配套展示实例（与核心协议零耦合）
+    ├── mac-openclaw/   # 参考展示：Mac OpenClaw 后台 Agent、文件/全权限工具与桌面伴侣（含独立 README）
+    ├── android-native/ # 参考展示：Android 原生大肥鱼客户端、独立对话流与后台保活（含独立 README）
+    └── persona/        # 可选共享人设模板（核心协议完全中立）
 ```
 
 - [x] **第一阶段**：Protocol v3.0 规范、云端记忆大脑（混合检索 + 去抖批整理 + 边界自动学习）、多模型网关与 1A 自动记忆、WebSocket 实时总线与租约回收、设备唯一短别名 `slug`、Python SDK、TypeScript SDK、MCP Server。

@@ -36,7 +36,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     host: '127.0.0.1',
     port: 3180,
     joinKey,
-    personaFile: 'persona/dafeiyu.md',
+    loginPassword: 'test-easy-pass-123',
+    personaFile: 'examples/persona/dafeiyu.md',
     speechPrompt: '',
     leaseReaperIntervalMs: 60000,
     memoryDebounceMs: 250,
@@ -399,6 +400,26 @@ test('Protocol v3 E2E: Cloud Memory Brain, Multi-Model Gateway, WebSocket Bus, B
 
       const llmAfter = upstreamRequests.filter(r => String(r.messages?.[0]?.content ?? '').includes('AnyLink Cloud Memory Manager')).length;
       assert.equal(llmAfter - llmBefore, 1, '3 burst turns in one session must coalesce into exactly 1 Cloud Memory LLM call');
+    });
+
+    await t.test('Simple loginPassword authenticates both Web Admin login and /edge/v1/connect', async () => {
+      const badWeb = await instance.app.inject({ method: 'POST', url: '/v1/auth/login', payload: { password: 'wrong-password' } });
+      assert.equal(badWeb.statusCode, 401);
+      const okWeb = await instance.app.inject({ method: 'POST', url: '/v1/auth/login', payload: { password: 'test-easy-pass-123' } });
+      assert.equal(okWeb.statusCode, 200);
+      const statusRes = await instance.app.inject({ method: 'GET', url: '/v1/status', headers: { cookie: String(okWeb.headers['set-cookie']).split(';')[0] } });
+      assert.equal(statusRes.statusCode, 200);
+      assert.equal(statusRes.json().login_password_enabled, true);
+
+      const quickDevice = await AnyLinkClient.connect({
+        baseUrl,
+        password: 'test-easy-pass-123',
+        installId: 'quick-pass-dev-01',
+        device: { name: 'Quick Phone', platform: 'android', slug: 'quick-phone' },
+        agent: { key: 'android-dafeiyu', name: 'Quick Agent' },
+      });
+      assert.ok(quickDevice.token.startsWith('ak_'));
+      assert.equal(quickDevice.device_slug, 'quick-phone');
     });
   } finally {
     await instance.app.close();

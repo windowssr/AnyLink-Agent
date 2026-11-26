@@ -50,14 +50,16 @@ export const agentProfileSchema = z.object({
 }).strict().refine(v => v.name !== undefined || v.summary !== undefined || v.kind !== undefined, 'Provide at least one profile field');
 
 export function registerConnectRoute(app: FastifyInstance, db: Db, config: Config, attempts: Map<string, { count: number; until: number }>) {
+  const matches = (provided: string, expected?: string) => Boolean(expected) && timingSafeEqual(Buffer.from(hash(provided)), Buffer.from(hash(expected!)));
+
   app.post('/edge/v1/connect', async (req, reply) => {
-    if (!config.joinKey) throw new ApiError(503, 'JOIN_DISABLED', 'Join is disabled on this deployment');
+    if (!config.joinKey && !config.loginPassword) throw new ApiError(503, 'JOIN_DISABLED', 'Join is disabled on this deployment');
     const now = Date.now(), old = attempts.get(req.ip);
     if (old && old.until > now && old.count >= 5) throw new ApiError(429, 'JOIN_RATE_LIMIT', 'Too many failed attempts; try again in 15 minutes');
     const token = (req.headers.authorization ?? '').replace(/^Bearer /i, '').trim();
-    if (token.length > 300 || !timingSafeEqual(Buffer.from(hash(token)), Buffer.from(hash(config.joinKey)))) {
+    if (token.length > 300 || (!matches(token, config.joinKey) && !matches(token, config.loginPassword))) {
       attempts.set(req.ip, { count: old && old.until > now ? old.count + 1 : 1, until: old && old.until > now ? old.until : now + 900000 });
-      throw new ApiError(401, 'JOIN_KEY_INVALID', 'Join key is invalid');
+      throw new ApiError(401, 'JOIN_KEY_INVALID', 'Login password or join key is invalid');
     }
     attempts.delete(req.ip);
     const body = connectSchema.parse(req.body);

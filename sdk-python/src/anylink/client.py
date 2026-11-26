@@ -250,7 +250,8 @@ class AnyLinkClient:
         cls,
         *,
         base_url: str,
-        join_key: str,
+        join_key: str | None = None,
+        password: str | None = None,
         install_id: str,
         device_name: str,
         agent_key: str,
@@ -261,10 +262,11 @@ class AnyLinkClient:
         summary: str = "",
         timeout: float = 30.0,
     ) -> dict[str, Any]:
-        """Join an AnyLink server with the owner join key and receive a one-time agent token."""
+        """Join an AnyLink server with the owner join key or login password and receive a one-time agent token."""
         checked = _check_base_url(base_url)
-        if not join_key or "\n" in join_key or "\r" in join_key:
-            raise ValueError("A join_key is required")
+        secret = join_key or password
+        if not secret or "\n" in secret or "\r" in secret:
+            raise ValueError("A join_key or password is required")
         device_body: dict[str, Any] = {"install_id": install_id, "name": device_name, "platform": platform}
         if device_slug is not None:
             device_body["slug"] = device_slug
@@ -276,7 +278,7 @@ class AnyLinkClient:
             try:
                 res = await http.post(
                     "edge/v1/connect",
-                    headers={"Authorization": f"Bearer {join_key}"},
+                    headers={"Authorization": f"Bearer {secret}"},
                     json=payload,
                 )
             except httpx.HTTPError as exc:

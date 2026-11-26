@@ -62,6 +62,7 @@ Edge agents **only manage their own local environment and safety policy** — th
   <img src="docs/assets/boundary-learning.svg" alt="Capability-free invocation and automatic boundary learning" width="100%" />
 </p>
 
+- **Simple Login Password (`ANYLINK_LOGIN_PASSWORD`)**: Optional memorable server passcode (≥6 chars) so non-technical users can connect Android/Mac apps and sign into the Web Admin Console with just the server URL + password (automatically exchanges for an encrypted high-entropy device token; password is never stored on disk).
 - **Unique Short Device Slugs (`device_slug`)**: Address multiple machines cleanly (`@home-mac`, `@office-mac`, `@gpu-box`). Ambiguous display names return `409 AMBIGUOUS_TARGET_DEVICE` with candidate slugs.
 - **Smart Debouncing & Chitchat Filtering**: Rapid turns in the same session are debounced (default 15s / 6 turns) into a **single** Cloud Memory consolidation call, while trivial greetings ("ok / hi") are skipped at zero LLM cost. Declined/failed task boundaries consolidate immediately.
 - **Crash-Safe Reliability**: Idempotent writes, zero-dependency durable JSONL local journals (`FileJournal`), heartbeat lease expiry (`LEASE_EXPIRED` → `unknown`), and zero blind side-effect retries.
@@ -140,12 +141,34 @@ const done = await client.waitForTask(task.id);
 
 ---
 
-## Reference Showcase Clients
+## Reference Showcase Clients (Isolated under `examples/`)
 
-While the core protocol and SDKs are 100% neutral and character-free, this repository also includes companion showcase apps featuring the deep-sea blue whale mascot **"蓝色大肥鱼 (Dafeiyu)"**:
+AnyLink's core is the **framework-agnostic Protocol v3, Cloud Hub, SDKs, and MCP Server**. To demonstrate the end-to-end user experience, two companion apps featuring the deep-sea blue whale mascot **"蓝色大肥鱼 (Dafeiyu)"** are cleanly isolated under [`examples/`](examples/README.md) with zero coupling into the core protocol:
 
-- **macOS (OpenClaw Reference Harness)**: Cloud memory plugin, sandboxed local file tools, desktop Live2D companion & voice interaction.
-- **Android (Native On-Device Agent)**: Runs independently even when Mac is offline; voice chat, floating overlay, accessibility phone control, and seamless cross-device delegation to Mac.
+1. **macOS Desktop Agent (OpenClaw + Worker)** — Setup Guide: [`examples/mac-openclaw/README.md`](examples/mac-openclaw/README.md)
+   - Runs persistently in the background via macOS LaunchAgent (`com.anylink.openclaw`), integrating Cloud Memory Brain, `anylink_invoke`, WebSocket worker, default directory sandbox or opt-in `--full-access` host permissions, and optional Live2D desktop companion.
+2. **Android Native Independent Agent** — Setup Guide: [`examples/android-native/README.md`](examples/android-native/README.md)
+   - Runs independently on-device (works even when Mac is offline); unobstructed virtual avatar stage + full scrollable multi-turn chat stream, quick password login, foreground service keep-alive + lightweight floating bubble, and optional accessibility phone control.
+
+### Quick Operations Tips (Mac Background Service)
+
+- **Tail live background logs**: `tail -f data/mac/logs/service.log`
+- **Open Mac Agent chat UI**: `http://127.0.0.1:18791/openclaw/`
+- **Open Cloud Admin Console** (Shared Memory Brain, Cross-Device Episodes, Online Devices): `http://127.0.0.1:3181/` (sign in with `ANYLINK_LOGIN_PASSWORD` or `OWNER_TOKEN`)
+- **Pause / resume background LaunchAgent**:
+  - Pause: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anylink.openclaw.plist`
+  - Resume: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.anylink.openclaw.plist`
+  - Restart: `launchctl kickstart -k gui/$(id -u)/com.anylink.openclaw`
+
+### Credentials & Login Passcode Cheat Sheet
+
+| Credential / Passcode | Where It Lives | Purpose |
+| :--- | :--- | :--- |
+| **Login Password (Recommended, optional)** | Server `app.env` / `.env` (`ANYLINK_LOGIN_PASSWORD`, ≥6 chars) | **Easiest login for everyday users**: one-step connect in Android/Mac apps AND Web Admin Console login (`127.0.0.1:3181/`) |
+| **Gateway Token** | Local `secrets/mac-gateway-token` | Sign in to local Mac OpenClaw Web UI (`127.0.0.1:18791/openclaw/`) |
+| **Owner Token** | Server `/opt/anylink-agent/secrets/app.env` (`OWNER_TOKEN`) | High-entropy admin token for Cloud Admin Console (`127.0.0.1:3181/`) |
+| **Join Key** | Local `secrets/ywc-join-key` (server `ANYLINK_JOIN_KEY`) | High-entropy device onboarding key for phones, laptops, or SDK nodes |
+| **Device Token (`ak_...`)** | Local `secrets/mac-connection.json` / Android Keystore | Per-agent token minted automatically after connect; never needs manual entry |
 
 <p align="center">
   <img src="docs/assets/android-public.jpg" alt="Public placeholder character preview" width="42%" />
@@ -181,14 +204,16 @@ Open `http://127.0.0.1:3180` and sign in with `secrets/local-dev-owner-token`. S
 ## Repository Layout & Roadmap
 
 ```text
-protocol/       # Protocol v3 spec & generated OpenAPI 3.1 contract
-server/         # Cloud Hub (Memory Brain, Multi-Model Gateway, WebSocket Bus, Admin API)
-sdk/            # @anylink-agent/sdk — Zero-dependency JS/TS SDK (npm)
-sdk-python/     # anylink-agent — Async Python SDK & decorator edge node (PyPI)
-mcp/            # @anylink-agent/mcp — Stdio MCP server for Claude Code / Cursor / Codex
-web/            # Owner administration console (React + Vite)
-mac/            # Reference showcase: Mac OpenClaw plugins & desktop companion
-android-native/ # Reference showcase: Native Android companion agent
+├── protocol/           # Core: Protocol v3 spec & generated OpenAPI 3.1 contract
+├── server/             # Core: Cloud Hub (Memory Brain, Multi-Model Gateway, WebSocket Bus, Admin API)
+├── sdk/                # Core: @anylink-agent/sdk — Zero-dependency JS/TS SDK (npm)
+├── sdk-python/         # Core: anylink-agent — Async Python SDK & decorator edge node (PyPI)
+├── mcp/                # Core: @anylink-agent/mcp — Stdio MCP server for Claude Code / Cursor / Codex
+├── web/                # Core: Owner administration console (React + Vite)
+└── examples/           # Isolated showcase clients (zero coupling into core protocol)
+    ├── mac-openclaw/   # Reference: Mac OpenClaw background agent & desktop companion (with README)
+    ├── android-native/ # Reference: Native Android independent agent (with README)
+    └── persona/        # Optional shared persona baseline (core protocol is 100% neutral)
 ```
 
 - [x] **Phase 1**: Protocol v3.0, Cloud Memory Brain (hybrid search + debounced batch consolidation + auto boundary learning), Multi-Model Gateway + 1A Auto-Memory, WebSocket real-time bus + lease reaper, unique device slugs, Python SDK, TypeScript SDK, MCP Server.

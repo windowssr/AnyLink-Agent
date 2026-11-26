@@ -58,6 +58,8 @@ export function loadConfig() {
   const providerKey = /^(REPLACE_|CONFIGURE_)/.test(rawProviderKey) ? '' : rawProviderKey;
   const rawJoinKey = secret('ANYLINK_JOIN_KEY') ?? '';
   const joinKey = /^(REPLACE_|CONFIGURE_|GENERATE_)/.test(rawJoinKey) ? '' : rawJoinKey;
+  const rawLoginPassword = secret('ANYLINK_LOGIN_PASSWORD') ?? '';
+  const loginPassword = /^(REPLACE_|CONFIGURE_|GENERATE_)/.test(rawLoginPassword) ? '' : rawLoginPassword;
   const deepseekBaseUrl = process.env.MODEL_BASE_URL ?? process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1';
   const defaultModel = process.env.ANYLINK_DEFAULT_MODEL?.trim() || 'deepseek-flash';
   const memoryModel = process.env.ANYLINK_MEMORY_MODEL?.trim() || defaultModel;
@@ -87,6 +89,7 @@ export function loadConfig() {
     host: z.string().default('127.0.0.1'),
     port: z.coerce.number().int().min(1).max(65535).default(3180),
     joinKey: z.string().refine(v => v === '' || v.length >= 24, 'Configure a join key of at least 24 characters or leave it empty to disable joins').default(''),
+    loginPassword: z.string().refine(v => v === '' || v.length >= 6, 'Configure a login password of at least 6 characters or leave it empty').default(''),
     personaFile: z.string().default(''),
     speechPrompt: z.string().default(''),
     leaseReaperIntervalMs: z.number().int().min(1000).max(300000).default(15000),
@@ -113,7 +116,8 @@ export function loadConfig() {
     host: process.env.HOST,
     port: process.env.PORT,
     joinKey,
-    personaFile: process.env.ANYLINK_PERSONA_FILE ?? 'persona/dafeiyu.md',
+    loginPassword,
+    personaFile: process.env.ANYLINK_PERSONA_FILE ?? 'examples/persona/dafeiyu.md',
     speechPrompt: process.env.ANYLINK_SPEECH_PROMPT ?? '',
     leaseReaperIntervalMs: process.env.ANYLINK_LEASE_REAPER_MS ? Number(process.env.ANYLINK_LEASE_REAPER_MS) : 15000,
     memoryDebounceMs: process.env.ANYLINK_MEMORY_DEBOUNCE_MS !== undefined ? Number(process.env.ANYLINK_MEMORY_DEBOUNCE_MS) : 15000,

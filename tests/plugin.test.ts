@@ -4,7 +4,7 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 // @ts-ignore JavaScript plugin entry, also loaded unchanged by upstream OpenClaw.
-import plugin,{memoryIntent} from '../mac/plugin/index.mjs';
+import plugin,{memoryIntent} from '../examples/mac-openclaw/plugin/index.mjs';
 test('memory write intent is explicit and respects negation',()=>{assert.equal(memoryIntent('记住我喜欢中文'),true);assert.equal(memoryIntent('不要记住'),false);assert.equal(memoryIntent('你好'),false);});
 test('plugin injects current cloud facts and binds writes to the current run',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'anylink-plugin-')),path=join(dir,'connection.json');await writeFile(path,JSON.stringify({server:'http://fixture',token:'ak_fixture_not_production',device_id:'mac_fixture'}));

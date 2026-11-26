@@ -4,7 +4,7 @@ const run=(cmd,args,options={})=>execFileSync(cmd,args,{cwd:root,encoding:'utf8'
 if(run('git',['status','--porcelain']).trim())throw new Error('Commit intended source before packaging');
 const revision=run('git',['rev-parse','HEAD']).trim();
 run(process.execPath,['scripts/audit-public.mjs'],{stdio:'inherit'});
-run(process.execPath,['android-native/scripts/inspect-apk.mjs'],{stdio:'inherit'});
+run(process.execPath,['examples/android-native/scripts/inspect-apk.mjs'],{stdio:'inherit'});
 const apk=JSON.parse(fs.readFileSync('artifacts/android-native/apk-inspection.json'));
 const app=path.join(root,'artifacts/public/desktop/AnyLink.app');
 if(JSON.parse(fs.readFileSync(path.join(app,'Contents/Resources/desktop.json'))).projectRoot!=='')throw new Error('Public Mac package must not contain a personal project root');

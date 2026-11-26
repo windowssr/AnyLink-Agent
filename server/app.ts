@@ -37,10 +37,14 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
 
   let persona: null | { name: string; sha256: string; content: string } = null;
   if (config.personaFile) {
-    try {
-      const file = resolve(config.personaFile), content = readFileSync(file, 'utf8');
-      persona = { name: basename(file).replace(/\.[^.]*$/, ''), sha256: createHash('sha256').update(content).digest('hex'), content };
-    } catch {}
+    for (const candidate of [resolve(config.personaFile), resolve('examples', config.personaFile)]) {
+      try {
+        if (!existsSync(candidate)) continue;
+        const content = readFileSync(candidate, 'utf8');
+        persona = { name: basename(candidate).replace(/\.[^.]*$/, ''), sha256: createHash('sha256').update(content).digest('hex'), content };
+        break;
+      } catch {}
+    }
   }
 
   const wsHub = new WsHub(db);
@@ -103,12 +107,17 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
     });
   });
 
+  const secretMatches = (provided: string, expected?: string) => Boolean(expected) && timingSafeEqual(Buffer.from(hash(provided)), Buffer.from(hash(expected!)));
+
   app.post('/v1/auth/login', async (req, reply) => {
-    const input = z.object({ token: z.string().min(1).max(200) }).strict().parse(req.body), now = Date.now(), old = loginAttempts.get(req.ip);
+    const input = z.object({ token: z.string().min(1).max(200).optional(), password: z.string().min(1).max(200).optional() }).strict()
+      .refine(v => Boolean(v.token || v.password), 'Provide token or password').parse(req.body);
+    const provided = (input.token ?? input.password ?? '').trim();
+    const now = Date.now(), old = loginAttempts.get(req.ip);
     if (old && old.until > now && old.count >= 5) throw new ApiError(429, 'LOGIN_RATE_LIMIT', 'Too many failed attempts; try again in 15 minutes');
-    if (!timingSafeEqual(Buffer.from(hash(input.token)), Buffer.from(hash(config.ownerToken)))) {
+    if (!secretMatches(provided, config.ownerToken) && !secretMatches(provided, config.loginPassword)) {
       loginAttempts.set(req.ip, { count: old && old.until > now ? old.count + 1 : 1, until: old && old.until > now ? old.until : now + 900000 });
-      throw new ApiError(401, 'INVALID_TOKEN', 'Invalid owner token');
+      throw new ApiError(401, 'INVALID_TOKEN', 'Invalid login password or owner token');
     }
     loginAttempts.delete(req.ip);
     const token = randomBytes(32).toString('base64url');
@@ -133,7 +142,8 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
     cloud_memory_brain: true,
     ws_enabled: true,
     owner_id: OWNER_ID,
-    join_enabled: !!config.joinKey,
+    join_enabled: !!(config.joinKey || config.loginPassword),
+    login_password_enabled: !!config.loginPassword,
   }));
 
   app.get('/v1/devices', async () => {
