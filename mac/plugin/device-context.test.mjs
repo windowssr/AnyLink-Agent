@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import plugin,{memoryIntent} from './index.mjs';
@@ -251,4 +251,13 @@ test('a known revision conflict is returned unchanged without retrying or poison
     assert.equal((await update.execute('confirmed-revision',{id:'fact-id',content:'新内容',expected_revision:2})).details.revision,3);
     assert.equal(requests.length,count+1);
   },{onRequest:entry=>conflict&&entry.method==='PATCH'?Response.json({error:{code:'REVISION_CONFLICT'}},{status:409}):undefined});
+});
+
+test('openclaw.plugin.json declares contracts.tools and toolMetadata for every registered tool',async()=>{
+  const manifest=JSON.parse(await readFile(new URL('./openclaw.plugin.json',import.meta.url),'utf8'));
+  await fixture(async({tools})=>{
+    const names=Object.keys(tools(macContext)).sort();
+    assert.deepEqual([...manifest.contracts.tools].sort(),names);
+    assert.deepEqual(Object.keys(manifest.toolMetadata).sort(),names);
+  });
 });
