@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createAgentAskHandler} from './agent-ask.mjs';
-import {TaskFailure} from '../../sdk/src/worker.mjs';
+import {TaskDeclined, TaskFailure} from '../../sdk/src/worker.mjs';
 
 const client = {directory: async () => ({items: [{device: {id: 'dev-mac', name: 'Mac 主机', platform: 'macos'}, agents: [{id: 'ag-openclaw', name: 'Mac 大肥鱼'}]}, {device: {id: 'dev-phone', name: '我的手机', platform: 'android'}, agents: []}]})};
 const task = {id: 'task-1', source_device_id: 'dev-phone', source_agent_id: 'ag-phone', capability: 'agent.ask', input: {}};
@@ -62,4 +62,20 @@ test('agent.ask truncates long replies', async t => {
   const ask = createAgentAskHandler({client, gatewayToken: 'gw-secret', gatewayUrl: url});
   const result = await ask.execute({instruction: '写一篇长文'}, {task, signal: new AbortController().signal});
   assert.equal(result.reply.length, 48000); assert.equal(result.truncated, true);
+});
+
+test('agent.ask converts [ANYLINK_DECLINED] into TaskDeclined and supports v3 task.instruction + progress', async t => {
+  const url = await gateway(t, (req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({choices: [{message: {content: '[ANYLINK_DECLINED: NO_WECHAT] Mac 未开放微信发消息权限'}}]}));
+  });
+  const progresses = [];
+  const ask = createAgentAskHandler({client, gatewayToken: 'gw-secret', gatewayUrl: url});
+  const v3Task = {...task, capability: 'agent.invoke', instruction: '帮我发微信给张三'};
+  await assert.rejects(
+    ask.execute({}, {task: v3Task, signal: new AbortController().signal, reportProgress: async p => progresses.push(p)}),
+    e => e instanceof TaskDeclined && e.code === 'NO_WECHAT' && e.message.includes('微信'),
+  );
+  assert.equal(progresses.length, 1);
+  assert.equal(progresses[0].percent, 25);
 });

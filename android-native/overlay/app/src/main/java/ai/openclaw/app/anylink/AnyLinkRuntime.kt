@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -25,9 +26,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 
-/** Process-wide owner of the connection, device agent, worker, voice and overlay
- * state. The Activity, companion service and overlay are views over this runtime;
- * exactly one instance exists per process. */
+/** Process-wide owner of the connection, device agent, WebSocket bus, worker, voice and overlay state. */
 internal class AnyLinkRuntime private constructor(private val app: Application) {
   companion object {
     @Volatile private var instance: AnyLinkRuntime? = null
@@ -42,6 +41,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val error = MutableStateFlow("")
   val connecting = MutableStateFlow(false)
   val tasks = MutableStateFlow<List<JsonObject>>(emptyList())
+  val wsOnline = MutableStateFlow(false)
   val listening = MutableStateFlow(false)
   val speaking = MutableStateFlow(false)
   val voiceNotice = MutableStateFlow("")
@@ -50,7 +50,11 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val overlayVisible = MutableStateFlow(false)
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-  private var cloud: CloudClient? = null
+  // Separate CloudClient instances for chat vs background worker prevent concurrent cancel clobbering.
+  private var chatCloud: CloudClient? = null
+  private var workerCloud: CloudClient? = null
+  private var wsClient: AnyLinkWebSocket? = null
+  private val workerWakeup = Channel<Unit>(Channel.CONFLATED)
   private var turn: Job? = null
   private var workerJob: Job? = null
   private var recognizer: SpeechRecognizer? = null
@@ -58,6 +62,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private var speechReady = false
   private var speechPlayer: SpeechPlayer? = null
   private var lastSpokenRun = ""
+  private val announcedTasks = mutableSetOf<String>()
 
   init {
     try { profiles.load()?.let(::activate) } catch (_: Exception) { error.value = "无法解密原设备凭据，请重新连接；原会话和便笺保留。" }
@@ -69,9 +74,12 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   // ---- connection / agent -------------------------------------------------
 
   private fun activate(value: CloudConnection) {
+    wsClient?.close(); wsClient = null; wsOnline.value = false
+    workerJob?.cancel(); workerJob = null
     connection.value = value
-    val transport = CloudClient(value); cloud = transport
-    agent.value = DeviceAgent(value, transport, SqlAgentLedger(app, value), { infoJson(value) }, PersonaProvider { readPersona() })
+    val chat = CloudClient(value); chatCloud = chat
+    workerCloud = CloudClient(value)
+    agent.value = DeviceAgent(value, chat, SqlAgentLedger(app, value), { infoJson(value) }, PersonaProvider { readPersona() })
     refreshOverlay()
     syncWorker()
   }
@@ -80,9 +88,19 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     fun read(name: String) = runCatching { app.assets.open("anylink/$name").bufferedReader().use { it.readText() } }.getOrDefault("")
     return read("persona-shared.md") to read("persona-android.md")
   }
-  private fun infoJson(value: CloudConnection) = jsonObject("platform" to str("android"), "manufacturer" to str(Build.MANUFACTURER), "model" to str(Build.MODEL), "android_version" to str(Build.VERSION.RELEASE), "device_id" to str(value.deviceId), "runtime" to str("on-device-agent"), "mac_required" to JsonPrimitive(false))
 
-  fun connectJoin(server: String, joinKey: String, deviceName: String, finished: () -> Unit) {
+  private fun infoJson(value: CloudConnection) = jsonObject(
+    "platform" to str("android"),
+    "manufacturer" to str(Build.MANUFACTURER),
+    "model" to str(Build.MODEL),
+    "android_version" to str(Build.VERSION.RELEASE),
+    "device_id" to str(value.deviceId),
+    "device_slug" to str(value.deviceSlug),
+    "runtime" to str("on-device-agent"),
+    "mac_required" to JsonPrimitive(false),
+  )
+
+  fun connectJoin(server: String, joinKey: String, deviceName: String, deviceSlug: String = "", finished: () -> Unit) {
     if (connecting.value || agent.value?.state?.value?.busy == true) return
     connecting.value = true; error.value = ""
     scope.launch {
@@ -93,10 +111,10 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
           val adopted = CloudConnection.adoptInstallId(CloudClient(legacy), install)
           if (!adopted) error.value = "旧设备凭据已失效，已按新设备接入；原设备记忆保留在服务器上。"
         }
-        val value = CloudConnection.join(server, joinKey, install, deviceName)
+        val value = CloudConnection.join(server, joinKey, install, deviceName, deviceSlug)
         val candidate = DeviceAgent(value, CloudClient(value), SqlAgentLedger(app, value), { JsonObject(emptyMap()) })
         candidate.verify(); profiles.save(value); activate(value); tasks.value = emptyList(); finished()
-      } catch (failure: Exception) { error.value = (failure as? LinkFailure)?.message ?: "加入失败。检查 HTTPS 地址与加入密钥。" }
+      } catch (failure: Exception) { error.value = (failure as? LinkFailure)?.message ?: "加入失败。检查 HTTPS 地址、加入密钥与短别名。" }
       finally { connecting.value = false }
     }
   }
@@ -120,7 +138,6 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     error.value = ""
     turn = scope.launch {
       try { active.send(text.trim()) } catch (_: Exception) { error.value = "请输入1到8000字。" }
-      // Speak the completed answer once; the on-screen text stays the full reply.
       val last = active.state.value.runs.firstOrNull()
       if (last?.text("state") == "completed" && last.text("id") != lastSpokenRun && last.text("answer").isNotBlank()) {
         lastSpokenRun = last.text("id")
@@ -137,32 +154,94 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       val reader = CloudClient(value)
       val merged = mutableListOf<JsonObject>()
       for (role in listOf("source", "target")) {
-        val items = reader.request("GET", "/edge/v1/link/tasks?role=$role")["items"]!!.jsonArray.map { it.jsonObject }
+        val items = reader.request("GET", "/edge/v1/tasks?role=$role")["items"]!!.jsonArray.map { it.jsonObject }
         merged += items.map { JsonObject(it + mapOf("_role" to str(role))) }
       }
       if (connection.value == value) tasks.value = merged
     } catch (_: Exception) { }
   }
 
-  // ---- foreground worker --------------------------------------------------
+  // ---- real-time WebSocket & foreground worker ----------------------------
 
   private fun workerWanted() = activityVisible.value || serviceRunning.value
+
   private fun syncWorker() {
     if (workerWanted()) {
-      val value = connection.value ?: return; val transport = cloud ?: return
+      val value = connection.value ?: return
+      val transport = workerCloud ?: return
+      if (wsClient == null) {
+        val socket = AnyLinkWebSocket(
+          connection = value,
+          onState = { online -> wsOnline.value = online; if (online) workerWakeup.trySend(Unit) },
+          onFrame = { frame -> handleWsFrame(frame) },
+        )
+        wsClient = socket
+        socket.connect()
+      }
       if (workerJob?.isActive == true) return
       workerJob = scope.launch { workerLoop(transport, value) }
-    } else { workerJob?.cancel(); workerJob = null }
+    } else {
+      workerJob?.cancel(); workerJob = null
+      wsClient?.close(); wsClient = null; wsOnline.value = false
+    }
   }
+
+  private fun handleWsFrame(frame: JsonObject) {
+    when (frame.text("type")) {
+      "task.available" -> workerWakeup.trySend(Unit)
+      "task.progress" -> {
+        val progress = frame["progress"] as? JsonObject ?: return
+        val msg = progress.text("message")
+        if (msg.isNotBlank()) voiceNotice.value = msg
+        scope.launch { refreshTasks() }
+      }
+      "task.completed" -> {
+        val task = frame["task"] as? JsonObject ?: return
+        scope.launch { refreshTasks() }
+        announceCompletedOutboundTask(task)
+      }
+    }
+  }
+
+  private fun announceCompletedOutboundTask(task: JsonObject) {
+    val id = task.text("id")
+    if (id.isBlank() || !announcedTasks.add(id)) return
+    val result = task["result"] as? JsonObject
+    val output = result?.get("output") as? JsonObject
+    val err = result?.get("error") as? JsonObject
+    val spoken = when (task.text("state")) {
+      "succeeded" -> {
+        val reply = output?.text("reply")?.ifBlank { output.text("text") }.orEmpty()
+        if (reply.isNotBlank()) "跨设备任务完成啦：$reply" else "跨设备任务已经完成啦。"
+      }
+      "declined" -> "对方设备暂时做不到：${err?.text("message").orEmpty().ifBlank { "超出对方环境范围" }}"
+      "failed" -> "跨设备任务未完成：${err?.text("message").orEmpty().ifBlank { "执行失败" }}"
+      "unknown" -> "跨设备任务结果未确认，请查看任务面板。"
+      else -> return
+    }
+    voiceNotice.value = spoken.take(240)
+    agent.value?.state?.update { it.copy(emotion = if (task.text("state") == "succeeded") "happy" else "apologetic", gesture = "wave", sequence = UUID.randomUUID().toString()) }
+    speechPlayer?.enqueue(spoken.take(3500), summarize = spoken.length > 80, interrupt = false)
+  }
+
   private suspend fun workerLoop(transport: CloudClient, value: CloudConnection) {
     val ledger = SqlAgentLedger(app, value)
-    linkWorkerLoop(transport, ledger, { infoJson(value) }, { text, source -> companionSay(text, source) })
+    linkWorkerLoop(
+      transport = transport,
+      ledger = ledger,
+      info = { infoJson(value) },
+      say = { text, source -> companionSay(text, source) },
+      wakeup = workerWakeup,
+      isWsOnline = { wsOnline.value },
+    )
   }
+
   private fun companionSay(text: String, source: String) {
     voiceNotice.value = "来自 $source：$text"
     agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
     speechPlayer?.enqueue(text, summarize = false, interrupt = false)
   }
+
   fun onActivityStarted() { activityVisible.value = true; prefs.edit().putBoolean("overlay_dismissed", false).apply(); syncWorker(); refreshOverlay() }
   fun onActivityStopped() { activityVisible.value = false; syncWorker(); refreshOverlay() }
   fun onServiceStarted() { serviceRunning.value = true; syncWorker(); refreshOverlay() }

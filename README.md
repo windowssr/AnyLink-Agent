@@ -192,7 +192,8 @@ android-native/ # Reference showcase: Native Android companion agent
 ```
 
 - [x] **Phase 1**: Protocol v3.0, Cloud Memory Brain (hybrid search + debounced batch consolidation + auto boundary learning), Multi-Model Gateway + 1A Auto-Memory, WebSocket real-time bus + lease reaper, unique device slugs, Python SDK, TypeScript SDK, MCP Server.
-- [ ] **Phase 2**: Migrate Mac OpenClaw plugins & Android native companion app to Protocol v3 (WebSocket push, proactive spoken task results, seamless Cloud Memory Brain sync) and publish packages to PyPI & npm.
+- [x] **Phase 2**: Migrated Mac OpenClaw plugins & workers (hot token reload, v3 `memory/assemble` & `memory/ingest`, `anylink_invoke`, WebSocket bus, `[ANYLINK_DECLINED]` boundary feedback) and Android native companion app (OkHttp WebSocket push, proactive spoken `task.completed` results, thread-safe isolated `CloudClient`, `device_slug` onboarding, `task_invoke` + `declined` boundary learning) to Protocol v3.
+- [ ] **Phase 3**: Publish `anylink-agent` to PyPI and `@anylink-agent/sdk` + `@anylink-agent/mcp` to npm, plus community adapters (LangGraph, CrewAI, AutoGen).
 
 ---
 

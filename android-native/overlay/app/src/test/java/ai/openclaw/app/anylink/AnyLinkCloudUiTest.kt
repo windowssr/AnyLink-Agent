@@ -32,12 +32,13 @@ class AnyLinkCloudUiTest {
     assertNull(app.packageManager.resolveActivity(Intent().setClassName(app, "ai.openclaw.app.MainActivity"), 0))
     compose.setContent {
       MaterialTheme {
-        CloudCompanionScreen(LocalAgentState(), null, "", "", false, false, false, emptyList(), true, {}, {}, { _, _, _, _ -> }, {}, {}, {}, {})
+        CloudCompanionScreen(LocalAgentState(), null, "", false, "", "", false, false, false, emptyList(), true, {}, {}, { _, _, _, _, _ -> }, {}, {}, {}, {})
       }
     }
     compose.onNodeWithText("连接 AnyLink 服务器").assertExists()
     compose.onNodeWithText("HTTPS 服务器地址").assertExists()
     compose.onNodeWithText("加入密钥").assertExists()
+    compose.onNodeWithText("设备短别名（可选，如 my-phone）").assertExists()
     compose.onNodeWithText("导入旧版设备凭据 JSON").performClick()
     compose.onNodeWithText("设备凭据 JSON").assertExists()
     compose.onNodeWithText("连接我的 Mac").assertDoesNotExist()
@@ -46,15 +47,19 @@ class AnyLinkCloudUiTest {
       file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
   }
-  @Test fun `cloud file results show real filenames and coverage instead of internal JSON`() {
-    val task = linkJson.parseToJsonElement("""{"id":"33333333-3333-4333-8333-333333333333","capability":"files.search","state":"succeeded","result":{"state":"succeeded","output":{"matches":[{"name":"report.txt","path":"/Workspace/report.txt"}],"partial":true}}}""").jsonObject
+  @Test fun `cloud file results and v3 invoke receipts show real output and declined reasons`() {
+    val fileTask = linkJson.parseToJsonElement("""{"id":"33333333-3333-4333-8333-333333333333","capability":"files.search","state":"succeeded","result":{"state":"succeeded","output":{"matches":[{"name":"report.txt","path":"/Workspace/report.txt"}],"partial":true}}}""").jsonObject
+    val invokeTask = linkJson.parseToJsonElement("""{"id":"44444444-4444-4444-8444-444444444444","capability":"agent.invoke","instruction":"帮我总结桌面的周报","state":"succeeded","result":{"state":"succeeded","output":{"reply":"周报已整理并汇总 3 条进展。"}}}""").jsonObject
+    val declinedTask = linkJson.parseToJsonElement("""{"id":"55555555-5555-4555-8555-555555555555","capability":"agent.invoke","instruction":"发微信给老板","state":"declined","result":{"state":"declined","error":{"code":"UNSUPPORTED","message":"Mac 端无法直接发送微信消息"}}}""").jsonObject
     compose.setContent {
-      MaterialTheme { CloudCompanionScreen(LocalAgentState(), "https://example.invalid", "", "", false, false, false, listOf(task), false, {}, {}, { _, _, _, _ -> }, {}, {}, {}, {}) }
+      MaterialTheme { CloudCompanionScreen(LocalAgentState(), "https://example.invalid", "my-phone", true, "", "", false, false, false, listOf(fileTask, invokeTask, declinedTask), false, {}, {}, { _, _, _, _, _ -> }, {}, {}, {}, {}) }
     }
+    compose.onNodeWithText("Protocol v3 · @my-phone · WS 实时在线").assertExists()
     compose.onNodeWithText("任务与记录").performClick()
     compose.onNodeWithText("report.txt").assertExists()
     compose.onNodeWithText("/Workspace/report.txt").assertExists()
     compose.onNodeWithText("搜索覆盖有限，未遍历全部文件。").assertExists()
+    compose.onNodeWithText("周报已整理并汇总 3 条进展。").assertExists()
+    compose.onNodeWithText("Mac 端无法直接发送微信消息").assertExists()
   }
-
 }

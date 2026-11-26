@@ -198,7 +198,8 @@ android-native/ # 参考展示：Android 原生大肥鱼客户端与悬浮陪伴
 ```
 
 - [x] **第一阶段**：Protocol v3.0 规范、云端记忆大脑（混合检索 + 去抖批整理 + 边界自动学习）、多模型网关与 1A 自动记忆、WebSocket 实时总线与租约回收、设备唯一短别名 `slug`、Python SDK、TypeScript SDK、MCP Server。
-- [ ] **第二阶段**：将 Mac OpenClaw 插件与 Android 原生大肥鱼客户端全面迁移至 Protocol v3（WebSocket 实时推送 + 主动语音回报 + 记忆大脑无缝同步），并正式发布至 PyPI 与 npm。
+- [x] **第二阶段**：Mac OpenClaw 插件与 Worker（凭据热重载、v3 `memory/assemble` & `memory/ingest`、`anylink_invoke`、WebSocket 长连接、`[ANYLINK_DECLINED]` 边界回传）及 Android 原生大肥鱼客户端（OkHttp WebSocket 实时推送、跨设备结果主动语音汇报、聊天/Worker 客户端隔离与并发取消修复、`device_slug` 接入、`task_invoke` 与 `declined` 边界学习）已全部迁移至 Protocol v3。
+- [ ] **第三阶段**：正式发布 `anylink-agent` 至 PyPI、发布 `@anylink-agent/sdk` 与 `@anylink-agent/mcp` 至 npm，以及更多生态框架适配器（LangGraph / CrewAI / AutoGen）。
 
 ---
 

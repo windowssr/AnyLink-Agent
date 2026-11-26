@@ -129,8 +129,8 @@ class AnyLinkPhoneTest {
     MockWebServer().use { server ->
       server.start()
       server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
-      server.enqueue(response("""{"protocol":"anylink","version":"1.0"}"""))
-      server.enqueue(response("""{"device_id":"$testDevice","global":[],"device":[]}"""))
+      server.enqueue(response("""{"protocol":"anylink","version":"3.0"}"""))
+      server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
       repeat(21) { server.enqueue(stream(sseCall("call_${it + 1}", "companion_expression", "{\\\"emotion\\\":\\\"happy\\\"}"))) }
       val ledger = MemoryLedger()
       val connection = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
@@ -139,7 +139,7 @@ class AnyLinkPhoneTest {
       val run = ledger.runs().first()
       assertEquals("failed", run.text("state"))
       assertTrue(run.text("notice").contains("工具步骤上限"))
-      // 3 setup + 20 tool turns = 23 requests; the 21st completion never happens.
+      // 3 setup (identity + protocol + memory/assemble) + 20 tool turns = 23 requests; the 21st completion never happens.
       assertEquals(23, server.requestCount)
     }
   }
@@ -149,10 +149,11 @@ class AnyLinkPhoneTest {
     MockWebServer().use { server ->
       server.start()
       server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
-      server.enqueue(response("""{"protocol":"anylink","version":"1.0"}"""))
-      server.enqueue(response("""{"device_id":"$testDevice","global":[],"device":[]}"""))
+      server.enqueue(response("""{"protocol":"anylink","version":"3.0"}"""))
+      server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
       server.enqueue(stream(sse(call = """{"name":"phone_screen","arguments":"{}"}""")))
       server.enqueue(stream(sse("需要先开启无障碍服务")))
+      server.enqueue(response("""{"episode_id":"ep-acc","status":"pending"}"""))
       val ledger = MemoryLedger()
       val connection = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
       val agent = DeviceAgent(connection, CloudClient(connection), ledger, { JsonObject(emptyMap()) })

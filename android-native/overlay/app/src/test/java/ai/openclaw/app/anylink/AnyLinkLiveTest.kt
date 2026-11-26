@@ -30,13 +30,13 @@ class AnyLinkLiveTest {
       val freshLedger = MemoryLedger(); val fresh = DeviceAgent(connection, cloud, freshLedger, { JsonObject(emptyMap()) })
       fresh.send("本次测试的全局校验值和手机校验值分别是什么？根据当前云端记忆回答，不要写记忆。")
       val answer = freshLedger.runs().first().text("answer"); assertTrue(answer.contains(marker + "_GLOBAL")); assertTrue(answer.contains(marker + "_DEVICE")); report.add("fresh native conversation recalls unified memory")
-      agent.send("帮我在已授权Mac的workspace范围搜索文件名包含 $marker 的文件。请用link_peers和task_create，capability为files.search，input只需query和scope。不读正文，不写文件或记忆。")
-      val created = cloud.request("GET", "/edge/v1/link/tasks")["items"]!!.jsonArray.map { it.jsonObject }.filter { it.text("capability") == "files.search" && it["input"]?.toString()?.contains(marker) == true }
+      agent.send("帮我在已授权Mac的workspace范围搜索文件名包含 $marker 的文件。请用link_directory和task_create，capability为files.search，input只需query和scope。不读正文，不写文件或记忆。")
+      val created = cloud.request("GET", "/edge/v1/tasks")["items"]!!.jsonArray.map { it.jsonObject }.filter { it.text("capability") == "files.search" && it["input"]?.toString()?.contains(marker) == true }
       assertEquals("Only one task should be created", 1, created.size)
       var task = created.first()
       for (attempt in 1..20) {
-        if (task.text("state") in setOf("succeeded", "failed", "unknown", "cancelled", "expired")) break
-        delay(1500); task = cloud.request("GET", "/edge/v1/link/tasks/${task.text("id")}")
+        if (task.text("state") in setOf("succeeded", "declined", "failed", "unknown", "cancelled", "expired")) break
+        delay(1500); task = cloud.request("GET", "/edge/v1/tasks/${task.text("id")}")
       }
       assertEquals("succeeded", task.text("state")); assertTrue(task["result"]!!.toString().contains(marker + ".txt")); report.add("phone to cloud to local Mac worker and real search receipt")
       File(requireNotNull(System.getenv("ANYLINK_LIVE_REPORT"))).writeText(buildJsonObject { put("passed", true); put("hardware_verified", false); put("gateway_used", false); put("checks", JsonArray(report.map(::str))); put("task_id", task.text("id")) }.toString())

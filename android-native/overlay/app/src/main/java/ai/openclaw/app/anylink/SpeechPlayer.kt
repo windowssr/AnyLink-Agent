@@ -95,6 +95,7 @@ internal class SpeechPlayer(
         "text" to str(next.text.take(8000)),
         "summarize" to kotlinx.serialization.json.JsonPrimitive(next.summarize),
         "voice" to str("sweet-lively"),
+        "style" to str("persona"),
       ).toString().toRequestBody("application/json".toMediaType())
       val response = http.newCall(Request.Builder().url(conn.server + "/model/v1/speech")
         .header("Authorization", "Bearer ${conn.token}").post(body).build()).execute()

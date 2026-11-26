@@ -22,6 +22,7 @@ async function fixture(run,{routeFileMissing=false,onRequest}={}){
     const entry={path:new URL(url).pathname,method:options.method,token:options.headers.Authorization,headers:options.headers,body:options.body===undefined?undefined:JSON.parse(options.body)};
     requests.push(entry);
     const override=await onRequest?.(entry);if(override!==undefined)return override;
+    if(entry.path==='/edge/v1/memory/assemble')return Response.json({error:{code:'NOT_FOUND'}},{status:404});
     if(entry.path==='/edge/v1/context')return Response.json({device_id:entry.token==='Bearer ak_fixture_android'?ANDROID:MAC,global:[GLOBAL],device:[entry.token==='Bearer ak_fixture_android'?ANDROID_FACT:MAC_FACT]});
     if(entry.path==='/edge/v1/memories/search')return Response.json({items:[GLOBAL,MAC_FACT,ANDROID_FACT]});
     return Response.json({id:'saved',revision:entry.body?.expected_revision===undefined?1:entry.body.expected_revision+1});
@@ -99,7 +100,7 @@ test('a revoked Android credential degrades to a bounded global-only read and ca
   await fixture(async({hooks,requests,tools})=>{
     const prompt=await hooks.before_prompt_build({currentUserMessage:'请记住这个'},androidContext);
     assert.match(prompt.prependContext,/Shared global fact/);assert.doesNotMatch(prompt.prependContext,/Mac-only fact|Android-only fact/);
-    assert.equal(requests.length,2);assert.equal(requests[0].token,'Bearer ak_fixture_android');assert.equal(requests[1].token,'Bearer ak_fixture_mac');assert.deepEqual(requests[1].body,{scope:'global'});
+    assert.equal(requests.length,3);assert.equal(requests[0].token,'Bearer ak_fixture_android');assert.equal(requests[2].token,'Bearer ak_fixture_mac');assert.deepEqual(requests[2].body,{scope:'global'});
     const before=requests.length;
     assert.equal((await tools(androidContext).anylink_memory_save.execute('revoked',value)).details.error.code,'DEVICE_CONTEXT_UNVERIFIED');
     assert.equal(requests.length,before);
@@ -176,29 +177,52 @@ test('agent-tier facts join the prompt context and carry agent scope',async()=>{
   },{onRequest:entry=>entry.path==='/edge/v1/context'?Response.json({device_id:MAC,global:[GLOBAL],device:[MAC_FACT],agent:[AGENT_FACT]}):undefined});
 });
 
-test('link tools are main-only, send target shape with idempotency and report unknown outcomes once',async()=>{
+test('link tools support main invoke, remote read-only directory/status, target_device_slug and idempotency',async()=>{
   await fixture(async({hooks,requests,tools})=>{
     await hooks.before_prompt_build({currentUserMessage:'派发一个任务'},macContext);
     const registered=tools(macContext);
-    for(const name of ['anylink_link_directory','anylink_task_create','anylink_task_status','anylink_task_cancel'])assert.ok(registered[name],name);
-    assert.equal(tools(androidContext).anylink_task_create,undefined,'link tools stay off non-main agents');
+    for(const name of ['anylink_link_directory','anylink_invoke','anylink_task_create','anylink_task_status','anylink_task_cancel'])assert.ok(registered[name],name);
+    assert.equal(tools(androidContext).anylink_task_create,undefined,'write link tools stay off non-main agents');
+    const remoteTools=tools({runId:'remote-run',agentId:'remote'});
+    assert.ok(remoteTools.anylink_link_directory&&remoteTools.anylink_task_status,'remote agent gets read-only link tools');
+    assert.equal(remoteTools.anylink_invoke,undefined,'remote agent cannot dispatch outbound tasks');
     const directory=await registered.anylink_link_directory.execute('dir',{});
     assert.equal(directory.details.items!==undefined,true);
-    const dirRequest=requests.at(-1);assert.equal(dirRequest.path,'/edge/v1/link/directory');assert.equal(dirRequest.method,'GET');assert.equal(dirRequest.token,'Bearer ak_fixture_mac');
+    const dirRequest=requests.at(-1);assert.equal(dirRequest.path,'/edge/v1/directory');assert.equal(dirRequest.method,'GET');assert.equal(dirRequest.token,'Bearer ak_fixture_mac');
+    await registered.anylink_invoke.execute('inv',{target_device_slug:'my-phone',instruction:'告诉主人我整理完了'});
+    assert.equal(requests.at(-1).path,'/edge/v1/tasks');assert.deepEqual(requests.at(-1).body.target,{device_slug:'my-phone'});assert.equal(requests.at(-1).body.instruction,'告诉主人我整理完了');
     const created=await registered.anylink_task_create.execute('make',{capability:'text.reverse',input:{text:'hi'},target_agent_id:'agent-target',ttl_seconds:600});
-    const post=requests.at(-1);assert.equal(post.path,'/edge/v1/link/tasks');assert.equal(post.method,'POST');
+    const post=requests.at(-1);assert.equal(post.path,'/edge/v1/tasks');assert.equal(post.method,'POST');
     assert.deepEqual(post.body.target,{agent_id:'agent-target'});assert.equal(post.body.capability,'text.reverse');assert.equal(post.body.ttl_seconds,600);
     assert.match(post.headers['Idempotency-Key'],/^[a-f0-9]{64}$/);
     await registered.anylink_task_create.execute('make-device',{capability:'files.search',input:{q:'x'},target_device_id:'dev-1'});
     assert.deepEqual(requests.at(-1).body.target,{device_id:'dev-1'});
     await registered.anylink_task_create.execute('make-any',{capability:'files.search',input:{q:'x'}});
     assert.equal(Object.hasOwn(requests.at(-1).body,'target'),false);
-    const status=await registered.anylink_task_status.execute('st',{id:'task-1'});assert.equal(requests.at(-1).path,'/edge/v1/link/tasks/task-1');assert.equal(status.isError,undefined);
-    await registered.anylink_task_cancel.execute('cx',{id:'task-1'});assert.equal(requests.at(-1).path,'/edge/v1/link/tasks/task-1/cancel');assert.equal(requests.at(-1).method,'POST');
+    const status=await registered.anylink_task_status.execute('st',{id:'task-1'});assert.equal(requests.at(-1).path,'/edge/v1/tasks/task-1');assert.equal(status.isError,undefined);
+    await registered.anylink_task_cancel.execute('cx',{id:'task-1'});assert.equal(requests.at(-1).path,'/edge/v1/tasks/task-1/cancel');assert.equal(requests.at(-1).method,'POST');
   },{onRequest:entry=>{
-    if(entry.path==='/edge/v1/link/directory')return Response.json({items:[{device:{id:MAC,name:'Mac',platform:'macos'},agents:[{id:'a1',key:'k',name:'n',kind:'agent',capabilities:[],last_seen_at:null,online:false,self:true}]}]});
-    if(entry.path==='/edge/v1/link/tasks'&&entry.method==='POST')return Response.json({id:'task-new',state:'queued'});
-    if(entry.path.startsWith('/edge/v1/link/tasks/'))return Response.json({id:'task-1',state:'queued'});
+    if(entry.path==='/edge/v1/directory')return Response.json({items:[{device:{id:MAC,name:'Mac',slug:'home-mac',platform:'macos'},agents:[{id:'a1',key:'k',name:'n',kind:'agent',capabilities:[],last_seen_at:null,online:true,ws_online:true,self:true}]}]});
+    if(entry.path==='/edge/v1/tasks'&&entry.method==='POST')return Response.json({id:'task-new',state:'queued'});
+    if(entry.path.startsWith('/edge/v1/tasks/'))return Response.json({id:'task-1',state:'queued'});
+    return undefined;
+  }});
+});
+
+test('Protocol v3 memory assemble injects boundaries/episodes and agent_end ingests turns',async()=>{
+  await fixture(async({hooks,requests})=>{
+    const prompt=await hooks.before_prompt_build({currentUserMessage:'帮我看看手机上的记录'},macContext);
+    assert.match(prompt.prependContext,/Learned Device Boundaries/);
+    assert.match(prompt.prependContext,/Android 不支持跑编译/);
+    hooks.agent_end({assistantMessage:'好的，手机上刚才记录了一段笔记。'},macContext);
+    await new Promise(r=>setTimeout(r,20));
+    const ingest=requests.find(r=>r.path==='/edge/v1/memory/ingest');
+    assert.ok(ingest,'agent_end should asynchronously ingest completed turn');
+    assert.equal(ingest.body.kind,'turn');
+    assert.equal(ingest.body.messages.length,2);
+  },{onRequest:entry=>{
+    if(entry.path==='/edge/v1/memory/assemble')return Response.json({device_id:MAC,agent_id:'a1',memories:[GLOBAL],boundaries:[{id:'b1',title:'Android 边界',content:'Android 不支持跑编译',scope:'global',kind:'boundary',revision:1}],episodes:[],summary_text:'## Learned Device Boundaries\n- Android 不支持跑编译'});
+    if(entry.path==='/edge/v1/memory/ingest')return Response.json({episode_id:'ep-1',status:'pending',debounced:true},{status:202});
     return undefined;
   }});
 });
@@ -213,7 +237,7 @@ test('a transport failure on task create reports unknown outcome without a secon
     assert.equal(posts,1,'no automatic retry after an uncertain submission');
     const status=await registered.anylink_task_status.execute('check',{id:'maybe'});
     assert.equal(status.isError,undefined);
-  },{onRequest:entry=>{if(entry.path==='/edge/v1/link/tasks'&&entry.method==='POST'){posts++;throw new TypeError('socket hangup');}if(entry.path.startsWith('/edge/v1/link/tasks/'))return Response.json({id:'maybe',state:'queued'});return undefined;}});
+  },{onRequest:entry=>{if(entry.path==='/edge/v1/tasks'&&entry.method==='POST'){posts++;throw new TypeError('socket hangup');}if(entry.path.startsWith('/edge/v1/tasks/'))return Response.json({id:'maybe',state:'queued'});return undefined;}});
 });
 
 test('a known revision conflict is returned unchanged without retrying or poisoning the run',async()=>{

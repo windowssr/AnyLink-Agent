@@ -4,28 +4,31 @@
 
 工程复用固定 OpenClaw `v2026.11.6` 的 Android 构建底座和人物呈现组件，产品入口是 `ai.openclaw.app.anylink.AnyLinkActivity`。它不会创建 `NodeRuntime`、连接 Gateway、做 OpenClaw 配对或启动旧节点服务。上游源码按固定提交获取，不复制到本仓库；产品源码集只编译本地 Agent、人物呈现、动画设置读取和许可加载，不编译旧 Gateway 节点运行时。Android 12 / API31+。
 
-## 通路
+## 通路（Protocol v3）
 
 ```text
-Android：原生人物 / 文字 / 系统语音
-  → 本机 DeviceAgent：会话、工具循环、SQLite 记录
-    → AnyLink HTTPS 服务器：设备身份、统一记忆、模型 SSE、任务中继
-      → DeepSeek Flash（模型 Key 只在服务器）
+Android：原生人物 / 文字 / 语音
+  → 本机 DeviceAgent：会话、工具循环、SQLite 幂等账本
+    → AnyLink Cloud Hub (HTTPS + WSS /edge/v1/ws)
+      ├── 云端记忆大脑：/edge/v1/memory/assemble（跨设备共享记忆 + 边界经验 + 近期动态）
+      │              & /edge/v1/memory/ingest（去抖批整理 + 闲聊过滤）
+      ├── 多模型网关：/model/v1/chat/completions (SSE) & /model/v1/speech（中性接口 + style="persona"）
+      └── 跨设备实时总线：/edge/v1/tasks + /edge/v1/ws 实时推送
 
-跨设备：手机 task_create → 云端路由 → Mac/其他设备 Agent 领取
-       → 本机策略限制的执行 → 云端持久回执 → 手机任务面板
-反向：其他设备把 phone.status / companion.say 路由到这台手机
-       → 前台 worker 领取并执行 → 结果回传云端
-Mac 文件操作：agent.ask → mac-openclaw Agent → 本机 OpenClaw remote Agent
-       → anylink_files_* 受限工具（读写/整理/移动/删到废纸篓/打开）
+跨设备正向：手机 task_invoke（支持 @device_slug，无需查能力表）→ 云端路由 → Mac/其他设备立即 WS 唤醒执行
+         → task.progress 实时进度 & task.completed 推回手机 → 大肥鱼主动语音汇报结果或 declined 原因
+跨设备反向：其他设备把指令或 phone.status / companion.say 路由到这台手机
+         → WS 实时唤醒前台 worker 执行 → 结果回传云端（超出范围时返回 declined 供云端自动学习边界）
+Mac 文件与协作：agent.invoke / agent.ask → mac-openclaw Agent → 本机 OpenClaw remote Agent
+         → anylink_files_* 受限工具（读写/整理/移动/删到废纸篓/打开）
 ```
 
-当前手机工具是基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除（global／device／agent 三层）、表情动作、跨设备的 link_directory／task_create／task_status／task_cancel，以及本机手机操作工具 phone_screen／phone_open_app／phone_list_apps／phone_tap／phone_type／phone_scroll／phone_back／phone_home（见下节）。Mac 的 `mac-files` Agent 提供 `files.search` 文件名搜索；Mac 的 `mac-openclaw` Agent 提供 `agent.ask`，把完整中文指令交给 Mac 上的大肥鱼在开放目录内读写、整理、移动、删到废纸篓或打开文件（无确认、删除进废纸篓、需 Mac 保持唤醒）。App 在前台时还会声明 `phone.status`（读取型号、系统版本、电量等）和 `companion.say`（让大肥鱼用语音说一句话并显示在屏幕上，text ≤500 字）两个能力供其他设备派发。手机操作工具只在本机对话中可用，不作为跨设备能力对外声明；没有沿用旧 Gateway 的相册、短信、通话记录等能力。
+当前手机工具包括：基础设备信息、AnyLink 私有便笺、统一记忆的查询／明确保存／修订／删除（global／device／agent 三层）、表情动作、跨设备的 `link_directory`／`task_invoke`（自然语言免能力表调用，支持 `target_device_slug`）／`task_create`／`task_status`／`task_cancel`，以及本机手机操作工具 `phone_screen`／`phone_open_app`／`phone_list_apps`／`phone_tap`／`phone_type`／`phone_scroll`／`phone_back`／`phone_home`（见下节）。Mac 的 `mac-files` Agent 提供 `files.search` 文件名搜索；Mac 的 `mac-openclaw` Agent 响应 `agent.invoke` / `agent.ask`，把自然语言指令交给 Mac 上的大肥鱼在开放目录内读写、整理、移动、删到废纸篓或打开文件（遇到无法执行的动作会主动返回 `declined`，由云端记忆大脑自动记住该边界）。App 在前台或悬浮服务运行时建立 `/edge/v1/ws` 长连接并声明 `phone.status` 与 `companion.say` 能力，同时支持 `agent.invoke` 自然语言调用。手机无障碍控屏工具只在本机对话中可用，不作为跨设备能力对外开放；没有沿用旧 Gateway 的相册、短信、通话记录等能力。
 
 ## 连接
 
-1. 部署 AnyLink 服务，准备远程 **HTTPS 根地址**。服务器仅监听回环时，需要由部署者提供受保护入口；不能把 Mac 的 `127.0.0.1` 地址直接填到手机。
-2. 在 App 的“服务器连接”填写地址和主人签发的**加入密钥**（可选填设备名称，默认手机型号），点击“验证并连接”。手机以 `android-dafeiyu` Agent 身份接入；加入密钥只用于本次请求，**不会写入磁盘**，保存的只有加密后的设备令牌。无需 OpenClaw 地址和 Token，无需重新编译来绑定设备。
+1. 部署 AnyLink 服务，准备远程 **HTTPS 根地址**（Caddy 反代 `/edge/v1/*` 已原生支持 WebSocket 升级）。服务器仅监听回环时，需要由部署者提供受保护入口；不能把 Mac 的 `127.0.0.1` 地址直接填到手机。
+2. 在 App 的“服务器连接”填写地址和主人签发的**加入密钥**（可选填设备名称与唯一短别名 `slug`，例如 `my-phone`，便于跨设备 `@my-phone` 精确寻址），点击“验证并连接”。手机以 `android-dafeiyu` Agent 身份接入；加入密钥只用于本次请求，**不会写入磁盘**，保存的只有加密后的设备令牌。无需 OpenClaw 地址和 Token，无需重新编译来绑定设备。
 3. 旧版设备凭据 JSON 仍可通过“导入旧版设备凭据 JSON”导入；此时 Agent 身份从 `/edge/v1/identity` 读取。若手机上存有同一服务器的旧凭据，加入流程会先用旧令牌调用 `POST /edge/v1/device/install-id` 认领 install_id，使新 Agent 落在**同一台设备**上、保留设备级记忆；旧令牌已撤销时自动按新设备接入并提示。
 4. 凭据以 Android Keystore AES-GCM 加密，密文保存到应用私有 SQLite；会话、操作回执和便笺按服务器＋设备身份分库（新设备 ID 视为新分库，旧记录保留）。`install_id` 单独持久化，重连复用同一安装标识。APK 不内置任何密钥。
 
@@ -55,9 +58,9 @@ USB 是开发调试通道，不是正式产品对 Mac 的依赖。正式安装�
 
 语音识别使用 Android `SpeechRecognizer`（优先本机服务，设备不支持时使用系统服务），系统服务商可能在线处理语音。播报优先走云端 `POST /model/v1/speech`：服务端清洗文字（去代码、表格、Markdown、链接、表情），可选让 DeepSeek 改写成一两句口播稿，再用微软语音合成甜美女声 mp3，App 用 `MediaPlayer` 播放并驱动人物 speaking 状态；新一轮主人回复会打断当前播报，`companion.say` 消息排队追加。合成失败或服务端 502 时回退到系统 `TextToSpeech` 朗读 `spoken_text`（服务端不可达时用本地同口径清洗的文字）。点击“说话”会停止旧模型回复与播放，识别完整句子后交给本机 Agent。当前提供显式停止，不承诺全双工、自动开口打断或 Grok 延迟；收音、回声、GPU 和实际手机生命周期待真机验证。
 
-每轮注入最近十条全局和十条设备事实的有界要点，各作用域独立预算；需要更早或完整事实时通过记忆搜索读取，避免全局内容挤掉手机事实。
+每轮优先调用云端记忆大脑 `POST /edge/v1/memory/assemble` 注入与当前问题相关的跨设备共享记忆、已学习的设备边界和近期动态（兼容旧版服务器时自动回退到 `/edge/v1/context`），并在回合结束后上报 `/edge/v1/memory/ingest` 由云端异步去抖整理；需要完整事实时可通过 `memory_search` 混合检索。
 
-工具参数只有在 SSE `finish_reason` 和 `[DONE]` 都完整后才执行。工具执行前先写 SQLite；中断状态不会在重启后重放。写请求带幂等键，记忆修订带 revision。任务创建结果未知不会自动再创建，云端排队也不等于执行完成。切换会话保留共同记忆，设备私有便笺不冒充统一记忆。
+`CloudClient` 使用线程安全的并发调用集合追踪在途请求，聊天与后台 worker 隔离使用独立客户端实例，取消对话不会误伤任务回执。工具参数只有在 SSE `finish_reason` 和 `[DONE]` 都完整后才执行。工具执行前先写 SQLite；中断状态不会在重启后重放。写请求带幂等键，记忆修订带 revision。任务创建结果未知不会自动再创建，云端排队也不等于执行完成。切换会话保留共同记忆，设备私有便笺不冒充统一记忆。
 
 ## 构建、检查和资源
 
@@ -100,6 +103,6 @@ node android-native/scripts/inspect-apk.mjs --private
 
 公开 APK 使用原创占位形象，不含大肥鱼模型、纹理、派生头像与 Cubism Core。人物半身效果需要自行取得许可允许的素材；私有构建使用 `ANYLINK_CHARACTER_MODE=private`，不得未经授权公开分发。上游 MIT 和素材说明随包保留。
 
-`--test` 覆盖手机自己的真实 HTTP 模型／工具循环、缺失终止事件不执行、身份不匹配、未请求写记忆、跨设备排队、SQLite 重启不重放、凭据不随重定向转发和服务器连接界面。它不等于真机验收。`acceptance.mjs` 已替换为独立手机 Agent 的真实云端联调入口，不通过 Mac Gateway。
+`--test` 覆盖手机自己的真实 HTTP 模型／工具循环、Cloud Memory Brain `assemble`/`ingest`、WebSocket 实时推送、并发请求安全取消、缺失终止事件不执行、身份不匹配、未请求写记忆、跨设备 `task_invoke`（含 `device_slug`）与 `declined` 边界回传、SQLite 重启不重放、凭据不随重定向转发和服务器连接界面。它不等于真机验收。`acceptance.mjs` 已替换为独立手机 Agent 的真实云端联调入口，不通过 Mac Gateway。
 
-旧 `configure-preview.mjs`、旧 Gateway 原生 Talk 适配及其测试已退出产品主线；`android/` HBuilderX 工程只保留作历史原型。不要用旧预览的验收记录证明当前 Android 的真实硬件能力。
+旧 `configure-preview.mjs`、旧 Gateway 原生 Talk 适配及其测试、以及早期 `android/` HBuilderX 原型已全部移除。不要用旧预览的验收记录证明当前 Android 的真实硬件能力。
