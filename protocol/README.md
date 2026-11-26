@@ -14,9 +14,9 @@ AnyLink is a harness-independent protocol for a **Personal Agent Network**:
 
 Identity hierarchy: `Owner → Device → Agent`.
 
-1. **Join (`POST /edge/v1/connect`)**: Authenticate with `Authorization: Bearer <ANYLINK_JOIN_KEY>`, supply `device: { install_id, name, platform }` and `agent: { key, name, kind?, summary? }`. Returns `201` with `device_id`, `agent_id`, `credential_id`, one-time `token` (`ak_...`), and `protocol: { name: "anylink", version: "3.0" }`. Reconnecting with the same `(install_id, agent.key)` preserves IDs and rotates the token.
-2. **Protocol negotiation (`GET /edge/v1/protocol`, alias `GET /edge/v1/link/protocol`)**: Returns version `3.0`, transport URLs, lease-backed at-most-once delivery semantics, and routing modes (`agent`, `device`, `device_name`, `any`).
-3. **Profile (`PATCH /edge/v1/agent/profile`)**: Optional informational `name` / `summary` describing what this device/agent is. Informational only; never blocks incoming tasks.
+1. **Join (`POST /edge/v1/connect`)**: Authenticate with `Authorization: Bearer <ANYLINK_JOIN_KEY>`, supply `device: { install_id, name, platform, slug? }` and `agent: { key, name, kind?, summary? }`. `slug` is a unique short alias (e.g. `home-mac`, `gpu-box`; auto-generated if omitted) to disambiguate devices with identical display names. Returns `201` with `device_id`, `device_slug`, `agent_id`, `credential_id`, one-time `token` (`ak_...`), and `protocol: { name: "anylink", version: "3.0" }`.
+2. **Protocol negotiation (`GET /edge/v1/protocol`, alias `GET /edge/v1/link/protocol`)**: Returns version `3.0`, transport URLs, lease-backed at-most-once delivery semantics, and routing modes (`agent`, `device`, `device_slug`, `device_name`, `agent_key`, `any`).
+3. **Profile (`PATCH /edge/v1/agent/profile`, `PATCH /edge/v1/device/profile`)**: Update informational agent summary or device name / unique `slug`. Informational only; never blocks incoming tasks.
 
 ## 2. Cloud Memory Brain
 
@@ -26,7 +26,7 @@ Identity hierarchy: `Owner → Device → Agent`.
 
 ### Endpoints
 - **`POST /edge/v1/memory/assemble`**: Given `{ query?, max_memories?, max_episodes?, max_chars?, include_scopes?, include_boundaries?, include_persona? }`, returns ranked `memories`, recent cross-device `episodes`, cross-device `boundaries`, and a ready-to-inject `summary_text`.
-- **`POST /edge/v1/memory/ingest`**: Submit `{ kind: "turn" | "task_outcome" | "observation", session_key?, messages, metadata?, consolidate_now? }`. Stores the episode and runs the Cloud Memory Manager Agent (LLM-powered extraction/deduplication/consolidation when a model provider is configured, with deterministic fallback for summaries & capability boundaries).
+- **`POST /edge/v1/memory/ingest`**: Submit `{ kind: "turn" | "task_outcome" | "observation", session_key?, messages, metadata?, consolidate_now? }`. Automatically skips trivial short chitchat (0 LLM tokens), debounces & batches burst turns per session (`ANYLINK_MEMORY_DEBOUNCE_MS=15000`, `ANYLINK_MEMORY_BATCH_MAX=6`) into a single Cloud Memory Agent LLM call, and immediately consolidates declined/failed task outcomes so device boundaries are learned without delay.
 - **`GET /edge/v1/memory/episodes`**: List recent cross-device episodes.
 - **`GET /edge/v1/context`**: Snapshot returning `global`, `device`, `agent` memories, `boundaries`, `episodes`, and optional `persona`.
 - **Explicit CRUD**: `POST /edge/v1/memories`, `POST /edge/v1/memories/search`, `GET /edge/v1/memories/:id`, `PATCH /edge/v1/memories/:id` (CAS via `expected_revision`), `DELETE /edge/v1/memories/:id` (CAS via `If-Match`).
@@ -52,7 +52,7 @@ Identity hierarchy: `Owner → Device → Agent`.
     "lease_seconds": 120
   }
   ```
-  `target` supports `{ agent_id }`, `{ device_id }`, `{ device_name }`, `{ agent_key }`, or omitted (`any`). `capability` is optional (defaults to `"agent.invoke"`). The server never rejects a task for missing capability declarations; the receiving agent decides locally and may return `state: "declined"` with `error: { code, message }` — which the Cloud Memory Brain automatically records as a `boundary` memory.
+  `target` supports `{ agent_id }`, `{ device_id }`, `{ device_slug }` (unambiguous unique short alias), `{ device_name }` (returns `409 AMBIGUOUS_TARGET_DEVICE` with candidate slugs if duplicate names exist), `{ agent_key }`, or omitted (`any`). `capability` is optional (defaults to `"agent.invoke"`). The server never rejects a task for missing capability declarations; the receiving agent decides locally and may return `state: "declined"` with `error: { code, message }` — which the Cloud Memory Brain automatically records as a `boundary` memory.
 - **Claim, Heartbeat, Progress, Result, Cancel**:
   - HTTP fallback: `POST /edge/v1/tasks/claim`, `POST /edge/v1/tasks/:id/heartbeat`, `POST /edge/v1/tasks/:id/progress`, `POST /edge/v1/tasks/:id/result`, `POST /edge/v1/tasks/:id/cancel` (all `/edge/v1/link/tasks*` aliases remain supported).
   - **Lease expiration**: If a running worker crashes and fails to heartbeat before `lease_expires_at`, the server transitions the task to `unknown` (`LEASE_EXPIRED`) and notifies the sender, never silently re-running side effects.

@@ -6,7 +6,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { type Config, listModelRoutes, OWNER_ID } from './config.js';
 import { ApiError, createDb, hash, idempotent, migrate, transaction } from './db.js';
-import { createDevice, deleteMemory, deviceSchema, editMemory, getMemory, listDevices, memoryDirectory, memoryPatchSchema, memorySchema, memorySearchSchema, saveMemory, searchMemories } from './store.js';
+import { createDevice, deleteMemory, devicePatchSchema, deviceSchema, editMemory, getMemory, listDevices, memoryDirectory, memoryPatchSchema, memorySchema, memorySearchSchema, saveMemory, searchMemories, updateDevice } from './store.js';
 import { authenticateEdge, registerConnectRoute, registerCredentialRoutes } from './edge-auth.js';
 import { registerModelProxy } from './model-proxy.js';
 import { registerSpeech } from './speech.js';
@@ -152,6 +152,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
   });
 
   app.post('/v1/devices', async req => { const v = deviceSchema.parse(req.body); return mutate(req, 'devices:create', v, c => createDevice(c, v)); });
+  app.patch('/v1/devices/:id', async req => { const { id } = idParams.parse(req.params), v = devicePatchSchema.parse(req.body); return mutate(req, `devices:edit:${id}`, v, c => updateDevice(c, id, v)); });
 
   registerConnectRoute(app, db, config, loginAttempts);
   registerCredentialRoutes(app, db, id => wsHub.isOnline(id), id => wsHub.disconnectAgent(id));

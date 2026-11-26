@@ -113,6 +113,7 @@ export const MCP_TOOLS = [
         instruction: { type: 'string', description: 'Clear instruction describing what you want the target agent to do' },
         target_agent_id: { type: 'string' },
         target_device_id: { type: 'string' },
+        target_device_slug: { type: 'string', description: 'Unique short device alias, e.g. "home-mac" or "gpu-box"' },
         target_device_name: { type: 'string', description: 'Human-friendly device name, e.g. "Mac" or "Phone"' },
         target_agent_key: { type: 'string', description: 'Target agent key, e.g. "mac-openclaw"' },
         capability: { type: 'string', description: 'Optional structured capability name; defaults to agent.invoke' },
@@ -163,6 +164,7 @@ export function createMcpHandler(client, { serverInfo = { name: 'anylink-mcp', v
     if (name === 'anylink_invoke') {
       const target = args.target_agent_id ? { agent_id: args.target_agent_id }
         : args.target_device_id ? { device_id: args.target_device_id }
+        : args.target_device_slug ? { device_slug: args.target_device_slug }
         : args.target_device_name ? { device_name: args.target_device_name }
         : args.target_agent_key ? { agent_key: args.target_agent_key }
         : undefined;

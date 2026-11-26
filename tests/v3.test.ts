@@ -39,6 +39,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     personaFile: 'persona/dafeiyu.md',
     speechPrompt: '',
     leaseReaperIntervalMs: 60000,
+    memoryDebounceMs: 250,
+    memoryBatchMax: 3,
     ...overrides,
   };
 }
@@ -336,6 +338,67 @@ test('Protocol v3 E2E: Cloud Memory Brain, Multi-Model Gateway, WebSocket Bus, B
         payload: { device: { install_id: 'legit-0001', name: 'Legit', platform: 'linux' }, agent: { key: 'a', name: 'a' } },
       });
       assert.equal(ok.statusCode, 201);
+    });
+
+    await t.test('Device unique slug disambiguates duplicate device names & enforces uniqueness', async () => {
+      const homeMac = await AnyLinkClient.connect({
+        baseUrl, joinKey, installId: 'dup-mac-home-01',
+        device: { name: 'My Mac', platform: 'macos', slug: 'home-mac' },
+        agent: { key: 'main', name: 'Home Mac' },
+      });
+      const officeMac = await AnyLinkClient.connect({
+        baseUrl, joinKey, installId: 'dup-mac-office-01',
+        device: { name: 'My Mac', platform: 'macos', slug: 'office-mac' },
+        agent: { key: 'main', name: 'Office Mac' },
+      });
+      assert.equal(homeMac.device_slug, 'home-mac');
+      assert.equal(officeMac.device_slug, 'office-mac');
+
+      // Duplicate explicit slug is rejected with 409 DEVICE_SLUG_TAKEN
+      await assert.rejects(
+        AnyLinkClient.connect({
+          baseUrl, joinKey, installId: 'dup-mac-conflict-01',
+          device: { name: 'Third Mac', platform: 'macos', slug: 'home-mac' },
+          agent: { key: 'main', name: 'Third Mac' },
+        }),
+        (e: any) => e.status === 409 && e.code === 'DEVICE_SLUG_TAKEN',
+      );
+
+      // Ambiguous device_name returns 409 AMBIGUOUS_TARGET_DEVICE listing slugs
+      await assert.rejects(
+        phone.client.invoke({ target: { device_name: 'My Mac' }, instruction: 'List files' }),
+        (e: any) => e.status === 409 && e.code === 'AMBIGUOUS_TARGET_DEVICE' && e.message.includes('home-mac') && e.message.includes('office-mac'),
+      );
+
+      // Targeting by unique device_slug routes unambiguously!
+      const routed = await phone.client.invoke({ target: { device_slug: 'office-mac' }, instruction: 'Check office docs' });
+      assert.equal(routed.target_device_id, officeMac.device_id);
+      const officeClient = new AnyLinkClient({ baseUrl, token: officeMac.token });
+      const claimed = await officeClient.claimTask();
+      assert.equal(claimed.task?.id, routed.id);
+    });
+
+    await t.test('Memory debouncing merges burst turns into 1 LLM call and skips trivial chitchat', async () => {
+      const llmBefore = upstreamRequests.filter(r => String(r.messages?.[0]?.content ?? '').includes('AnyLink Cloud Memory Manager')).length;
+
+      // Trivial chitchat is skipped immediately without calling LLM
+      const trivial = await phone.client.ingestMemory({
+        kind: 'turn',
+        session_key: 'debounce-sess',
+        messages: [{ role: 'user', content: '好的' }, { role: 'assistant', content: '嗯嗯！' }],
+      });
+      assert.equal(trivial.status, 'skipped');
+      assert.equal(upstreamRequests.filter(r => String(r.messages?.[0]?.content ?? '').includes('AnyLink Cloud Memory Manager')).length, llmBefore);
+
+      // 3 rapid substantive turns in the same session hit batchMax=3 and flush in ONE single LLM call!
+      await phone.client.ingestMemory({ kind: 'turn', session_key: 'debounce-sess', messages: [{ role: 'user', content: '我打算下周去上海出差三天' }] });
+      await phone.client.ingestMemory({ kind: 'turn', session_key: 'debounce-sess', messages: [{ role: 'user', content: '酒店订在虹桥火车站附近' }] });
+      const third = await phone.client.ingestMemory({ kind: 'turn', session_key: 'debounce-sess', messages: [{ role: 'user', content: '记得提醒我带 Type-C 扩展坞' }] });
+      assert.equal((third as any).debounced, true);
+      await instance.memoryBrain.drain();
+
+      const llmAfter = upstreamRequests.filter(r => String(r.messages?.[0]?.content ?? '').includes('AnyLink Cloud Memory Manager')).length;
+      assert.equal(llmAfter - llmBefore, 1, '3 burst turns in one session must coalesce into exactly 1 Cloud Memory LLM call');
     });
   } finally {
     await instance.app.close();

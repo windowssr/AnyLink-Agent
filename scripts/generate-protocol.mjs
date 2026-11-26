@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { capabilitiesSchema, taskCreateSchema, taskHeartbeatSchema, taskProgressSchema, taskResultSchema, taskSchema } from '../server/link.ts';
 import { agentProfileSchema, connectSchema } from '../server/edge-auth.ts';
-import { memorySchema, memoryPatchSchema, memorySearchSchema, deviceSchema } from '../server/store.ts';
+import { memorySchema, memoryPatchSchema, memorySearchSchema, deviceSchema, devicePatchSchema } from '../server/store.ts';
 import { memoryAssembleSchema, memoryIngestSchema } from '../server/memory-brain.ts';
 import { modelInputSchema } from '../server/model-proxy.ts';
 import { speechSchema } from '../server/speech.ts';
@@ -27,6 +27,7 @@ const schemas = {
   ChatCompletions: modelInputSchema,
   Speech: speechSchema,
   Device: deviceSchema,
+  DevicePatch: devicePatchSchema,
 };
 
 const paths = {};
@@ -59,6 +60,7 @@ route('/edge/v1/connect', 'post', { schema: 'Connect', join: true, summary: 'Joi
 route('/edge/v1/protocol', 'get', { summary: 'Negotiate AnyLink protocol 3.0, transport endpoints and routing modes' });
 route('/edge/v1/directory', 'get', { summary: 'List devices and agents with live WebSocket presence and optional summaries' });
 route('/edge/v1/agent/profile', 'patch', { schema: 'AgentProfile', summary: 'Update informational agent name, kind, or summary' });
+route('/edge/v1/device/profile', 'patch', { schema: 'DevicePatch', summary: 'Update device name or unique short slug alias' });
 route('/edge/v1/device/install-id', 'post', { schema: 'InstallId', summary: 'Adopt an install_id for the credential device' });
 for (const name of ['identity', 'context', 'persona']) {
   route('/edge/v1/' + name, 'get', { summary: 'Read authenticated ' + (name === 'persona' ? 'persona document' : 'agent ' + name) });
@@ -97,6 +99,7 @@ route('/model/v1/speech', 'post', { schema: 'Speech', summary: 'Optional spoken 
 // Owner admin
 route('/v1/devices', 'get', { owner: true, summary: 'List owner devices and agents with live WS presence' });
 route('/v1/devices', 'post', { schema: 'Device', owner: true, key: true, summary: 'Register a logical device' });
+route('/v1/devices/{id}', 'patch', { schema: 'DevicePatch', owner: true, key: true, summary: 'Update device display name or unique short slug alias' });
 route('/v1/agents', 'get', { owner: true, summary: 'List all agents across devices' });
 route('/v1/memory/episodes', 'get', { owner: true, summary: 'Inspect recent cross-device memory episodes' });
 route('/v1/agents/{id}/revoke', 'post', { owner: true, summary: 'Revoke an agent, drop its WS sessions and invalidate credentials' });

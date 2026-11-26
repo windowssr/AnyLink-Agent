@@ -1,121 +1,208 @@
-<p align="center"><img src="docs/assets/banner.svg" alt="AnyLink Agent — 通用协议与 SDK" width="100%"></p>
+<p align="center">
+  <img src="docs/assets/hero-banner.jpg" alt="AnyLink Agent — Personal Agent Network with Cloud Memory Brain" width="100%" />
+</p>
 
-<p align="center"><a href="README.md">English</a> · <a href="protocol/README.zh-CN.md">协议 v3</a> · <a href="sdk-python/README.md">Python SDK (PyPI)</a> · <a href="sdk/README.zh-CN.md">TypeScript SDK (npm)</a> · <a href="mcp/README.md">MCP 适配器</a> · <a href="LICENSE">MIT</a></p>
+<h1 align="center">AnyLink Agent</h1>
 
-# AnyLink Agent
+<p align="center">
+  <strong>你的个人 Agent 网络：把记忆与模型留在云端大脑，让执行自由分布在每一台设备。</strong>
+</p>
 
-**个人 Agent 网络 —— 边缘自治、云端记忆大脑、多模型网关与 WebSocket 实时协同。**
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/lang-English-0ea5e9?style=flat-square" alt="English" /></a>
+  <a href="protocol/README.zh-CN.md"><img src="https://img.shields.io/badge/Protocol-v3.0-22d3ee?style=flat-square" alt="Protocol v3.0" /></a>
+  <a href="sdk-python/README.md"><img src="https://img.shields.io/badge/Python-anylink--agent-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python SDK" /></a>
+  <a href="sdk/README.zh-CN.md"><img src="https://img.shields.io/badge/TypeScript-@anylink--agent%2Fsdk-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript SDK" /></a>
+  <a href="mcp/README.md"><img src="https://img.shields.io/badge/MCP-@anylink--agent%2Fmcp-10b981?style=flat-square" alt="MCP Server" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748b?style=flat-square" alt="MIT License" /></a>
+</p>
 
-AnyLink（`Protocol v3`）把 **模型 API 调用** 与 **跨设备共享记忆** 统一收口到你的私有云端中枢，让电脑、服务器、手机等各边缘设备上的 Agent 天然共享记忆并顺畅互调：
+<p align="center">
+  <a href="#为什么做-anylink">设计理念</a> ·
+  <a href="#整体架构">整体架构</a> ·
+  <a href="#10-行代码接入你的设备">快速接入</a> ·
+  <a href="#蓝色大肥鱼参考客户端">蓝色大肥鱼展示</a> ·
+  <a href="#自部署云端中枢">自部署</a> ·
+  <a href="protocol/README.zh-CN.md">Protocol v3 规范</a>
+</p>
 
-- **云端记忆大脑（`POST /edge/v1/memory/assemble`、`POST /edge/v1/memory/ingest`）**：中英文混合分词 + 可选向量检索、LLM 驱动的异步记忆提取/去重/合并、跨设备近期动态摘要，以及**跨设备能力边界自动学习**。
-- **云端多模型网关（`POST /model/v1/chat/completions`）**：支持多模型与多提供商路由、按 Agent 独立并发控制，并提供可选的**自动共享记忆模式**（`X-AnyLink-Auto-Memory: on`）。
-- **无能力前置约束的跨设备调用 + WebSocket 实时总线（`GET /edge/v1/ws`）**：边缘设备只需管好自己的本地环境，无需事先维护其他设备的能力表。直接向目标设备发指令，对方若做不到则返回 `declined` 与原因，云端记忆大脑自动将其沉淀为设备边界，后续各设备加载上下文后自然学会。全程支持 WS 实时推送、进度流、租约心跳与 HTTP 降级。
-- **开源封装生态**：
-  - **Python SDK（`sdk-python/`，PyPI `anylink-agent`）**：异步客户端 + `@agent.on_invoke` 装饰器 WebSocket 节点 + 零依赖持久化回执日志。
-  - **TypeScript SDK（`sdk/`，npm `@anylink-agent/sdk`）**：零第三方依赖（Node >= 22）、内置 WebSocket 客户端与 `FileJournal`。
-  - **MCP 适配器（`mcp/`，`@anylink-agent/mcp`）**：一行配置即可把 Claude Code、Cursor、Codex、OpenClaw 接入你的个人 Agent 网络。
-- **配套参考客户端（“蓝色大肥鱼”）**：Mac OpenClaw 桌宠与 Android 原生陪伴应用（第二阶段迁移至 Protocol v3）。
+---
 
-<img src="docs/assets/architecture.svg" alt="应用、AnyLink SDK、云端中继和宿主适配器的架构" width="100%">
+## 为什么做 AnyLink？
 
-**Android 0.3+ 只连接 AnyLink 服务器，不连接 Mac Gateway。** Mac 关机时，手机仍能聊天、使用本机工具和共同记忆；交给 Mac 的任务经云端排队、领取和返回。Android 0.2.x 为历史 companion 预览，连接方式已退出产品主线。Codex 示例仍是独立只读 CLI 任务，不操控现有桌面聊天。
+今天大多数 AI Agent 都被困在单台设备里：电脑上的 Agent 不知道你手机上刚聊过什么，服务器上的脚本和桌面工具各自维护孤立的上下文，跨设备协作还要写一堆脆弱的能力注册表和轮询胶水。
 
-## 下载安装包
+**AnyLink 提出一种全新的个人 Agent 网络架构 —— 「云端记忆大脑 + 边缘设备自治」：**
 
-当前公开版本为 **v0.8.1-preview.1**。资源、源码提交和 SHA-256 一起保存在 [GitHub Releases](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.1-preview.1)：
+| 维度 | 传统单机 / 云端强控 Agent | **AnyLink Protocol v3** |
+| --- | --- | --- |
+| **记忆归属** | 分散在各设备本地文件，换台设备就失忆 | **云端记忆大脑统一管理**：混合分词+向量检索、去抖批整理、自动去重合并，跨设备天然共享 |
+| **模型 API** | 每台设备单独填 Key、换模型逐台改配置 | **云端多模型网关**：Key 永不离开服务器、支持多模型别名与可选自动记忆模式（`X-AnyLink-Auto-Memory: on`） |
+| **跨设备调用** | 先查死板的能力表、短轮询延迟高、断线任务永久卡死 | **WebSocket 实时总线 + 无能力表直调**：用 `@home-mac` 唯一短别名直接发指令，自带租约心跳防卡死 |
+| **能力边界演进** | 手动维护 JSON Schema，改一点全网失效 | **自学习设备边界**：对方做不到直接返回 `declined`，云端自动记成全局边界，全网 Agent 越用越懂彼此 |
+| **生态接入** | 绑定某个特定框架 | **引擎无关开源协议**：提供 **Python SDK (PyPI)**、**TypeScript SDK (npm)** 与 **零代码 MCP 适配器** |
 
-- [Android APK](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/AnyLink-Android-0.3.0-preview.1.apk)：Android 12+，开发预览签名。
-- [Mac App](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/AnyLink-macOS-arm64-0.8.1-preview.zip)：Apple Silicon、macOS 15+；是连接已配置工程的桌面壳，首次启动选择你自己的项目目录。语音输入要求 macOS 26。预览包采用 ad-hoc 签名，未公证，安装方式见[参考客户端说明](docs/open-source/clients.md)。
-- [SDK 安装包](https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz)：可安装到自己的 Node／TypeScript 项目，尚未发布 npm 注册表。
+<p align="center">
+  <img src="docs/assets/network-showcase.jpg" alt="AnyLink Cross-Device Personal Agent Network" width="92%" />
+</p>
 
-公开包**不包含大肥鱼模型、纹理、派生头像或 Live2D Cubism Core**。默认使用原创代码绘制的占位形象。第三方模型须自行从作者来源获取，并遵守各自许可；MIT 不授予角色或模型再分发权。
+---
 
-## 手机如何连接
+## 整体架构
 
-在 App 的“服务器连接”中填写 **AnyLink HTTPS 地址**和主人签发的**加入密钥**（可选填设备名称）。从 0.4.0-preview.1 起手机以 `android-dafeiyu` Agent 身份接入，加入密钥只用于本次请求、不落盘。旧版一次性设备凭据 JSON 仍可导入，存量旧凭据会先认领 install_id，使新 Agent 保留同一设备与设备级记忆。不需要 Mac 的地址、OpenClaw Token 或配对。服务器负责调用模型，手机自己完成工具循环。远程使用需要部署者提供可达的 HTTPS 入口，USB／SSH 只用于开发调试。详见[手机客户端连接与无域名 HTTPS](docs/open-source/phone-connection.md)和[客户端说明](docs/open-source/clients.md)。
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="AnyLink Protocol v3 Architecture" width="100%" />
+</p>
 
-## 展示
+### 亮点机制：边缘只管自己，云端大脑越用越聪明
 
-<p><img src="docs/assets/android-public.jpg" alt="公开版原创占位形象的电脑浏览器预览" width="45%"> <img src="docs/assets/android-optional-character.jpg" alt="自行配置第三方大肥鱼模型后的电脑预览，模型未包含在公开包中" width="45%"></p>
+每台边缘设备**不需要关心其他设备有什么能力**，只需要管好自己所在的本地环境和安全策略：
 
-左：公开版的原创占位形象。右：本机自行配置第三方模型后的效果。两图均为**电脑浏览器构图预览，不是真机截图**。右侧 DeepSeek-chan／大肥鱼原画及拆分：**神宫凉子**；Live2D：**霓虹猫_NeonNeko**；[模型来源与使用须知](https://github.com/YJackie-Li/DeepSeek-chan/blob/main/README.md)。
+<p align="center">
+  <img src="docs/assets/boundary-learning.svg" alt="Capability-free invocation and automatic boundary learning" width="100%" />
+</p>
 
-原生服务器连接页的 UI 测试渲染图（不是真机截图）：
+- **唯一短别名（`device_slug`）**：即使你有两台同名的 Mac，也能用 `@home-mac`、`@office-mac` 精确寻址；同名歧义自动返回 `409 AMBIGUOUS_TARGET_DEVICE` 并提示候选别名。
+- **去抖动 + 闲聊过滤**：连续对话按会话窗口（默认 15 秒 / 6 轮）合并为**单次**云端记忆整理调用，短闲聊（“好的 / 你好 / 嗯”）直接跳过 0 消耗；而设备拒绝/失败边界会**立即落盘学习**。
+- **可靠执行语义**：所有写操作带幂等键，边缘本地零依赖持久化 JSONL 回执日志（`FileJournal`），崩溃或超租约转为 `unknown`，绝不盲目重跑带副作用的操作。
 
-<img src="docs/assets/android-server-connection.png" alt="Android AnyLink server connection" width="300">
+---
 
-## 先把 SDK 接进自己的项目
+## 10 行代码接入你的设备
+
+### 方式一：Python SDK（PyPI `anylink-agent`）—— 适合 Linux 服务器 / 脚本 / LangGraph / CrewAI
 
 ```bash
-npm install https://github.com/windowssr/AnyLink-Agent/releases/download/v0.8.1-preview.1/anylink-agent-sdk-0.1.1.tgz
+pip install anylink-agent   # 或本地源码安装：uv pip install -e ./sdk-python
 ```
+
+```python
+import asyncio, os
+from anylink import AnyLinkAgent, AnyLinkClient, TaskContext, TaskDeclined
+
+async def main():
+    joined = await AnyLinkClient.connect(
+        base_url=os.environ["ANYLINK_BASE_URL"], join_key=os.environ["ANYLINK_JOIN_KEY"],
+        install_id="gpu-server-01", device_name="GPU 服务器", device_slug="gpu-box",
+        platform="linux", agent_key="worker", agent_name="GPU Agent",
+    )
+    async with AnyLinkClient(os.environ["ANYLINK_BASE_URL"], joined["token"]) as client:
+        # 1. 拉取跨设备共享记忆与设备边界
+        mem = await client.assemble_memory(query="最近在跑哪个训练任务？")
+        # 2. 调云端多模型网关（可选开启自动共享记忆）
+        reply = await client.chat_completions(model="default", messages=[{"role": "user", "content": "总结进度"}], auto_memory=True)
+        # 3. WebSocket 实时接单：只需管好本机环境，做不到直接 TaskDeclined
+        agent = AnyLinkAgent(client, journal_path="./private-state/journal.jsonl")
+
+        @agent.on_invoke
+        async def handle(task: dict, ctx: TaskContext):
+            if "微信" in (task.get("instruction") or ""):
+                raise TaskDeclined("UNSUPPORTED", "Linux 服务器没有微信")
+            await ctx.report_progress(stage="working", message="检查 GPU 状态中", percent=50)
+            return {"reply": f"已完成：{task['instruction']}"}
+
+        await agent.run()
+
+asyncio.run(main())
+```
+
+### 方式二：TypeScript SDK（npm `@anylink-agent/sdk`）—— 零第三方依赖，Node >= 22
 
 ```js
 import { AnyLinkClient } from '@anylink-agent/sdk';
+import { AnyLinkWorker, TaskDeclined } from '@anylink-agent/sdk/worker';
 
 const joined = await AnyLinkClient.connect({
-  baseUrl: process.env.ANYLINK_BASE_URL,
-  joinKey: process.env.ANYLINK_JOIN_KEY,
-  installId: process.env.ANYLINK_INSTALL_ID,
-  device: { name: '构建服务器', platform: 'other' },
-  agent: { key: 'builder', name: '构建 Agent' },
+  baseUrl: process.env.ANYLINK_BASE_URL, joinKey: process.env.ANYLINK_JOIN_KEY,
+  installId: 'home-mac-01',
+  device: { name: 'MacBook Pro', slug: 'home-mac', platform: 'macos' },
+  agent: { key: 'desktop', name: 'Mac Agent' },
 });
-const link = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: joined.token });
-const context = await link.context();
-const task = await link.createTask({
-  target: { agent_id: targetAgentId },
-  capability: 'text.reverse',
-  input: { text: 'AnyLink' },
-}, { idempotencyKey: crypto.randomUUID() });
+const client = new AnyLinkClient({ baseUrl: process.env.ANYLINK_BASE_URL, token: joined.token });
+
+// 直接按唯一短别名向另一台设备发任务并实时等待完成
+const task = await client.invoke({ target: { device_slug: 'gpu-box' }, instruction: '查看当前显存占用' });
+const done = await client.waitForTask(task.id);
 ```
 
-一个加入密钥即可连接任意设备和 Agent，没有逐对授权。完整 Worker、Agent 路由、结果恢复和可选模型调用见 [SDK 中文说明](sdk/README.zh-CN.md)。只需接记忆时，使用 `context()` 等接口即可，不需要替换已有 Agent 或模型。
+### 方式三：零代码接入 Claude Code / Cursor / Codex（MCP Server）
 
-## 自部署参考服务
+把 [mcp/bin/anylink-mcp.mjs](mcp/bin/anylink-mcp.mjs) 配进你的 MCP 客户端，立刻获得云端共享记忆检索/沉淀与跨设备调用能力：
 
-需要 Node 24、npm 和 Docker Compose；只有可选模型代理需要你自己的模型服务 Key。
+```json
+{
+  "mcpServers": {
+    "anylink": {
+      "command": "node",
+      "args": ["/path/to/anylink-agent/mcp/bin/anylink-mcp.mjs"],
+      "env": {
+        "ANYLINK_BASE_URL": "https://your-anylink-server.example",
+        "ANYLINK_TOKEN": "ak_..."
+      }
+    }
+  }
+}
+```
+
+---
+
+## 蓝色大肥鱼参考客户端
+
+除了中立、通用的核心协议与 SDK，仓库内置了以**深海蓝白鲸鱼娘「大肥鱼」**为交互卖点的配套参考客户端（核心协议层与角色完全解耦，开源接入无需携带角色）：
+
+- **电脑端（Mac + OpenClaw）**：基于 OpenClaw 挂载记忆与文件工具插件，搭配桌面 Live2D 桌宠与本地语音交互。
+- **手机端（Android 原生独立 Agent）**：手机端独立运行对话与无障碍控屏、后台 Live2D 悬浮陪伴与语音播报，不依赖 Mac 在线；需要操作电脑时通过云端无缝协同。
+
+<p align="center">
+  <img src="docs/assets/android-public.jpg" alt="公开版原创占位形象预览" width="42%" />
+  <img src="docs/assets/android-optional-character.jpg" alt="自行配置可选第三方大肥鱼角色预览（公开包不含）" width="42%" />
+</p>
+
+<p align="center">
+  <sub>左：公开版原创占位形象；右：本地自行配置第三方角色预览（两图均为桌面浏览器构图预览，非真机截图）。<br/>
+  公开仓库与发布包<strong>不包含</strong>第三方 Live2D 模型、纹理与 Cubism Core；DeepSeek-chan 原画/拆分：神宫凉子，Live2D：霓虹猫_NeonNeko，详见 <a href="THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>。</sub>
+</p>
+
+---
+
+## 自部署云端中枢
+
+环境要求：Node 22+、npm、Docker Compose（PostgreSQL 16/17 标准镜像即可，无需强制扩展）。
 
 ```bash
 git clone https://github.com/windowssr/AnyLink-Agent.git
 cd AnyLink-Agent
 npm ci
 node scripts/init-local.mjs
-# 如需模型代理，在生成的 .env 填写 DEEPSEEK_API_KEY；不要提交 .env。
+# 可选：在 .env 中配置 DEEPSEEK_API_KEY 或 ANYLINK_MODELS_JSON 多模型路由（切勿提交 .env）
 docker compose --env-file .env -f deploy/compose.local.yaml up -d --wait
 npm run build
 node --env-file=.env dist/server/index.js
 ```
 
-访问 `http://127.0.0.1:3180`，使用 `secrets/local-dev-owner-token` 中的主人令牌登录。`init-local.mjs` 同时生成 `secrets/local-dev-join-key`；设备通过 `AnyLinkClient.connect` 或 `POST /edge/v1/connect` 接入。“设备访问”页面列出设备及其 Agent 供查看和吊销，也仍可为设备 `default` Agent 签发旧版一次性凭据。主人令牌、加入密钥、设备凭据与模型 Key 各自独立。
+浏览器访问 `http://127.0.0.1:3180`，使用 `secrets/local-dev-owner-token` 登录管理台查看共享记忆、跨设备动态、在线设备（含 `WS 实时在线` 状态）与模型用量。公网 HTTPS 部署与备份回滚脚本见 [docs/open-source/self-hosting.md](docs/open-source/self-hosting.md)。
 
-默认端口仅监听回环。远程使用 HTTPS 或 SSH 隧道；不要直接公开当前本机 Gateway。生产 Compose、发布与回退脚本保留在 `deploy/`、`scripts/`，先阅读[部署说明](docs/open-source/self-hosting.md)。
+---
 
-## 开发和参考实现
+## 仓库结构与路线图
 
-```bash
-npm run check
-npm run test:sdk
-npm run protocol:check
-npm run build
-# 仅在一次性 anylink_test 数据库上执行；会重建其 schema：
-TEST_DATABASE_URL=postgresql://USER:PASS@127.0.0.1:5432/anylink_test npm run test:integration
+```text
+protocol/     # Protocol v3 规范文档与自动生成的 OpenAPI 3.1 契约
+server/       # 云端中枢（记忆大脑 + 多模型网关 + WebSocket 实时总线 + 管理台 API）
+sdk/          # @anylink-agent/sdk — 零依赖 TypeScript/JS SDK (npm)
+sdk-python/   # anylink-agent — Python 异步 SDK 与装饰器边缘节点 (PyPI)
+mcp/          # @anylink-agent/mcp — Claude Code / Cursor / Codex MCP 适配器
+web/          # 云端管理后台（React + Vite）
+mac/          # 参考展示：Mac OpenClaw 插件、文件沙箱与大肥鱼桌宠
+android-native/ # 参考展示：Android 原生大肥鱼客户端与悬浮陪伴
 ```
 
-- [接入协议与 OpenAPI](protocol/README.zh-CN.md)：HTTP、身份、能力、状态、幂等和恢复约定。
-- [SDK](sdk/README.zh-CN.md)：独立宿主 Worker、记忆和流式模型接口。
-- [Codex 只读适配示例](sdk/examples/codex-read-only.mjs)：宿主自选工作区，不绕过审批。
-- [Mac／Android 参考客户端](docs/open-source/clients.md)：安装、权限、连接和可选模型配置。
-- [已有产品设计文档](docs/product/README.md)：历史探索与交互设计，不代表全部功能已交付。
+- [x] **第一阶段**：Protocol v3.0 规范、云端记忆大脑（混合检索 + 去抖批整理 + 边界自动学习）、多模型网关与 1A 自动记忆、WebSocket 实时总线与租约回收、设备唯一短别名 `slug`、Python SDK、TypeScript SDK、MCP Server。
+- [ ] **第二阶段**：将 Mac OpenClaw 插件与 Android 原生大肥鱼客户端全面迁移至 Protocol v3（WebSocket 实时推送 + 主动语音回报 + 记忆大脑无缝同步），并正式发布至 PyPI 与 npm。
 
-## 当前边界
+---
 
-服务是**单主人参考部署**。逻辑设备处于同一主人信任域，默认上下文选择不等于多租户数据隔离，也不证明物理设备已配对。加入密钥让任何持有者都能连接并向任意 Agent 派发任务，真正的执行边界是每台宿主的本地策略。取消是协作请求，外部副作用不能承诺绝对“恰好一次”。服务器可读取记忆、任务和转发的模型内容。
+## 开源与安全
 
-Android 原生 Agent 已接通通用云端协议；尚未发布独立 Kotlin SDK。手机工具当前限于基础状态、私有便笺、统一记忆与跨设备任务，尚不能通用控制其他 App。没有 Codex 现有桌面会话控制或端到端实时语音承诺；APK 的收音、播放、GPU 和后台生命周期仍待真机验收。详见[安全边界](SECURITY.md)。
-
-## 开源与双仓库维护
-
-项目原创代码与文档采用 [MIT](LICENSE)，第三方代码与素材见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。
-
-[GitHub](https://github.com/windowssr/AnyLink-Agent) 与 [Gitee](https://gitee.com/windowssr/anylink-agent) 维护同一 `main` 和版本标签；安装资源统一存放 GitHub Releases，两边 README 指向同一资源。维护者使用 `npm run repo:sync` 检查分歧后双推送，遇到外部提交先合并，禁止强制覆盖。欢迎提交接入适配器和协议改进，见 [CONTRIBUTING](CONTRIBUTING.md)。
+- 本项目原创代码与文档采用 [MIT License](LICENSE)，详见 [SECURITY.md](SECURITY.md) 与 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 代码同步托管于 [GitHub](https://github.com/windowssr/AnyLink-Agent) 与 [Gitee](https://gitee.com/windowssr/anylink-agent)。如果这套「云端记忆大脑 + 边缘自治」的个人 Agent 网络思路对你有启发，欢迎点个 **Star** 或提交适配器 PR！

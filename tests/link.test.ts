@@ -12,7 +12,7 @@ const url=process.env.TEST_DATABASE_URL;
 const joinKey='test-join-key-not-for-production-0000';
 test('AnyLink SDK over real HTTP: join, agent routing and durable results',{skip:!url},async t=>{
   assert.equal(new URL(url!).pathname,'/anylink_test');
-  const config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:'http://127.0.0.1:1',defaultModel:'deepseek-flash',memoryModel:'deepseek-flash',embeddingModel:'',embeddingBaseUrl:'http://127.0.0.1:1',embeddingApiKey:'',models:[],allowAnyModel:false,gatewayAutoMemoryDefault:false,maxGlobalConcurrency:16,maxAgentConcurrency:4,maxAgentRpm:60,trustProxy:'loopback',origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md',speechPrompt:'',leaseReaperIntervalMs:60000};
+  const config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:'http://127.0.0.1:1',defaultModel:'deepseek-flash',memoryModel:'deepseek-flash',embeddingModel:'',embeddingBaseUrl:'http://127.0.0.1:1',embeddingApiKey:'',models:[],allowAnyModel:false,gatewayAutoMemoryDefault:false,maxGlobalConcurrency:16,maxAgentConcurrency:4,maxAgentRpm:60,trustProxy:'loopback',origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md',speechPrompt:'',leaseReaperIntervalMs:60000,memoryDebounceMs:0,memoryBatchMax:6};
   let instance=await createApp(config,{logger:false});
   await instance.app.listen({host:'127.0.0.1',port:0});
   const address=instance.app.server.address() as {port:number};const baseUrl=`http://127.0.0.1:${address.port}`;

@@ -193,7 +193,12 @@ export class AnyLinkClient {
         signal: AbortSignal.timeout(timeoutMs),
         headers: { Authorization: `Bearer ${joinKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          device: { install_id: installId, name: device?.name, platform: device?.platform ?? 'other' },
+          device: {
+            install_id: installId,
+            name: device?.name,
+            platform: device?.platform ?? 'other',
+            ...(device?.slug !== undefined ? { slug: device.slug } : {}),
+          },
           agent: {
             key: agent?.key,
             name: agent?.name,
@@ -262,6 +267,7 @@ export class AnyLinkClient {
   persona(options) { return this.#request('GET', 'edge/v1/persona', undefined, options); }
   identity(options) { return this.#request('GET', 'edge/v1/identity', undefined, options); }
   updateProfile(profile, options = {}) { return this.#request('PATCH', 'edge/v1/agent/profile', profile, { idempotencyKey: false, ...options }); }
+  updateDeviceProfile(profile, options = {}) { return this.#request('PATCH', 'edge/v1/device/profile', profile, { idempotencyKey: false, ...options }); }
   adoptInstallId(installId, options = {}) { return this.#request('POST', 'edge/v1/device/install-id', { install_id: installId }, { idempotencyKey: false, ...options }); }
 
   // Cloud Memory Brain v3

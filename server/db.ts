@@ -166,6 +166,14 @@ export async function migrate(db: Db) {
         INSERT INTO schema_migrations(version) VALUES(5);
       `);
     }
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=6')).rowCount) {
+      await c.query(`
+        -- Protocol v3.0.1: unique short device slug for unambiguous cross-device routing
+        ALTER TABLE devices ADD COLUMN IF NOT EXISTS slug text;
+        CREATE UNIQUE INDEX IF NOT EXISTS devices_owner_slug_uniq ON devices(owner_id, lower(slug)) WHERE slug IS NOT NULL AND revoked_at IS NULL;
+        INSERT INTO schema_migrations(version) VALUES(6);
+      `);
+    }
     // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
     await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");
   });

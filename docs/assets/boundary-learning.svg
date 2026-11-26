@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8fcff"/>
+      <stop offset="100%" stop-color="#eef7fc"/>
+    </linearGradient>
+    <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 1L9 5L0 9Z" fill="#0284c7"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="320" rx="20" fill="url(#bg2)" stroke="#bae6fd" stroke-width="1.5"/>
+  <text x="600" y="40" text-anchor="middle" fill="#0c4a6e" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="20" font-weight="700">Capability-Free Invocation &amp; Self-Learning Device Boundaries / 无能力表跨设备调用与自动边界学习</text>
+
+  <g font-family="system-ui,-apple-system,Segoe UI,sans-serif">
+    <!-- Step 1 -->
+    <rect x="34" y="72" width="252" height="196" rx="16" fill="#ffffff" stroke="#7dd3fc" stroke-width="1.5"/>
+    <circle cx="64" cy="102" r="14" fill="#0284c7"/>
+    <text x="64" y="107" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">1</text>
+    <text x="88" y="107" fill="#0f172a" font-size="15" font-weight="700">Direct Invoke</text>
+    <text x="52" y="138" fill="#334155" font-size="13">Phone sends an instruction</text>
+    <text x="52" y="158" fill="#334155" font-size="13">directly to <tspan font-weight="700" fill="#0369a1">@home-mac</tspan>:</text>
+    <rect x="50" y="172" width="220" height="44" rx="8" fill="#f0f9ff" stroke="#bae6fd"/>
+    <text x="62" y="198" fill="#0369a1" font-size="12.5">“帮我用微信发周报给老板”</text>
+    <text x="52" y="246" fill="#64748b" font-size="11.5">无需事先查 Mac 能力清单</text>
+
+    <!-- Step 2 -->
+    <rect x="328" y="72" width="252" height="196" rx="16" fill="#ffffff" stroke="#fbbf24" stroke-width="1.5"/>
+    <circle cx="358" cy="102" r="14" fill="#d97706"/>
+    <text x="358" y="107" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">2</text>
+    <text x="382" y="107" fill="#0f172a" font-size="15" font-weight="700">Autonomous Decline</text>
+    <text x="346" y="138" fill="#334155" font-size="13">Mac checks its own local</text>
+    <text x="346" y="158" fill="#334155" font-size="13">environment &amp; throws:</text>
+    <rect x="344" y="172" width="220" height="44" rx="8" fill="#fffbeb" stroke="#fde68a"/>
+    <text x="354" y="191" fill="#b45309" font-size="12" font-weight="600">state: "declined"</text>
+    <text x="354" y="208" fill="#92400e" font-size="11.5">“本机未开放微信发消息权限”</text>
+    <text x="346" y="246" fill="#64748b" font-size="11.5">通过 WebSocket 实时推回发起方</text>
+
+    <!-- Step 3 -->
+    <rect x="622" y="72" width="252" height="196" rx="16" fill="#ffffff" stroke="#06b6d4" stroke-width="1.5"/>
+    <circle cx="652" cy="102" r="14" fill="#0891b2"/>
+    <text x="652" y="107" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">3</text>
+    <text x="676" y="107" fill="#0f172a" font-size="15" font-weight="700">Cloud Brain Learns</text>
+    <text x="640" y="138" fill="#334155" font-size="13">Cloud Memory Brain</text>
+    <text x="640" y="158" fill="#334155" font-size="13">automatically persists:</text>
+    <rect x="638" y="172" width="220" height="44" rx="8" fill="#ecfeff" stroke="#a5f3fc"/>
+    <text x="648" y="191" fill="#0e7490" font-size="12" font-weight="600">scope: global · kind: boundary</text>
+    <text x="648" y="208" fill="#155e75" font-size="11.5">@home-mac 无法发微信</text>
+    <text x="640" y="246" fill="#64748b" font-size="11.5">无模型 Key 时也有确定性规则兜底</text>
+
+    <!-- Step 4 -->
+    <rect x="916" y="72" width="250" height="196" rx="16" fill="#ffffff" stroke="#10b981" stroke-width="1.5"/>
+    <circle cx="946" cy="102" r="14" fill="#059669"/>
+    <text x="946" y="107" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">4</text>
+    <text x="970" y="107" fill="#0f172a" font-size="15" font-weight="700">Every Device Knows</text>
+    <text x="934" y="138" fill="#334155" font-size="13">Next turn, any device calls</text>
+    <text x="934" y="158" fill="#334155" font-size="13"><tspan font-weight="600" fill="#047857">memory.assemble</tspan>:</text>
+    <rect x="932" y="172" width="218" height="44" rx="8" fill="#ecfdf5" stroke="#a7f3d0"/>
+    <text x="942" y="191" fill="#065f46" font-size="12" font-weight="600">## Learned Boundaries</text>
+    <text x="942" y="208" fill="#047857" font-size="11.5">自动避开无效派发，直接用手机发</text>
+    <text x="934" y="246" fill="#64748b" font-size="11.5">全网 Agent 越用越懂彼此</text>
+  </g>
+
+  <!-- Arrows -->
+  <g stroke="#0284c7" stroke-width="2.5" fill="none" marker-end="url(#arr2)">
+    <path d="M288 170H322"/>
+    <path d="M582 170H616"/>
+    <path d="M876 170H910"/>
+  </g>
+  <text x="600" y="300" text-anchor="middle" fill="#475569" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="12.5">No rigid remote capability schemas · Edge stays simple · Cloud Memory Brain continuously evolves cross-device intelligence</text>
+</svg>

@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ApiError, hash, type Db, transaction } from './db.js';
 import { OWNER_ID, type Config } from './config.js';
-import { PLATFORMS } from './store.js';
+import { devicePatchSchema, deviceSlugSchema, PLATFORMS, resolveDeviceSlug, updateDevice } from './store.js';
 
 export type EdgeIdentity = { id: string; device_id: string; agent_id: string };
 declare module 'fastify' { interface FastifyRequest { edgeIdentity?: EdgeIdentity } }
@@ -33,6 +33,7 @@ export const connectSchema = z.object({
     install_id: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
     name: z.string().trim().min(1).max(80),
     platform: z.enum(PLATFORMS),
+    slug: deviceSlugSchema.optional(),
   }).strict(),
   agent: z.object({
     key: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
@@ -62,9 +63,14 @@ export function registerConnectRoute(app: FastifyInstance, db: Db, config: Confi
     const body = connectSchema.parse(req.body);
     const result = await transaction(db, async c => {
       await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`connect:${body.device.install_id}`]);
-      const device = (await c.query(`INSERT INTO devices(id,owner_id,name,platform,install_id) VALUES($1,$2,$3,$4,$5)
-        ON CONFLICT(install_id) DO UPDATE SET name=EXCLUDED.name,platform=EXCLUDED.platform RETURNING *`,
-      [randomUUID(), OWNER_ID, body.device.name, body.device.platform, body.device.install_id])).rows[0];
+      const existingDev = (await c.query('SELECT id,slug,revoked_at FROM devices WHERE install_id=$1 FOR UPDATE', [body.device.install_id])).rows[0];
+      if (existingDev?.revoked_at) throw new ApiError(403, 'DEVICE_REVOKED', 'This device has been revoked by the owner');
+      const slug = body.device.slug !== undefined || !existingDev?.slug
+        ? await resolveDeviceSlug(c, body.device.slug, body.device.name, body.device.platform, existingDev?.id)
+        : existingDev.slug;
+      const device = (await c.query(`INSERT INTO devices(id,owner_id,name,platform,install_id,slug) VALUES($1,$2,$3,$4,$5,$6)
+        ON CONFLICT(install_id) DO UPDATE SET name=EXCLUDED.name,platform=EXCLUDED.platform,slug=EXCLUDED.slug RETURNING *`,
+      [randomUUID(), OWNER_ID, body.device.name, body.device.platform, body.device.install_id, slug])).rows[0];
       if (device.revoked_at) throw new ApiError(403, 'DEVICE_REVOKED', 'This device has been revoked by the owner');
       const agent = (await c.query(`INSERT INTO agents(id,owner_id,device_id,key,name,kind,summary) VALUES($1,$2,$3,$4,$5,$6,$7)
         ON CONFLICT(device_id,key) DO UPDATE SET name=EXCLUDED.name,kind=EXCLUDED.kind,summary=CASE WHEN EXCLUDED.summary<>'' THEN EXCLUDED.summary ELSE agents.summary END RETURNING *`,
@@ -73,10 +79,16 @@ export function registerConnectRoute(app: FastifyInstance, db: Db, config: Confi
       await c.query('UPDATE edge_credentials SET revoked_at=now() WHERE agent_id=$1 AND revoked_at IS NULL', [agent.id]);
       const credentialId = randomUUID(), edgeToken = 'ak_' + randomBytes(32).toString('base64url');
       await c.query('INSERT INTO edge_credentials(id,device_id,agent_id,token_hash) VALUES($1,$2,$3,$4)', [credentialId, device.id, agent.id, hash(edgeToken)]);
-      return { device_id: device.id, agent_id: agent.id, credential_id: credentialId, token: edgeToken, protocol: { name: 'anylink', version: '3.0' } };
+      return { device_id: device.id, device_slug: device.slug, agent_id: agent.id, credential_id: credentialId, token: edgeToken, protocol: { name: 'anylink', version: '3.0' } };
     });
     reply.code(201);
     return result;
+  });
+
+  app.patch('/edge/v1/device/profile', async req => {
+    const me = req.edgeIdentity!;
+    const body = devicePatchSchema.parse(req.body);
+    return transaction(db, c => updateDevice(c, me.device_id, body));
   });
 
   app.patch('/edge/v1/agent/profile', async req => {

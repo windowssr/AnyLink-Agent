@@ -90,6 +90,8 @@ export function loadConfig() {
     personaFile: z.string().default(''),
     speechPrompt: z.string().default(''),
     leaseReaperIntervalMs: z.number().int().min(1000).max(300000).default(15000),
+    memoryDebounceMs: z.number().int().min(0).max(300000).default(15000),
+    memoryBatchMax: z.number().int().min(1).max(30).default(6),
   }).parse({
     databaseUrl: secret('DATABASE_URL'),
     ownerToken: secret('OWNER_TOKEN'),
@@ -114,6 +116,8 @@ export function loadConfig() {
     personaFile: process.env.ANYLINK_PERSONA_FILE ?? 'persona/dafeiyu.md',
     speechPrompt: process.env.ANYLINK_SPEECH_PROMPT ?? '',
     leaseReaperIntervalMs: process.env.ANYLINK_LEASE_REAPER_MS ? Number(process.env.ANYLINK_LEASE_REAPER_MS) : 15000,
+    memoryDebounceMs: process.env.ANYLINK_MEMORY_DEBOUNCE_MS !== undefined ? Number(process.env.ANYLINK_MEMORY_DEBOUNCE_MS) : 15000,
+    memoryBatchMax: process.env.ANYLINK_MEMORY_BATCH_MAX ? Number(process.env.ANYLINK_MEMORY_BATCH_MAX) : 6,
   });
 }
 

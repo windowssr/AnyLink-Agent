@@ -10,10 +10,48 @@ export const PLATFORMS = ['macos', 'android', 'linux', 'windows', 'ios', 'web', 
 export const MEMORY_SCOPES = ['global', 'device', 'agent'] as const;
 export const MEMORY_KINDS = ['fact', 'preference', 'boundary', 'episode'] as const;
 
+export const deviceSlugSchema = z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9_-]{1,39}$/, 'Slug must be 2-40 lowercase alphanumeric, hyphen or underscore characters');
+
 export const deviceSchema = z.object({
   name: z.string().trim().min(1).max(80),
   platform: z.enum(PLATFORMS),
+  slug: deviceSlugSchema.optional(),
 }).strict();
+
+export const devicePatchSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  slug: deviceSlugSchema.optional(),
+}).strict().refine(v => v.name !== undefined || v.slug !== undefined, 'Provide name or slug');
+
+/** Derive a clean base slug from a device name, falling back to platform when name has no ASCII alphanumerics. */
+export function deriveSlugBase(name: string, platform: string): string {
+  const cleaned = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+  if (cleaned.length >= 2) return cleaned;
+  return (platform || 'device').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+/** Validate an explicit slug or generate the first unused unique slug for active devices. */
+export async function resolveDeviceSlug(db: Queryable, preferred: string | undefined, name: string, platform: string, excludeDeviceId?: string): Promise<string> {
+  if (preferred) {
+    const slug = deviceSlugSchema.parse(preferred);
+    const conflict = await db.query(
+      'SELECT id FROM devices WHERE owner_id=$1 AND revoked_at IS NULL AND lower(slug)=lower($2) AND ($3::uuid IS NULL OR id<>$3)',
+      [OWNER_ID, slug, excludeDeviceId ?? null],
+    );
+    if (conflict.rowCount) throw new ApiError(409, 'DEVICE_SLUG_TAKEN', `Device slug "${slug}" is already in use`);
+    return slug;
+  }
+  const base = deriveSlugBase(name, platform);
+  for (let i = 1; i <= 100; i++) {
+    const candidate = i === 1 ? base : `${base.slice(0, 34)}-${i}`;
+    const taken = await db.query(
+      'SELECT 1 FROM devices WHERE owner_id=$1 AND revoked_at IS NULL AND lower(slug)=lower($2) AND ($3::uuid IS NULL OR id<>$3)',
+      [OWNER_ID, candidate, excludeDeviceId ?? null],
+    );
+    if (!taken.rowCount) return candidate;
+  }
+  return `${base.slice(0, 30)}-${randomUUID().slice(0, 6)}`;
+}
 
 export const memorySearchSchema = z.object({
   q: z.string().max(300).optional(),
@@ -125,7 +163,15 @@ export async function requireAgent(db: Queryable, id?: string | null) {
 }
 
 export async function createDevice(db: Queryable, input: z.infer<typeof deviceSchema>) {
-  return (await db.query('INSERT INTO devices(id,owner_id,name,platform) VALUES($1,$2,$3,$4) RETURNING *,false AS executor_connected', [randomUUID(), OWNER_ID, input.name, input.platform])).rows[0];
+  const slug = await resolveDeviceSlug(db, input.slug, input.name, input.platform);
+  return (await db.query('INSERT INTO devices(id,owner_id,name,platform,slug) VALUES($1,$2,$3,$4,$5) RETURNING *,false AS executor_connected', [randomUUID(), OWNER_ID, input.name, input.platform, slug])).rows[0];
+}
+
+export async function updateDevice(db: Queryable, id: string, input: z.infer<typeof devicePatchSchema>) {
+  const existing = (await db.query('SELECT * FROM devices WHERE id=$1 AND owner_id=$2', [id, OWNER_ID])).rows[0];
+  if (!existing) throw new ApiError(404, 'DEVICE_NOT_FOUND', 'Device not found');
+  const slug = input.slug !== undefined ? await resolveDeviceSlug(db, input.slug, input.name ?? existing.name, existing.platform, id) : existing.slug;
+  return (await db.query('UPDATE devices SET name=COALESCE($2,name),slug=$3,revision=revision+1 WHERE id=$1 RETURNING *,false AS executor_connected', [id, input.name ?? null, slug])).rows[0];
 }
 
 export async function listDevices(db: Queryable) {

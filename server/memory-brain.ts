@@ -111,8 +111,23 @@ function deterministicSummary(kind: string, messages: Array<{ role: string; cont
   return compactAssistant ? `[${deviceName}] ${compactUser} → ${compactAssistant}` : `[${deviceName}] ${compactUser}`;
 }
 
+const TRIVIAL_CHITCHAT = /^(?:hi|hello|hey|ok|okay|k|thx|thanks|thank you|bye|goodbye|yes|no|yep|nope|lol|haha|你好|您好|哈喽|嗨|在吗|在不在|好的|好呀|好哒|嗯|嗯嗯|哦|哦哦|行|可以|收到|明白|了解|谢谢|多谢|感谢|哈哈|哈哈哈|拜拜|再见|早|早安|晚安|没问题)[!！?？。.~～\s]*$/i;
+
+/** Detect purely trivial short greetings/acks so we don't burn cloud memory LLM tokens on noise. */
+export function isTrivialTurn(messages: Array<{ role: string; content: string }>): boolean {
+  if (messages.length === 0 || messages.length > 2) return false;
+  const userMsgs = messages.filter(m => m.role === 'user').map(m => m.content.trim());
+  if (!userMsgs.length) return false;
+  const userText = userMsgs.join(' ');
+  if (userText.length > 16) return false;
+  if (!TRIVIAL_CHITCHAT.test(userText)) return false;
+  const assistantText = messages.filter(m => m.role === 'assistant').map(m => m.content.trim()).join(' ');
+  return assistantText.length <= 120;
+}
+
 export class MemoryBrain {
   private pending = new Set<Promise<void>>();
+  private debounceBatches = new Map<string, { episodeIds: string[]; timer: ReturnType<typeof setTimeout> }>();
   private fetchImpl: typeof fetch;
   private onMemoryUpdated?: MemoryBrainDeps['onMemoryUpdated'];
 
@@ -121,9 +136,27 @@ export class MemoryBrain {
     this.onMemoryUpdated = deps.onMemoryUpdated;
   }
 
-  /** Wait for all background memory consolidation jobs (useful in tests and graceful shutdown). */
+  private track(promise: Promise<void>) {
+    this.pending.add(promise);
+    void promise.finally(() => this.pending.delete(promise));
+  }
+
+  /** Immediately flush all buffered debounce batches into background consolidation jobs. */
+  flushDebounced(): void {
+    for (const [key, batch] of [...this.debounceBatches]) {
+      clearTimeout(batch.timer);
+      this.debounceBatches.delete(key);
+      if (batch.episodeIds.length) {
+        this.track(this.consolidateBatch(batch.episodeIds).then(() => {}).catch(() => {}));
+      }
+    }
+  }
+
+  /** Flush all debounce timers and wait for all background memory consolidation jobs. */
   async drain(): Promise<void> {
-    while (this.pending.size > 0) {
+    this.flushDebounced();
+    while (this.pending.size > 0 || this.debounceBatches.size > 0) {
+      if (this.debounceBatches.size > 0) this.flushDebounced();
       await Promise.allSettled([...this.pending]);
     }
   }
@@ -249,7 +282,7 @@ export class MemoryBrain {
     };
   }
 
-  /** Ingest an episode (conversation turn, task outcome, or observation) and schedule cloud consolidation. */
+  /** Ingest an episode (conversation turn, task outcome, or observation) with trivial-turn filtering and session debouncing. */
   async ingest(
     identity: { device_id: string; agent_id: string },
     rawInput: z.input<typeof memoryIngestSchema>,
@@ -259,6 +292,16 @@ export class MemoryBrain {
     const deviceRow = (await this.db.query('SELECT name FROM devices WHERE id=$1', [identity.device_id])).rows[0];
     const initialSummary = deterministicSummary(input.kind, input.messages, input.metadata, deviceRow?.name ?? 'device');
 
+    // Skip trivial greetings/acks immediately without burning an LLM call.
+    if (input.kind === 'turn' && !input.consolidate_now && isTrivialTurn(input.messages)) {
+      await this.db.query(
+        `INSERT INTO memory_episodes(id,owner_id,source_device_id,source_agent_id,session_key,kind,messages,metadata,summary,status,consolidation_result,consolidated_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,'','skipped',$9,now())`,
+        [episodeId, OWNER_ID, identity.device_id, identity.agent_id, input.session_key ?? null, input.kind, JSON.stringify(input.messages), JSON.stringify(input.metadata), JSON.stringify({ skipped_reason: 'trivial_chitchat', actions: [] })],
+      );
+      return { episode_id: episodeId, status: 'skipped' as const, summary: '', debounced: false };
+    }
+
     await this.db.query(
       `INSERT INTO memory_episodes(id,owner_id,source_device_id,source_agent_id,session_key,kind,messages,metadata,summary,status)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')`,
@@ -267,13 +310,72 @@ export class MemoryBrain {
 
     if (input.consolidate_now) {
       const outcome = await this.consolidateEpisode(episodeId);
-      return { episode_id: episodeId, ...outcome };
+      return { episode_id: episodeId, ...outcome, debounced: false };
     }
 
-    const job = this.consolidateEpisode(episodeId).then(() => {}).catch(() => {});
-    this.pending.add(job);
-    void job.finally(() => this.pending.delete(job));
-    return { episode_id: episodeId, status: 'pending' as const, summary: initialSummary };
+    // Immediate consolidation for critical device capability boundaries or when debounce is disabled.
+    const isUrgentBoundary = input.kind === 'task_outcome' && ['declined', 'failed'].includes(String(input.metadata?.state ?? ''));
+    const debounceMs = this.config.memoryDebounceMs ?? 15000;
+    const batchMax = this.config.memoryBatchMax ?? 6;
+    if (isUrgentBoundary || debounceMs <= 0) {
+      this.track(this.consolidateEpisode(episodeId).then(() => {}).catch(() => {}));
+      return { episode_id: episodeId, status: 'pending' as const, summary: initialSummary, debounced: false };
+    }
+
+    // Session-level debounced batching: merge bursty turns into a single Cloud Memory LLM call!
+    const batchKey = `${identity.agent_id}:${input.session_key || 'default'}`;
+    const existing = this.debounceBatches.get(batchKey);
+    const episodeIds = existing ? [...existing.episodeIds, episodeId] : [episodeId];
+    if (existing) clearTimeout(existing.timer);
+
+    if (episodeIds.length >= batchMax) {
+      this.debounceBatches.delete(batchKey);
+      this.track(this.consolidateBatch(episodeIds).then(() => {}).catch(() => {}));
+      return { episode_id: episodeId, status: 'pending' as const, summary: initialSummary, debounced: true, flushed: true };
+    }
+
+    const timer = setTimeout(() => {
+      const entry = this.debounceBatches.get(batchKey);
+      if (!entry) return;
+      this.debounceBatches.delete(batchKey);
+      if (entry.episodeIds.length) {
+        this.track(this.consolidateBatch(entry.episodeIds).then(() => {}).catch(() => {}));
+      }
+    }, debounceMs);
+    timer.unref();
+    this.debounceBatches.set(batchKey, { episodeIds, timer });
+    return { episode_id: episodeId, status: 'pending' as const, summary: initialSummary, debounced: true, debounce_ms: debounceMs };
+  }
+
+  /** Consolidate a debounced burst of episodes from the same session in ONE single LLM pass. */
+  async consolidateBatch(episodeIds: string[]): Promise<{ status: 'consolidated' | 'skipped' | 'failed'; summary: string; actions: unknown[] }> {
+    if (episodeIds.length === 0) return { status: 'skipped', summary: '', actions: [] };
+    if (episodeIds.length === 1) return this.consolidateEpisode(episodeIds[0]);
+
+    const rows = (await this.db.query(
+      `SELECT e.*, d.name AS device_name, a.name AS agent_name, a.key AS agent_key
+       FROM memory_episodes e
+       LEFT JOIN devices d ON d.id=e.source_device_id
+       LEFT JOIN agents a ON a.id=e.source_agent_id
+       WHERE e.id = ANY($1::uuid[]) AND e.owner_id=$2
+       ORDER BY e.created_at ASC`,
+      [episodeIds, OWNER_ID],
+    )).rows;
+    if (!rows.length) return { status: 'failed', summary: '', actions: [] };
+
+    const anchor = rows[rows.length - 1];
+    const combinedMessages = rows.flatMap(r => Array.isArray(r.messages) ? r.messages : []);
+    const combinedMetadata = Object.assign({}, ...rows.map(r => (r.metadata && typeof r.metadata === 'object' ? r.metadata : {})), { batched_episodes: rows.map(r => r.id) });
+    const outcome = await this.consolidateRow({ ...anchor, messages: combinedMessages, metadata: combinedMetadata });
+
+    const otherIds = rows.slice(0, -1).map(r => r.id);
+    if (otherIds.length) {
+      await this.db.query(
+        `UPDATE memory_episodes SET status=$2,consolidation_result=$3,consolidated_at=now() WHERE id=ANY($1::uuid[])`,
+        [otherIds, outcome.status, JSON.stringify({ batched_into: anchor.id, actions: outcome.actions })],
+      );
+    }
+    return outcome;
   }
 
   /** Run Cloud Memory Manager Agent on a stored episode (LLM-driven with deterministic fallback). */
@@ -287,6 +389,11 @@ export class MemoryBrain {
       [episodeId, OWNER_ID],
     )).rows[0];
     if (!ep) return { status: 'failed', summary: '', actions: [] };
+    return this.consolidateRow(ep);
+  }
+
+  private async consolidateRow(ep: any): Promise<{ status: 'consolidated' | 'skipped' | 'failed'; summary: string; actions: unknown[] }> {
+    const episodeId = ep.id as string;
 
     const messages = Array.isArray(ep.messages) ? ep.messages : [];
     const metadata = (ep.metadata && typeof ep.metadata === 'object') ? ep.metadata : {};

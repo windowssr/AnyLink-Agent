@@ -5,6 +5,7 @@ import { ApiError, idempotent, type Db } from './db.js';
 import { OWNER_ID } from './config.js';
 import type { EdgeIdentity } from './edge-auth.js';
 import type { MemoryBrain } from './memory-brain.js';
+import { deviceSlugSchema } from './store.js';
 import type { WsHub, WsTaskDelegate } from './ws-hub.js';
 
 export const capabilityName = z.string().regex(/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$/).max(100);
@@ -15,11 +16,12 @@ export const capabilitiesSchema = z.object({
 const payloadSchema = z.record(z.string(), z.unknown()).refine(v => Buffer.byteLength(JSON.stringify(v)) <= 65536, 'Payload exceeds 64 KiB');
 const agentTarget = z.object({ agent_id: z.uuid() }).strict();
 const deviceTarget = z.object({ device_id: z.uuid() }).strict();
+const deviceSlugTarget = z.object({ device_slug: deviceSlugSchema }).strict();
 const deviceNameTarget = z.object({ device_name: z.string().trim().min(1).max(80) }).strict();
 const agentKeyTarget = z.object({ agent_key: z.string().trim().min(1).max(64) }).strict();
 
 export const taskCreateSchema = z.object({
-  target: z.union([agentTarget, deviceTarget, deviceNameTarget, agentKeyTarget]).optional(),
+  target: z.union([agentTarget, deviceTarget, deviceSlugTarget, deviceNameTarget, agentKeyTarget]).optional(),
   target_device_id: z.uuid().optional(),
   instruction: z.string().trim().min(1).max(8000).optional(),
   capability: capabilityName.optional(),
@@ -129,12 +131,12 @@ export class LinkService implements WsTaskDelegate {
   private async targetLabelFor(task: any): Promise<string> {
     const agentId = task.claimed_by_agent_id ?? task.target_agent_id;
     if (agentId) {
-      const r = (await this.db.query('SELECT a.name AS agent_name, d.name AS device_name FROM agents a JOIN devices d ON d.id=a.device_id WHERE a.id=$1', [agentId])).rows[0];
-      if (r) return `${r.device_name} (${r.agent_name})`;
+      const r = (await this.db.query('SELECT a.name AS agent_name, d.name AS device_name, d.slug AS device_slug FROM agents a JOIN devices d ON d.id=a.device_id WHERE a.id=$1', [agentId])).rows[0];
+      if (r) return r.device_slug ? `${r.device_name} [${r.device_slug}] (${r.agent_name})` : `${r.device_name} (${r.agent_name})`;
     }
     if (task.target_device_id) {
-      const r = (await this.db.query('SELECT name FROM devices WHERE id=$1', [task.target_device_id])).rows[0];
-      if (r) return r.name;
+      const r = (await this.db.query('SELECT name, slug FROM devices WHERE id=$1', [task.target_device_id])).rows[0];
+      if (r) return r.slug ? `${r.name} [${r.slug}]` : r.name;
     }
     return '远程设备';
   }
@@ -168,12 +170,23 @@ export class LinkService implements WsTaskDelegate {
         if (!agent) throw new ApiError(404, 'TARGET_AGENT_NOT_FOUND', 'Target agent does not exist or has been revoked');
         targetAgentId = agent.id;
         targetDeviceId = agent.device_id;
+      } else if (body.target && 'device_slug' in body.target) {
+        const dev = (await c.query(
+          'SELECT id FROM devices WHERE owner_id=$1 AND revoked_at IS NULL AND lower(slug)=lower($2)',
+          [OWNER_ID, body.target.device_slug],
+        )).rows[0];
+        if (!dev) throw new ApiError(404, 'TARGET_DEVICE_NOT_FOUND', `No active device with slug "${body.target.device_slug}"`);
+        targetDeviceId = dev.id;
       } else if (body.target && 'device_name' in body.target) {
         const devices = (await c.query(
-          `SELECT id,name FROM devices WHERE owner_id=$1 AND revoked_at IS NULL AND lower(name)=lower($2) ORDER BY created_at`,
+          `SELECT id,name,slug FROM devices WHERE owner_id=$1 AND revoked_at IS NULL AND lower(name)=lower($2) ORDER BY created_at`,
           [OWNER_ID, body.target.device_name],
         )).rows;
         if (!devices.length) throw new ApiError(404, 'TARGET_DEVICE_NOT_FOUND', `No active device named "${body.target.device_name}"`);
+        if (devices.length > 1) {
+          const choices = devices.map(d => d.slug || d.id).join(', ');
+          throw new ApiError(409, 'AMBIGUOUS_TARGET_DEVICE', `Multiple active devices named "${body.target.device_name}"; target by device_slug instead: ${choices}`);
+        }
         targetDeviceId = devices[0].id;
       } else if (body.target && 'agent_key' in body.target) {
         const agents = (await c.query(
@@ -346,7 +359,7 @@ export function registerLink(app: FastifyInstance, db: Db, linkService: LinkServ
     delivery: 'at-most-once-claim-with-lease',
     requeue: false,
     capabilities: ['memory', 'memory_brain', 'model', 'tasks', 'directory', 'ws', 'persona'],
-    routing: ['agent', 'device', 'device_name', 'agent_key', 'any'],
+    routing: ['agent', 'device', 'device_slug', 'device_name', 'agent_key', 'any'],
   });
 
   app.get('/edge/v1/protocol', async () => protocolInfo());
@@ -354,12 +367,12 @@ export function registerLink(app: FastifyInstance, db: Db, linkService: LinkServ
 
   const directoryHandler = async (req: FastifyRequest) => {
     const me = who(req);
-    const rows = (await db.query(`SELECT d.id AS device_id,d.name AS device_name,d.platform,a.id AS agent_id,a.key,a.name AS agent_name,a.kind,a.summary,a.capabilities,a.last_seen_at
+    const rows = (await db.query(`SELECT d.id AS device_id,d.name AS device_name,d.slug AS device_slug,d.platform,a.id AS agent_id,a.key,a.name AS agent_name,a.kind,a.summary,a.capabilities,a.last_seen_at
       FROM devices d JOIN agents a ON a.device_id=d.id AND a.revoked_at IS NULL
       WHERE d.owner_id=$1 AND d.revoked_at IS NULL ORDER BY d.name,d.id,a.key`, [OWNER_ID])).rows;
     const items = new Map<string, any>();
     for (const row of rows) {
-      const item = items.get(row.device_id) ?? { device: { id: row.device_id, name: row.device_name, platform: row.platform }, agents: [] };
+      const item = items.get(row.device_id) ?? { device: { id: row.device_id, name: row.device_name, slug: row.device_slug ?? null, platform: row.platform }, agents: [] };
       const wsOnline = wsHub?.isOnline(row.agent_id) ?? false;
       const httpRecent = !!row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() < 60000;
       item.agents.push({

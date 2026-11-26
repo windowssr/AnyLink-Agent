@@ -256,6 +256,7 @@ class AnyLinkClient:
         agent_key: str,
         agent_name: str,
         platform: str = "other",
+        device_slug: str | None = None,
         kind: str = "agent",
         summary: str = "",
         timeout: float = 30.0,
@@ -264,8 +265,11 @@ class AnyLinkClient:
         checked = _check_base_url(base_url)
         if not join_key or "\n" in join_key or "\r" in join_key:
             raise ValueError("A join_key is required")
+        device_body: dict[str, Any] = {"install_id": install_id, "name": device_name, "platform": platform}
+        if device_slug is not None:
+            device_body["slug"] = device_slug
         payload = {
-            "device": {"install_id": install_id, "name": device_name, "platform": platform},
+            "device": device_body,
             "agent": {"key": agent_key, "name": agent_name, "kind": kind, "summary": summary},
         }
         async with httpx.AsyncClient(base_url=checked, timeout=timeout, follow_redirects=False) as http:
@@ -372,6 +376,15 @@ class AnyLinkClient:
     ) -> dict[str, Any]:
         body = {k: v for k, v in {"name": name, "summary": summary, "kind": kind}.items() if v is not None}
         return await self._request("PATCH", "edge/v1/agent/profile", body, idempotency_key=False)
+
+    async def update_device_profile(
+        self,
+        *,
+        name: str | None = None,
+        slug: str | None = None,
+    ) -> dict[str, Any]:
+        body = {k: v for k, v in {"name": name, "slug": slug}.items() if v is not None}
+        return await self._request("PATCH", "edge/v1/device/profile", body, idempotency_key=False)
 
     # Cloud Memory Brain v3
     async def assemble_memory(

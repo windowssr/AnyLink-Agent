@@ -17,13 +17,13 @@ export interface ChatOptions extends RequestOptions { autoMemory?: boolean; }
 export interface ClientOptions { baseUrl: string; token: string; fetch?: typeof fetch; WebSocketImpl?: typeof WebSocket; timeoutMs?: number; }
 export interface ConnectOptions {
   baseUrl: string; joinKey: string; installId: string;
-  device: { name: string; platform?: AnyLinkPlatform };
+  device: { name: string; platform?: AnyLinkPlatform; slug?: string };
   agent: { key: string; name: string; kind?: string; summary?: string };
   fetch?: typeof fetch; timeoutMs?: number;
 }
-export interface ConnectResult { device_id: string; agent_id: string; credential_id: string; token: string; protocol: { name: string; version: string }; }
+export interface ConnectResult { device_id: string; device_slug: string; agent_id: string; credential_id: string; token: string; protocol: { name: string; version: string }; }
 export interface Capability { name: string; description: string; }
-export type TaskTarget = { agent_id: string } | { device_id: string } | { device_name: string } | { agent_key: string };
+export type TaskTarget = { agent_id: string } | { device_id: string } | { device_slug: string } | { device_name: string } | { agent_key: string };
 export interface TaskResult {
   state: 'succeeded' | 'failed' | 'declined' | 'cancelled' | 'unknown';
   output?: Record<string, unknown>;
@@ -63,6 +63,7 @@ export class AnyLinkClient {
   persona(options?: RequestOptions): Promise<{ name: string; sha256: string; content: string }>;
   identity(options?: RequestOptions): Promise<{ device: any; agent: any; scopes: string[]; protocol: { name: string; version: string } }>;
   updateProfile(profile: { name?: string; summary?: string; kind?: string }, options?: RequestOptions): Promise<any>;
+  updateDeviceProfile(profile: { name?: string; slug?: string }, options?: RequestOptions): Promise<any>;
   adoptInstallId(installId: string, options?: RequestOptions): Promise<{ device_id: string; install_id: string }>;
 
   assembleMemory(query?: { query?: string; max_memories?: number; max_episodes?: number; max_chars?: number; include_scopes?: MemoryScope[]; include_boundaries?: boolean; include_persona?: boolean }, options?: RequestOptions): Promise<{ device_id: string; agent_id: string; memories: any[]; boundaries: any[]; episodes: any[]; summary_text: string; persona?: any }>;

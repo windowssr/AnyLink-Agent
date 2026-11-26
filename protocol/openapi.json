@@ -183,6 +183,53 @@
         }
       }
     },
+    "/edge/v1/device/profile": {
+      "patch": {
+        "summary": "Update device name or unique short slug alias",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
     "/edge/v1/device/install-id": {
       "post": {
         "summary": "Adopt an install_id for the credential device",
@@ -1482,6 +1529,73 @@
         }
       }
     },
+    "/v1/devices/{id}": {
+      "patch": {
+        "summary": "Update device display name or unique short slug alias",
+        "security": [
+          {
+            "ownerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
     "/v1/agents": {
       "get": {
         "summary": "List all agents across devices",
@@ -1823,6 +1937,10 @@
                   "web",
                   "other"
                 ]
+              },
+              "slug": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{1,39}$"
               }
             },
             "required": [
@@ -1966,6 +2084,19 @@
                 },
                 "required": [
                   "device_id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "device_slug": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]{1,39}$"
+                  }
+                },
+                "required": [
+                  "device_slug"
                 ],
                 "additionalProperties": false
               },
@@ -2760,12 +2891,31 @@
               "web",
               "other"
             ]
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{1,39}$"
           }
         },
         "required": [
           "name",
           "platform"
         ],
+        "additionalProperties": false
+      },
+      "DevicePatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{1,39}$"
+          }
+        },
         "additionalProperties": false
       }
     }
