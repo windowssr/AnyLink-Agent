@@ -1,65 +1,42 @@
-# AnyLink 接入协议 v2
+# AnyLink 交互协议 v3 (`3.0`)
 
-[English](README.md) · [OpenAPI 3.1](openapi.json) · [JavaScript／TypeScript SDK](../sdk/README.zh-CN.md)
+[English](README.md) · [OpenAPI 3.1](openapi.json) · [TypeScript SDK](../sdk/README.md) · [Python SDK](../sdk-python/README.md) · [MCP 适配器](../mcp/README.md)
 
-协议连接应用、Agent 和设备，不规定使用哪一个大模型框架、界面或系统工具。云端按三层作用域存储事实、可选转发模型请求，并在 Agent 之间路由任务；每台宿主负责执行、审批和本地策略。OpenClaw 是参考实现，Codex 或其他项目都可以编写相同宿主接口的适配器。
+AnyLink 是面向**个人 Agent 网络（Personal Agent Network）**的引擎无关交互协议：
 
-## 连接和身份
+- **边缘自治**：每台设备（Mac、Linux、Windows、Android、服务器或脚本）只需管好自己所在的本地环境与安全边界，无需事先维护其他设备的能力清单。
+- **云端统一模型网关**：多模型、多提供商 OpenAI 兼容透传，按 Agent 并发控制，并支持可选的自动共享记忆注入开关（`X-AnyLink-Auto-Memory: on`）。
+- **云端记忆大脑（Cloud Memory Brain）**：统一调度与管理跨设备记忆——混合检索与上下文组装（`POST /edge/v1/memory/assemble`）、对话与任务事件异步摄入（`POST /edge/v1/memory/ingest`）、LLM 驱动的提取/去重/合并/作用域分配，以及**跨设备能力边界自动学习**。
+- **无能力前置约束的跨设备调用**：边缘 Agent 直接按目标设备或 Agent 发送意图/任务；若目标设备无法完成，由目标 Agent 返回 `declined`（或 `failed`）并说明原因，云端记忆大脑自动将其沉淀为设备边界记忆，后续各设备加载上下文后自然避开无效派发。
+- **实时 WebSocket 双向通道（`GET /edge/v1/ws`）**：毫秒级任务推送、实时进度流、租约心跳防卡死、任务完成主动回调通知发起方，并完整保留 HTTP 降级接口。
 
-远程连接使用 HTTPS，或受保护的本机隧道。身份层级为 主人 → 设备 → Agent：一台设备可承载多个 Agent，路由和 Agent 级记忆在 Agent 粒度隔离。
+## 1. 身份与接入
 
-`POST /edge/v1/connect` 使用 `Authorization: Bearer <加入密钥>` 接入——加入密钥是保存在服务器上的主人密钥 `ANYLINK_JOIN_KEY`。请求体给出安装标识（`device.install_id`）、设备和一个 Agent 键；服务器对两者执行 upsert 并返回新的 `ak_` 凭据及 `protocol.version` `2.0`。用同一安装与 Agent 键重连会返回相同 ID 并轮换凭据，旧令牌立即失效。没有逐对授权步骤：任何持有加入密钥的设备都能共享上下文并向任意 Agent 派发任务。旧版主人签发的 `/v1/devices/{id}/credential` 凭据仍然有效，绑定该设备的 `default` Agent。
+身份层级：`主人 (Owner) → 设备 (Device) → Agent`。
 
-其余请求使用 `Authorization: Bearer <Agent 凭据>`。凭据按 Agent 吊销；模型提供商 Key 保留在服务器。Agent 是逻辑身份，不是硬件认证。当前参考服务是单主人部署，不是开放多租户平台。加入密钥权限很大：持有者可以连接并向任意 Agent 派发任务，请把它保存在服务器密钥中，并通过 HTTPS 为客户端服务。
+1. **接入（`POST /edge/v1/connect`）**：携带 `Authorization: Bearer <ANYLINK_JOIN_KEY>`，提交 `device: { install_id, name, platform }` 与 `agent: { key, name, kind?, summary? }`。返回 `201` 及一次性 `ak_` 令牌与 `protocol: { name: "anylink", version: "3.0" }`。同一 `(install_id, agent.key)` 重连保留原 ID 并轮换令牌。
+2. **协议协商（`GET /edge/v1/protocol`，兼容别名 `GET /edge/v1/link/protocol`）**：返回 `version: "3.0"`、传输端点与路由模式。
+3. **节点简介（`PATCH /edge/v1/agent/profile`）**：可选更新 Agent 名称与简介（纯提示信息，不作为任务准入门槛）。
 
-`GET /edge/v1/link/protocol` 返回 `anylink`、版本 `2.0`、投递语义和 `agent`、`device`、`capability` 三种路由方式。当前属于预览实现；不兼容修改应升级协议路由／版本，新增字段不应强制替换宿主 Agent。
+## 2. 云端记忆大脑
 
-## 上下文、人设和模型
+- **作用域**：`global`（跨设备共享）、`device`（单设备有效，仅本设备或主人可改删）、`agent`（单 Agent 私有）。
+- **记忆类别（`kind`）**：`fact`（事实）、`preference`（偏好）、`boundary`（设备能力边界）、`episode`（事件摘要）。
+- **`POST /edge/v1/memory/assemble`**：根据当前 `query`、设备/Agent 身份与预算，综合中英文分词匹配 + 可选向量相似度 + 时间衰减 + 重要度，返回相关长期记忆、跨设备近期事件摘要、设备能力边界及可直接拼入系统提示词的 `summary_text`。
+- **`POST /edge/v1/memory/ingest`**：边缘上报对话轮次、任务结果或观察记录；云端落盘至 `memory_episodes` 后由云端记忆管理 Agent 异步整理（去重、修订旧记忆、判定作用域、生成摘要；未配置模型密钥时自动降级为确定性摘要与边界记录）。
+- **`GET /edge/v1/context` & 显式记忆 CRUD**：保留三层快照与显式增删改查（含 `expected_revision` / `If-Match` 乐观锁与幂等键）。
 
-`GET /edge/v1/context` 返回 `device_id`、`agent_id`、三层记忆（`global`、`device`、`agent`，各限 30 条）、已配置的人设文档 `persona`，以及带 revision 的设备目录。`GET /edge/v1/persona` 单独返回人设（未配置时 `404 PERSONA_NOT_CONFIGURED`）。
+## 3. 云端模型网关
 
-记忆作用域：`global` 事实所有人共享；`device` 事实适用于一台设备，该设备上所有 Agent 可见；`agent` 事实只属于一个 Agent——同设备的其他 Agent 不能搜索、读取、修订或删除。边缘调用方写 `scope:'agent'` 时始终绑定自己的 Agent（否则 `403 AGENT_SCOPE_FORBIDDEN`）；主人调用方需提供 `applicable_agent_id`，适用设备由 Agent 推导。记忆修改需要由接入应用确认保存意图、保留幂等键并满足 revision 前置条件；修订要求 `expected_revision`，删除要求 `If-Match`。删除事实不再进入当前检索。这属于应用记忆，不是模型权重训练。
+- **`GET /model/v1/models`**：列出已配置的模型与别名（如 `default`、各提供商模型）。
+- **`POST /model/v1/chat/completions`**：标准 OpenAI 兼容 JSON / SSE 流式转发，不再写死单一模型，改为按 Agent 并发控制。
+  - **可选自动记忆模式（1A）**：携带请求头 `X-AnyLink-Auto-Memory: on`（或服务端开启 `ANYLINK_AUTO_MEMORY_DEFAULT=true`），网关会在推理前自动组装共享记忆注入上下文，并在回复完成后异步摄入记忆大脑。
+- **`POST /model/v1/speech`**：可选语音播报端点，口播改写风格默认中性，可按需配置，不再绑定特定展示角色。
 
-`POST /model/v1/chat/completions` 是可选的 OpenAI Chat Completions 兼容透传，保留 SSE 工具调用片段和 `[DONE]`。参考服务当前提供 DeepSeek Flash。云端不运行工具或 Agent 循环，宿主也可以继续使用自己的模型与账号。
+## 4. 跨设备任务与 WebSocket 实时总线
 
-## 能力与任务流程
+状态机：`queued` → `running`（带 `lease_expires_at` 租约）→ `succeeded` | `failed` | `declined` | `cancelled` | `unknown` | `expired`（运行中取消为 `cancel_requested`）。
 
-1. 每个 Agent 向 `/edge/v1/link/capabilities` 声明能力，例如 `text.reverse` 加说明。能力清单属于 Agent，不属于设备。
-2. `GET /edge/v1/link/directory` 按设备列出全部在线 Agent、能力、基于 `last_seen_at` 的 `online`（60 秒）和 `self` 标记。`GET /edge/v1/link/peers` 保留为按设备聚合的兼容视图（已弃用）。
-3. 来源向 `/edge/v1/link/tasks` 提交 `capability`、`input`、可选 `ttl_seconds`（10–86400 秒，默认 1800）和可选 `target`：`{agent_id}` 精确路由到该 Agent，`{device_id}`（或旧字段 `target_device_id`）路由到该设备上任一具备能力的 Agent，不指定 target 则由任意具备能力的 Agent 领取。路由解析要求存在声明该能力的在线 Agent，否则返回 `409 NO_TARGET_AGENT`。来源身份取自认证，不能通过 JSON 冒充。
-4. 任意 Agent 调用 `/edge/v1/link/tasks/claim`。服务器先把过期的可路由任务置为 expired，再原子领取一个调用方声明了该能力的排队任务，优先 agent 定向、其次设备定向、最后不限定。来源 Agent 必须仍然存在（其凭据可以已轮换）。空结果返回 `task:null`。已运行任务不自动重排。
-5. 宿主先记录持久执行回执，再检查自己的参数、工作区、工具权限和审批，执行已注册处理器。
-6. 领取方 Agent 向 `/edge/v1/link/tasks/{id}/result` 提交真实结果；只有它能提交。来源、目标和领取方都能读取任务；只有来源 Agent 可以取消。
-
-```json
-{
-  "target": { "agent_id": "00000000-0000-4000-8000-000000000003" },
-  "capability": "text.reverse",
-  "input": { "text": "AnyLink" },
-  "ttl_seconds": 1800
-}
-```
-
-```json
-{"state":"succeeded","output":{"text":"kniLynA"}}
-```
-
-状态包括 `queued`、`running`、`cancel_requested`、`succeeded`、`failed`、`cancelled`、`unknown`、`expired`。来源 Agent 可以取消排队任务，或请求协作中断。请求取消不证明外部操作已停止；已经完成的真实成功仍可回传。未知结果需检查，不能默默重跑。吊销 Agent 会使其凭据失效、其 agent 定向的排队任务不再可领取，但不撤销已发生的副作用。
-
-输入和结果对象各限制 64 KiB；任务列表只返回来源／目标最近 100 项，分页和任务事件流暂未实现。云端管理员能够读取任务内容和回执。
-
-## 幂等与恢复
-
-状态修改需要由调用方保留的幂等键，作用域包含认证 Agent 和操作。原键原内容返回历史结果，原键不同内容返回 409；新一次领取使用新键；空领取不持久占用键，只有实际领取任务才持久记录结果。`connect` 和凭据签发刻意不做幂等缓存，因为它们返回一次性密钥。
-
-SDK 不自动重试模型或未知请求。保留执行 journal：已完成的结果可以用原结果键重发；只有 `started`、没有结果的记录是未知结果，需要人工或宿主明确核对，不能自动执行第二次。这里保证一次领取与持久去重，不承诺外部系统绝对“恰好一次”。
-
-## 接入自己的项目
-
-[OpenAPI](openapi.json) 从服务器 schema 生成，`npm run protocol:check` 检查漂移。其他语言可以直接实现 HTTP 客户端；宿主接口是能力名加 `execute(input, {task, signal})`。形象、语音、会话和审批事件放在各自适配层。
-
-随附的 Android／Mac 软件目前仍使用主人签发的设备凭据（绑定各设备的 `default` Agent），尚未调用 `connect`，也尚未改造成通用手机控制器。Codex 示例启动独立的只读 CLI 任务；控制现有桌面会话需要单独对接受支持的 app-server／会话接口。MCP 可以给 Agent 提供记忆和工具，单独安装 MCP 工具不会自动产生手机到 Agent 的入站控制通路。
-
-## 各设备独立运行
-
-每台设备用加入密钥（或旧版主人凭据）连接 AnyLink 服务器，并在本机按 Agent 管理会话和工具循环。Android 0.3+ 不再连接 Mac Gateway。`client.directory()`／`GET /edge/v1/link/directory` 发现在线 Agent 与能力；`client.peers()` 保留给旧客户端。`last_seen_at` 是凭据活动，不是 Worker 在线保证。其他项目可独立实现该 HTTP 协议，无需 OpenClaw 或参考形象界面。
+- **创建任务（`POST /edge/v1/tasks`，兼容 `POST /edge/v1/link/tasks`）**：支持 `target` 为 `{ agent_id }`、`{ device_id }`、`{ device_name }`、`{ agent_key }` 或省略；只需提供自然语言 `instruction`（或结构化 `capability` + `input`），不再因缺少能力声明而 409 拒绝。
+- **拒绝与自动学习**：接收方发现自己环境做不到时，回传 `state: "declined"` 与 `error: { code, message }`，云端记忆大脑自动提炼为 `boundary` 记忆并在后续上下文中生效。
+- **WebSocket（`GET /edge/v1/ws`）**：连接后服务端实时维护在线状态；新任务立即通过 `task.available` 下推，Worker 回复 `task.claim` 原子领取，执行中发 `task.heartbeat` 续租与 `task.progress` 推送进度，完成后发 `task.result`，服务端立即通过 `task.completed` 主动通知发起方。断线超租约的任务由服务端自动置为 `unknown`（`LEASE_EXPIRED`），绝不永久卡死、绝不盲目重跑副作用。

@@ -1,39 +1,46 @@
 import pg, { type PoolClient } from 'pg';
 import { createHash } from 'node:crypto';
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
 }
+
 export type Db = pg.Pool;
 export const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([k,v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
 }
+
 export function createDb(url: string): Db {
-  return new pg.Pool({ connectionString: url, max: 7, idleTimeoutMillis: 10000, connectionTimeoutMillis: 5000, statement_timeout: 10000 });
+  return new pg.Pool({ connectionString: url, max: 10, idleTimeoutMillis: 10000, connectionTimeoutMillis: 5000, statement_timeout: 10000 });
 }
+
 export async function transaction<T>(db: Db, fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const c = await db.connect();
   try { await c.query('BEGIN'); const result = await fn(c); await c.query('COMMIT'); return result; }
   catch (e) { await c.query('ROLLBACK'); throw e; }
   finally { c.release(); }
 }
-export async function idempotent<T>(db: Db, scope: string, key: string, body: unknown, fn: (c: PoolClient) => Promise<T>,options:{cacheResult?:(value:T)=>boolean}={}): Promise<{ value: T; replayed: boolean }> {
-  if (!key || key.length > 160) throw new ApiError(400, 'IDEMPOTENCY_KEY_REQUIRED', '写操作需要 Idempotency-Key');
+
+export async function idempotent<T>(db: Db, scope: string, key: string, body: unknown, fn: (c: PoolClient) => Promise<T>, options: { cacheResult?: (value: T) => boolean } = {}): Promise<{ value: T; replayed: boolean }> {
+  if (!key || key.length > 160) throw new ApiError(400, 'IDEMPOTENCY_KEY_REQUIRED', 'Write operations require Idempotency-Key');
   const digest = hash(canonical(body));
   return transaction(db, async c => {
     await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`${scope}:${key}`]);
-    const old = (await c.query('SELECT body_hash,result FROM mutation_keys WHERE scope=$1 AND key=$2', [scope,key])).rows[0];
+    const old = (await c.query('SELECT body_hash,result FROM mutation_keys WHERE scope=$1 AND key=$2', [scope, key])).rows[0];
     if (old) {
-      if (old.body_hash !== digest) throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', '同一幂等键不能用于不同内容');
+      if (old.body_hash !== digest) throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'Idempotency-Key cannot be reused with different content');
       return { value: old.result as T, replayed: true };
     }
     const value = await fn(c);
-    if(options.cacheResult?.(value)!==false)await c.query('INSERT INTO mutation_keys(scope,key,body_hash,result) VALUES($1,$2,$3,$4)', [scope,key,digest,JSON.stringify(value)]);
+    if (options.cacheResult?.(value) !== false) await c.query('INSERT INTO mutation_keys(scope,key,body_hash,result) VALUES($1,$2,$3,$4)', [scope, key, digest, JSON.stringify(value)]);
     return { value, replayed: false };
   });
 }
+
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS auth_sessions(token_hash text PRIMARY KEY,expires_at timestamptz NOT NULL);
@@ -48,29 +55,33 @@ CREATE TABLE IF NOT EXISTS memory_revisions(memory_id uuid NOT NULL REFERENCES m
 CREATE TABLE IF NOT EXISTS tasks(id uuid PRIMARY KEY,owner_id uuid NOT NULL,goal text NOT NULL,origin_device_id uuid REFERENCES devices(id),target_device_id uuid NOT NULL REFERENCES devices(id),conversation_id uuid REFERENCES conversations(id),source_request_id uuid REFERENCES requests(id),status text NOT NULL DEFAULT 'waiting_device' CHECK(status IN ('waiting_device','cancelled')),revision integer NOT NULL DEFAULT 1,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
 INSERT INTO schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING;
 `;
+
 export async function migrate(db: Db) {
   await transaction(db, async c => {
-    await c.query('SELECT pg_advisory_xact_lock(3180001)');await c.query(schema);
-    if(!(await c.query('SELECT 1 FROM schema_migrations WHERE version=2')).rowCount)
-    await c.query(`CREATE TABLE IF NOT EXISTS edge_credentials(
-      id uuid PRIMARY KEY,device_id uuid NOT NULL REFERENCES devices(id),token_hash text NOT NULL UNIQUE,
-      created_at timestamptz NOT NULL DEFAULT now(),last_used_at timestamptz,revoked_at timestamptz);
-      CREATE UNIQUE INDEX IF NOT EXISTS one_edge_credential ON edge_credentials(device_id) WHERE revoked_at IS NULL;
-      CREATE TABLE IF NOT EXISTS model_requests(
-      id uuid PRIMARY KEY,credential_id uuid NOT NULL REFERENCES edge_credentials(id),device_id uuid NOT NULL REFERENCES devices(id),
-      model text NOT NULL,state text NOT NULL CHECK(state IN ('submitted','completed','rejected','submission_unknown','cancelled')),
-      prompt_tokens integer,completion_tokens integer,error_code text,created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz);
-      CREATE INDEX IF NOT EXISTS model_device_recent ON model_requests(device_id,created_at);
-      INSERT INTO schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING;`);
-    if(!(await c.query('SELECT 1 FROM schema_migrations WHERE version=3')).rowCount)
-    await c.query(`CREATE TABLE IF NOT EXISTS link_capabilities(device_id uuid PRIMARY KEY REFERENCES devices(id),capabilities jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now());
-      CREATE TABLE IF NOT EXISTS link_grants(source_device_id uuid NOT NULL REFERENCES devices(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,enabled boolean NOT NULL DEFAULT false,PRIMARY KEY(source_device_id,target_device_id,capability));
-      CREATE TABLE IF NOT EXISTS link_tasks(id uuid PRIMARY KEY,owner_id uuid NOT NULL,source_device_id uuid NOT NULL REFERENCES devices(id),source_credential_id uuid NOT NULL REFERENCES edge_credentials(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,input jsonb NOT NULL,
-      state text NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','running','cancel_requested','succeeded','failed','cancelled','unknown','expired')),result jsonb,created_at timestamptz NOT NULL DEFAULT now(),expires_at timestamptz NOT NULL,started_at timestamptz,finished_at timestamptz);
-      CREATE INDEX IF NOT EXISTS link_task_queue ON link_tasks(target_device_id,created_at) WHERE state='queued';
-      CREATE INDEX IF NOT EXISTS link_task_source ON link_tasks(source_device_id,created_at);
-      INSERT INTO schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING;`);
-    if(!(await c.query('SELECT 1 FROM schema_migrations WHERE version=4')).rowCount){
+    await c.query('SELECT pg_advisory_xact_lock(3180001)');
+    await c.query(schema);
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=2')).rowCount) {
+      await c.query(`CREATE TABLE IF NOT EXISTS edge_credentials(
+        id uuid PRIMARY KEY,device_id uuid NOT NULL REFERENCES devices(id),token_hash text NOT NULL UNIQUE,
+        created_at timestamptz NOT NULL DEFAULT now(),last_used_at timestamptz,revoked_at timestamptz);
+        CREATE UNIQUE INDEX IF NOT EXISTS one_edge_credential ON edge_credentials(device_id) WHERE revoked_at IS NULL;
+        CREATE TABLE IF NOT EXISTS model_requests(
+        id uuid PRIMARY KEY,credential_id uuid NOT NULL REFERENCES edge_credentials(id),device_id uuid NOT NULL REFERENCES devices(id),
+        model text NOT NULL,state text NOT NULL CHECK(state IN ('submitted','completed','rejected','submission_unknown','cancelled')),
+        prompt_tokens integer,completion_tokens integer,error_code text,created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz);
+        CREATE INDEX IF NOT EXISTS model_device_recent ON model_requests(device_id,created_at);
+        INSERT INTO schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING;`);
+    }
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=3')).rowCount) {
+      await c.query(`CREATE TABLE IF NOT EXISTS link_capabilities(device_id uuid PRIMARY KEY REFERENCES devices(id),capabilities jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now());
+        CREATE TABLE IF NOT EXISTS link_grants(source_device_id uuid NOT NULL REFERENCES devices(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,enabled boolean NOT NULL DEFAULT false,PRIMARY KEY(source_device_id,target_device_id,capability));
+        CREATE TABLE IF NOT EXISTS link_tasks(id uuid PRIMARY KEY,owner_id uuid NOT NULL,source_device_id uuid NOT NULL REFERENCES devices(id),source_credential_id uuid NOT NULL REFERENCES edge_credentials(id),target_device_id uuid NOT NULL REFERENCES devices(id),capability text NOT NULL,input jsonb NOT NULL,
+        state text NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','running','cancel_requested','succeeded','failed','cancelled','unknown','expired')),result jsonb,created_at timestamptz NOT NULL DEFAULT now(),expires_at timestamptz NOT NULL,started_at timestamptz,finished_at timestamptz);
+        CREATE INDEX IF NOT EXISTS link_task_queue ON link_tasks(target_device_id,created_at) WHERE state='queued';
+        CREATE INDEX IF NOT EXISTS link_task_source ON link_tasks(source_device_id,created_at);
+        INSERT INTO schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING;`);
+    }
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=4')).rowCount) {
       await c.query(`ALTER TABLE devices ADD COLUMN install_id text;
         ALTER TABLE devices ADD COLUMN revoked_at timestamptz;
         ALTER TABLE devices ADD CONSTRAINT devices_install_id_key UNIQUE(install_id);
@@ -103,6 +114,57 @@ export async function migrate(db: Db) {
         DROP INDEX memories_active_scope;
         CREATE INDEX memories_active_scope ON memories(owner_id,scope,applicable_device_id,applicable_agent_id) WHERE NOT deleted;
         INSERT INTO schema_migrations(version) VALUES(4)`);
+    }
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=5')).rowCount) {
+      await c.query(`
+        -- Protocol v3: Cloud Memory Brain, multi-platform devices, capability-free task routing & lease tracking
+        DO $$ DECLARE r record; BEGIN FOR r IN SELECT conname FROM pg_constraint WHERE conrelid='devices'::regclass AND contype='c' LOOP EXECUTE format('ALTER TABLE devices DROP CONSTRAINT %I',r.conname); END LOOP; END $$;
+        ALTER TABLE devices ADD CONSTRAINT devices_platform_check CHECK(platform IN ('macos','android','linux','windows','ios','web','other'));
+
+        ALTER TABLE agents ADD COLUMN IF NOT EXISTS summary text NOT NULL DEFAULT '';
+
+        ALTER TABLE memories ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'fact' CHECK(kind IN ('fact','preference','boundary','episode'));
+        ALTER TABLE memories ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]';
+        ALTER TABLE memories ADD COLUMN IF NOT EXISTS importance real NOT NULL DEFAULT 0.6 CHECK(importance >= 0 AND importance <= 1);
+        ALTER TABLE memories ADD COLUMN IF NOT EXISTS access_count integer NOT NULL DEFAULT 0;
+        ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_accessed_at timestamptz;
+        ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding jsonb;
+        ALTER TABLE memories ADD COLUMN IF NOT EXISTS search_tokens text NOT NULL DEFAULT '';
+        CREATE INDEX IF NOT EXISTS memories_kind_updated ON memories(owner_id,kind,updated_at DESC) WHERE NOT deleted;
+
+        CREATE TABLE IF NOT EXISTS memory_episodes(
+          id uuid PRIMARY KEY,
+          owner_id uuid NOT NULL,
+          source_device_id uuid REFERENCES devices(id),
+          source_agent_id uuid REFERENCES agents(id),
+          session_key text,
+          kind text NOT NULL DEFAULT 'turn' CHECK(kind IN ('turn','task_outcome','observation')),
+          messages jsonb NOT NULL DEFAULT '[]',
+          metadata jsonb NOT NULL DEFAULT '{}',
+          summary text NOT NULL DEFAULT '',
+          status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','consolidated','skipped','failed')),
+          consolidation_result jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          consolidated_at timestamptz
+        );
+        CREATE INDEX IF NOT EXISTS memory_episodes_recent ON memory_episodes(owner_id,created_at DESC);
+        CREATE INDEX IF NOT EXISTS memory_episodes_status ON memory_episodes(owner_id,status,created_at);
+
+        ALTER TABLE model_requests ADD COLUMN IF NOT EXISTS agent_id uuid REFERENCES agents(id);
+        CREATE INDEX IF NOT EXISTS model_agent_recent ON model_requests(agent_id,created_at);
+
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS instruction text;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS lease_seconds integer NOT NULL DEFAULT 120;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS progress jsonb;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS memory_recorded boolean NOT NULL DEFAULT false;
+        DO $$ DECLARE r record; BEGIN FOR r IN SELECT conname FROM pg_constraint WHERE conrelid='link_tasks'::regclass AND contype='c' LOOP EXECUTE format('ALTER TABLE link_tasks DROP CONSTRAINT %I',r.conname); END LOOP; END $$;
+        ALTER TABLE link_tasks ADD CONSTRAINT link_tasks_state_check CHECK(state IN ('queued','running','cancel_requested','succeeded','failed','declined','cancelled','unknown','expired'));
+        CREATE INDEX IF NOT EXISTS link_task_running_lease ON link_tasks(lease_expires_at) WHERE state IN ('running','cancel_requested') AND lease_expires_at IS NOT NULL;
+
+        INSERT INTO schema_migrations(version) VALUES(5);
+      `);
     }
     // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
     await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");

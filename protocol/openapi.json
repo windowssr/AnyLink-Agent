@@ -2,19 +2,19 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AnyLink Protocol",
-    "version": "2.0.0",
-    "description": "Preview, single-owner reference service. One join key connects devices and agents; the cloud relays shared memory, model passthrough and routed tasks. Hosts own execution, approvals and local policy. It does not run an agent."
+    "version": "3.0.0",
+    "description": "Harness-independent Personal Agent Network protocol. Cloud Hub provides multi-model gateway, Cloud Memory Brain (hybrid retrieval, async consolidation, automatic device-boundary learning), and real-time WebSocket task routing (/edge/v1/ws). Edge agents manage only their own local environments."
   },
   "servers": [
     {
       "url": "http://127.0.0.1:3180",
-      "description": "Local service or secure tunnel; remote deployments require HTTPS"
+      "description": "Local service or HTTPS reverse proxy"
     }
   ],
   "paths": {
     "/edge/v1/connect": {
       "post": {
-        "summary": "Join with the owner key: upsert install device and agent, rotate its credential (201)",
+        "summary": "Join with owner key: upsert device and agent, rotate credential (201)",
         "security": [
           {
             "joinKey": []
@@ -38,6 +38,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -48,10 +51,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           },
           "503": {
             "description": "Join disabled"
@@ -59,9 +62,130 @@
         }
       }
     },
+    "/edge/v1/protocol": {
+      "get": {
+        "summary": "Negotiate AnyLink protocol 3.0, transport endpoints and routing modes",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/directory": {
+      "get": {
+        "summary": "List devices and agents with live WebSocket presence and optional summaries",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/agent/profile": {
+      "patch": {
+        "summary": "Update informational agent name, kind, or summary",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
     "/edge/v1/device/install-id": {
       "post": {
-        "summary": "Adopt an install_id for the credential device so join connect keeps its identity and memories",
+        "summary": "Adopt an install_id for the credential device",
         "security": [
           {
             "deviceBearer": []
@@ -85,39 +209,8 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/protocol": {
-      "get": {
-        "summary": "Negotiate AnyLink protocol 2.0 and delivery semantics",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Successful operation"
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
             "description": "Invalid input"
@@ -129,485 +222,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/directory": {
-      "get": {
-        "summary": "List live agents per device with capabilities, presence and self marker",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Successful operation"
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/peers": {
-      "get": {
-        "summary": "Deprecated device-level compatibility view; use directory for agent routing",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Successful operation"
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/capabilities": {
-      "post": {
-        "summary": "Replace this agent capability manifest",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Capabilities"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation"
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/tasks": {
-      "get": {
-        "summary": "List this agent tasks (role=source|target, optional state; newest 100)",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "role",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "source",
-                "target"
-              ],
-              "default": "source"
-            }
-          },
-          {
-            "name": "state",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "queued",
-                "running",
-                "cancel_requested",
-                "succeeded",
-                "failed",
-                "cancelled",
-                "unknown",
-                "expired"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful operation"
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      },
-      "post": {
-        "summary": "Create a task routed to an agent, a device, or any capable agent",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskInput"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Task"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/tasks/{id}": {
-      "get": {
-        "summary": "Read a task visible to source, target or claiming agent",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Task"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/tasks/claim": {
-      "post": {
-        "summary": "Atomically claim one routed task, or return {task:null}; never auto-requeue",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful operation"
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/tasks/{id}/result": {
-      "post": {
-        "summary": "Persist an executor result; only the claiming agent",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskResult"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Task"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
-          }
-        }
-      }
-    },
-    "/edge/v1/link/tasks/{id}/cancel": {
-      "post": {
-        "summary": "Cancel queued work or request cooperative cancellation; only the source agent",
-        "security": [
-          {
-            "deviceBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Task"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Created; one-time secret when issuing credentials"
-          },
-          "400": {
-            "description": "Invalid input"
-          },
-          "401": {
-            "description": "Invalid or revoked credential"
-          },
-          "403": {
-            "description": "Not permitted for this identity"
-          },
-          "404": {
-            "description": "Not visible to this agent"
-          },
-          "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
@@ -628,6 +246,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -638,10 +259,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
@@ -662,6 +283,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -672,10 +296,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
@@ -696,6 +320,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -706,17 +333,148 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/memory/assemble": {
+      "post": {
+        "summary": "Hybrid retrieval and context assembly (memories, boundaries, cross-device episodes)",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryAssemble"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/memory/ingest": {
+      "post": {
+        "summary": "Ingest conversation turn, task outcome, or observation for cloud memory consolidation",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryIngest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/memory/episodes": {
+      "get": {
+        "summary": "List recent cross-device episodic summaries",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/memories": {
       "post": {
-        "summary": "Save an explicit owner fact; agent scope binds the caller agent",
+        "summary": "Save explicit memory; device and agent scopes bind caller identity",
         "security": [
           {
             "deviceBearer": []
@@ -751,6 +509,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -761,10 +522,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
@@ -815,6 +576,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -825,15 +589,15 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       },
       "delete": {
-        "summary": "Tombstone a memory using If-Match",
+        "summary": "Tombstone memory using If-Match",
         "security": [
           {
             "deviceBearer": []
@@ -876,6 +640,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -886,17 +653,17 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/edge/v1/memories/search": {
       "post": {
-        "summary": "Read-only search: q, scope and optional device_id",
+        "summary": "Hybrid tokenized memory search",
         "security": [
           {
             "deviceBearer": []
@@ -920,6 +687,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -930,17 +700,604 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks": {
+      "get": {
+        "summary": "List agent tasks (role=source|target, optional state; newest 100)",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "source",
+                "target"
+              ],
+              "default": "source"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "cancel_requested",
+                "succeeded",
+                "failed",
+                "declined",
+                "cancelled",
+                "unknown",
+                "expired"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create cross-device task by instruction or capability without capability-manifest gate",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}": {
+      "get": {
+        "summary": "Read a task visible to source, target or claiming agent",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/claim": {
+      "post": {
+        "summary": "Atomically claim a routed task with lease tracking (HTTP fallback for WS)",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}/heartbeat": {
+      "post": {
+        "summary": "Extend running task lease and check cooperative cancellation status",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskHeartbeat"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}/progress": {
+      "post": {
+        "summary": "Report live task progress (pushed over WebSocket to sender)",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskProgress"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}/result": {
+      "post": {
+        "summary": "Persist terminal result (succeeded|failed|declined|cancelled|unknown); declined/failed feeds Cloud Memory Brain",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskResult"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}/cancel": {
+      "post": {
+        "summary": "Cancel queued work or push cooperative cancellation to claiming agent",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/edge/v1/link/capabilities": {
+      "post": {
+        "summary": "Optional compatibility capability manifest update",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Capabilities"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/model/v1/models": {
+      "get": {
+        "summary": "List configured gateway models and aliases",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/model/v1/chat/completions": {
       "post": {
-        "summary": "OpenAI Chat Completions compatible passthrough; JSON or SSE; never automatically replay",
+        "summary": "Multi-model OpenAI Chat Completions passthrough (JSON/SSE) with optional X-AnyLink-Auto-Memory header",
         "security": [
           {
             "deviceBearer": []
@@ -964,6 +1321,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -974,17 +1334,17 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/model/v1/speech": {
       "post": {
-        "summary": "Spoken reply audio: sanitize + optional summarize + Microsoft neural TTS; mp3 base64",
+        "summary": "Optional spoken reply TTS endpoint with configurable neutral or persona style",
         "security": [
           {
             "deviceBearer": []
@@ -1008,6 +1368,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -1018,17 +1381,17 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/v1/devices": {
       "get": {
-        "summary": "List owner devices with their agents",
+        "summary": "List owner devices and agents with live WS presence",
         "security": [
           {
             "ownerSession": []
@@ -1042,6 +1405,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -1052,10 +1418,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       },
@@ -1095,6 +1461,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -1105,10 +1474,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
@@ -1129,6 +1498,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -1139,17 +1511,54 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
+          }
+        }
+      }
+    },
+    "/v1/memory/episodes": {
+      "get": {
+        "summary": "Inspect recent cross-device memory episodes",
+        "security": [
+          {
+            "ownerSession": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/v1/agents/{id}/revoke": {
       "post": {
-        "summary": "Revoke an agent and its credentials; queued targeted tasks stop routing",
+        "summary": "Revoke an agent, drop its WS sessions and invalidate credentials",
         "security": [
           {
             "ownerSession": []
@@ -1173,6 +1582,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -1183,17 +1595,17 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/v1/agents/{id}/restore": {
       "post": {
-        "summary": "Restore a revoked agent; it must reconnect for a new credential",
+        "summary": "Restore a revoked agent",
         "security": [
           {
             "ownerSession": []
@@ -1217,6 +1629,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -1227,17 +1642,17 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/v1/devices/{id}/restore": {
       "post": {
-        "summary": "Restore a revoked device and its agents; credentials stay revoked and agents must reconnect",
+        "summary": "Restore a revoked device and its agents",
         "security": [
           {
             "ownerSession": []
@@ -1261,6 +1676,9 @@
           "201": {
             "description": "Created; one-time secret when issuing credentials"
           },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
           "400": {
             "description": "Invalid input"
           },
@@ -1271,17 +1689,17 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
     },
     "/v1/devices/{id}/credential": {
       "post": {
-        "summary": "Issue a one-time credential bound to the device default agent (201); not replayable",
+        "summary": "Issue a one-time credential for the device default agent (201)",
         "security": [
           {
             "ownerSession": []
@@ -1300,7 +1718,10 @@
         ],
         "responses": {
           "201": {
-            "description": "One-time secret: device_id, agent_id, credential_id and token. Store privately."
+            "description": "One-time secret: device_id, agent_id, credential_id and token."
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
             "description": "Invalid input"
@@ -1312,10 +1733,10 @@
             "description": "Not permitted for this identity"
           },
           "404": {
-            "description": "Not visible to this agent"
+            "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, routing or terminal-state conflict"
+            "description": "Revision, idempotency, or terminal-state conflict"
           }
         }
       }
@@ -1361,18 +1782,18 @@
       "deviceBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Revocable agent credential issued by connect or the owner console"
+        "description": "Revocable agent credential issued by POST /edge/v1/connect or owner console"
       },
       "joinKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Owner join key from server secrets; any holder may connect an install and dispatch to any agent"
+        "description": "Owner join key from server secrets"
       },
       "ownerSession": {
         "type": "apiKey",
         "in": "cookie",
         "name": "anylink_session",
-        "description": "Session from POST /v1/auth/login; inspect devices, agents and status through /v1"
+        "description": "Session cookie from POST /v1/auth/login"
       }
     },
     "schemas": {
@@ -1396,6 +1817,10 @@
                 "enum": [
                   "macos",
                   "android",
+                  "linux",
+                  "windows",
+                  "ios",
+                  "web",
                   "other"
                 ]
               }
@@ -1424,12 +1849,18 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 40
+              },
+              "summary": {
+                "default": "",
+                "type": "string",
+                "maxLength": 400
               }
             },
             "required": [
               "key",
               "name",
-              "kind"
+              "kind",
+              "summary"
             ],
             "additionalProperties": false
           }
@@ -1438,6 +1869,26 @@
           "device",
           "agent"
         ],
+        "additionalProperties": false
+      },
+      "AgentProfile": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
+        },
         "additionalProperties": false
       },
       "InstallId": {
@@ -1517,6 +1968,34 @@
                   "device_id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "device_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  }
+                },
+                "required": [
+                  "device_name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "agent_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "agent_key"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -1524,6 +2003,11 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
           },
           "capability": {
             "type": "string",
@@ -1542,13 +2026,55 @@
             "type": "integer",
             "minimum": 10,
             "maximum": 86400
+          },
+          "lease_seconds": {
+            "default": 120,
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 3600
           }
         },
         "required": [
-          "capability",
-          "input",
-          "ttl_seconds"
+          "ttl_seconds",
+          "lease_seconds"
         ],
+        "additionalProperties": false
+      },
+      "TaskHeartbeat": {
+        "type": "object",
+        "properties": {
+          "extend_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 3600
+          }
+        },
+        "additionalProperties": false
+      },
+      "TaskProgress": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "data": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
         "additionalProperties": false
       },
       "TaskResult": {
@@ -1559,6 +2085,7 @@
             "enum": [
               "succeeded",
               "failed",
+              "declined",
               "cancelled",
               "unknown"
             ]
@@ -1581,6 +2108,9 @@
               "message": {
                 "type": "string",
                 "maxLength": 1000
+              },
+              "learn_boundary": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -1654,6 +2184,12 @@
             "maxLength": 100,
             "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"
           },
+          "instruction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "input": {
             "type": "object",
             "propertyNames": {
@@ -1669,9 +2205,24 @@
               "cancel_requested",
               "succeeded",
               "failed",
+              "declined",
               "cancelled",
               "unknown",
               "expired"
+            ]
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "result": {
@@ -1684,6 +2235,7 @@
                     "enum": [
                       "succeeded",
                       "failed",
+                      "declined",
                       "cancelled",
                       "unknown"
                     ]
@@ -1706,6 +2258,9 @@
                       "message": {
                         "type": "string",
                         "maxLength": 1000
+                      },
+                      "learn_boundary": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -1723,6 +2278,23 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "lease_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "heartbeat_at": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "created_at": {
@@ -1752,13 +2324,150 @@
           "claimed_by_agent_id",
           "target_device_id",
           "capability",
+          "instruction",
           "input",
           "state",
+          "progress",
           "result",
+          "lease_seconds",
+          "lease_expires_at",
+          "heartbeat_at",
           "created_at",
           "expires_at",
           "started_at",
           "finished_at"
+        ],
+        "additionalProperties": false
+      },
+      "MemoryAssemble": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "max_memories": {
+            "default": 15,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "max_episodes": {
+            "default": 6,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "max_chars": {
+            "default": 12000,
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 40000
+          },
+          "include_scopes": {
+            "default": [
+              "global",
+              "device",
+              "agent"
+            ],
+            "minItems": 1,
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "global",
+                "device",
+                "agent"
+              ]
+            }
+          },
+          "include_boundaries": {
+            "default": true,
+            "type": "boolean"
+          },
+          "include_persona": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "max_memories",
+          "max_episodes",
+          "max_chars",
+          "include_scopes",
+          "include_boundaries",
+          "include_persona"
+        ],
+        "additionalProperties": false
+      },
+      "MemoryIngest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "default": "turn",
+            "type": "string",
+            "enum": [
+              "turn",
+              "task_outcome",
+              "observation"
+            ]
+          },
+          "session_key": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "messages": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "assistant",
+                    "system",
+                    "tool"
+                  ]
+                },
+                "content": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8000
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "role",
+                "content"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "metadata": {
+            "default": {},
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "consolidate_now": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "messages",
+          "metadata",
+          "consolidate_now"
         ],
         "additionalProperties": false
       },
@@ -1782,6 +2491,32 @@
               "device",
               "agent"
             ]
+          },
+          "kind": {
+            "default": "fact",
+            "type": "string",
+            "enum": [
+              "fact",
+              "preference",
+              "boundary",
+              "episode"
+            ]
+          },
+          "tags": {
+            "default": [],
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          },
+          "importance": {
+            "default": 0.6,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           },
           "applicable_device_id": {
             "anyOf": [
@@ -1811,7 +2546,10 @@
         "required": [
           "title",
           "content",
-          "scope"
+          "scope",
+          "kind",
+          "tags",
+          "importance"
         ],
         "additionalProperties": false
       },
@@ -1827,6 +2565,29 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 4000
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fact",
+              "preference",
+              "boundary",
+              "episode"
+            ]
+          },
+          "tags": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          },
+          "importance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           },
           "expected_revision": {
             "type": "integer",
@@ -1844,7 +2605,7 @@
         "properties": {
           "q": {
             "type": "string",
-            "maxLength": 200
+            "maxLength": 300
           },
           "scope": {
             "type": "string",
@@ -1854,10 +2615,24 @@
               "agent"
             ]
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fact",
+              "preference",
+              "boundary",
+              "episode"
+            ]
+          },
           "device_id": {
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -1867,7 +2642,8 @@
         "properties": {
           "model": {
             "type": "string",
-            "const": "deepseek-flash"
+            "minLength": 1,
+            "maxLength": 120
           },
           "messages": {
             "minItems": 1,
@@ -1900,15 +2676,15 @@
           "max_tokens": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 8192
+            "maximum": 32768
           },
           "max_completion_tokens": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 8192
+            "maximum": 32768
           },
           "tools": {
-            "maxItems": 100,
+            "maxItems": 128,
             "type": "array",
             "items": {}
           },
@@ -1940,14 +2716,28 @@
             "type": "string",
             "enum": [
               "sweet-lively",
-              "sweet-warm"
+              "sweet-warm",
+              "neutral-en"
             ]
+          },
+          "style": {
+            "default": "neutral",
+            "type": "string",
+            "enum": [
+              "neutral",
+              "persona"
+            ]
+          },
+          "system_prompt": {
+            "type": "string",
+            "maxLength": 2000
           }
         },
         "required": [
           "text",
           "summarize",
-          "voice"
+          "voice",
+          "style"
         ],
         "additionalProperties": false
       },
@@ -1964,6 +2754,10 @@
             "enum": [
               "macos",
               "android",
+              "linux",
+              "windows",
+              "ios",
+              "web",
               "other"
             ]
           }

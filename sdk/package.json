@@ -1,11 +1,12 @@
 {
   "name": "@anylink-agent/sdk",
-  "version": "0.2.1",
-  "description": "Harness-independent memory, model and device task protocol client for AnyLink",
+  "version": "0.3.0",
+  "description": "Harness-independent Protocol v3 SDK for Personal Agent Networks (Cloud Memory Brain, Multi-Model Gateway & real-time WebSocket cross-device tasks)",
   "type": "module",
   "license": "MIT",
+  "keywords": ["agent", "personal-agent", "shared-memory", "websocket", "protocol", "sdk", "anylink"],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.0.0"
   },
   "exports": {
     ".": {

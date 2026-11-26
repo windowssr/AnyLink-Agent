@@ -1,0 +1,24 @@
+{
+  "name": "@anylink-agent/mcp",
+  "version": "0.3.0",
+  "description": "Zero-code MCP server bridging Claude Code, Cursor, Codex, and OpenClaw to an AnyLink Personal Agent Network",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "anylink-mcp": "./bin/anylink-mcp.mjs"
+  },
+  "exports": {
+    ".": "./src/server.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

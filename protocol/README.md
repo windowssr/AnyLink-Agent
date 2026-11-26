@@ -1,67 +1,84 @@
-# AnyLink Protocol v2
+# AnyLink Protocol v3 (`3.0`)
 
-[简体中文](README.zh-CN.md) · [OpenAPI 3.1 contract](openapi.json) · [JavaScript/TypeScript SDK](../sdk/README.md)
+[简体中文](README.zh-CN.md) · [OpenAPI 3.1](openapi.json) · [TypeScript SDK](../sdk/README.md) · [Python SDK](../sdk-python/README.md) · [MCP Adapter](../mcp/README.md)
 
-AnyLink connects applications, agents and devices to shared services without choosing their reasoning engine, UI or operating-system tools. The cloud stores owner facts in three scopes, optionally forwards model requests, and routes tasks between agents. Each host owns execution, approvals and local policy. OpenClaw is one reference implementation; Codex or another application can implement the same host contract.
+AnyLink is a harness-independent protocol for a **Personal Agent Network**:
 
-## Transport and identity
+- **Edge autonomy**: Each device (macOS, Linux, Windows, Android, servers, scripts) runs its own Agent and manages only its own local environment and security policy.
+- **Cloud-centric Model Gateway**: Multi-model OpenAI-compatible passthrough with optional automatic shared-memory injection (`X-AnyLink-Auto-Memory: on`).
+- **Cloud Memory Brain**: Unified, cross-device memory managed by a cloud Memory Agent — hybrid CJK/Latin + optional vector retrieval (`POST /edge/v1/memory/assemble`), asynchronous turn/task ingestion (`POST /edge/v1/memory/ingest`), deduplication, conflict consolidation, and automatic **capability boundary learning**.
+- **Capability-free cross-device invocation**: Edge agents do not need to inspect rigid capability schemas of remote devices. Send an intent/task directly to a target agent or device; if the receiver cannot execute it, the receiver replies `declined` (or `failed`) with the reason, and the Cloud Memory Brain records that boundary so future turns naturally avoid invalid requests.
+- **Real-time WebSocket Bus (`GET /edge/v1/ws`)**: Instant task dispatch, live progress streaming, heartbeats with lease expiry (so crashed workers never hang tasks forever), and instant completion push back to the sender — with full HTTP fallback.
 
-Use HTTPS for remote service access or an authenticated loopback tunnel. Identity is owner → device → agent: one device can host several agents, and routing plus agent-scoped memory isolate at agent level.
+## 1. Identity & Connection
 
-`POST /edge/v1/connect` joins with `Authorization: Bearer <join key>` — the owner secret `ANYLINK_JOIN_KEY` kept on the server. The body names the install (`device.install_id`), the device and one agent key; the server upserts both and returns a fresh `ak_` credential plus `protocol.version` `2.0`. Reconnecting with the same install and agent key returns the same IDs and rotates the credential; the previous token stops working immediately. There is no per-pair grant step: any join-key holder can share context and dispatch to any agent. Legacy owner-issued credentials from `/v1/devices/{id}/credential` still work and bind the device's `default` agent.
+Identity hierarchy: `Owner → Device → Agent`.
 
-All other requests use `Authorization: Bearer <agent credential>`. These credentials are revocable per agent; provider keys remain on the server. An agent is a logical identity, not hardware attestation. The reference server is single-owner, not a public multi-tenant service. The join key is powerful: anyone holding it can connect and dispatch to any agent, so keep it in server secrets and serve clients over HTTPS.
+1. **Join (`POST /edge/v1/connect`)**: Authenticate with `Authorization: Bearer <ANYLINK_JOIN_KEY>`, supply `device: { install_id, name, platform }` and `agent: { key, name, kind?, summary? }`. Returns `201` with `device_id`, `agent_id`, `credential_id`, one-time `token` (`ak_...`), and `protocol: { name: "anylink", version: "3.0" }`. Reconnecting with the same `(install_id, agent.key)` preserves IDs and rotates the token.
+2. **Protocol negotiation (`GET /edge/v1/protocol`, alias `GET /edge/v1/link/protocol`)**: Returns version `3.0`, transport URLs, lease-backed at-most-once delivery semantics, and routing modes (`agent`, `device`, `device_name`, `any`).
+3. **Profile (`PATCH /edge/v1/agent/profile`)**: Optional informational `name` / `summary` describing what this device/agent is. Informational only; never blocks incoming tasks.
 
-`GET /edge/v1/link/protocol` returns protocol `anylink`, version `2.0`, delivery semantics and the routing modes `agent`, `device` and `capability`. This first implementation is a preview. Breaking changes require a new protocol route/version; additive fields may be introduced without replacing the local harness.
+## 2. Cloud Memory Brain
 
-## Context, persona and optional models
+### Scopes & Kinds
+- **Scopes**: `global` (shared across all devices), `device` (scoped to one device; only that device or Owner may mutate it), `agent` (private to one agent).
+- **Kinds**: `fact`, `preference`, `boundary` (learned limits of what a device/agent can or cannot do), `episode`.
 
-`GET /edge/v1/context` returns `device_id`, `agent_id`, three memory tiers (`global`, `device`, `agent`, each limited to 30), the configured `persona` document, and a revision-bearing device directory. `GET /edge/v1/persona` returns the persona alone (`404 PERSONA_NOT_CONFIGURED` when unset).
+### Endpoints
+- **`POST /edge/v1/memory/assemble`**: Given `{ query?, max_memories?, max_episodes?, max_chars?, include_scopes?, include_boundaries?, include_persona? }`, returns ranked `memories`, recent cross-device `episodes`, cross-device `boundaries`, and a ready-to-inject `summary_text`.
+- **`POST /edge/v1/memory/ingest`**: Submit `{ kind: "turn" | "task_outcome" | "observation", session_key?, messages, metadata?, consolidate_now? }`. Stores the episode and runs the Cloud Memory Manager Agent (LLM-powered extraction/deduplication/consolidation when a model provider is configured, with deterministic fallback for summaries & capability boundaries).
+- **`GET /edge/v1/memory/episodes`**: List recent cross-device episodes.
+- **`GET /edge/v1/context`**: Snapshot returning `global`, `device`, `agent` memories, `boundaries`, `episodes`, and optional `persona`.
+- **Explicit CRUD**: `POST /edge/v1/memories`, `POST /edge/v1/memories/search`, `GET /edge/v1/memories/:id`, `PATCH /edge/v1/memories/:id` (CAS via `expected_revision`), `DELETE /edge/v1/memories/:id` (CAS via `If-Match`).
 
-Memory scopes: `global` facts are shared by everyone; `device` facts apply to one device and are visible to all its agents; `agent` facts belong to exactly one agent — other agents on the same device cannot search, read, revise or delete them. Edge callers writing `scope:'agent'` are always bound to their own agent (`403 AGENT_SCOPE_FORBIDDEN` otherwise); owner callers supply `applicable_agent_id` and the device is derived from the agent. Memory mutations use explicit application/user intent, `Idempotency-Key`, and revision preconditions. `PATCH` requires `expected_revision`; `DELETE` requires `If-Match`. Tombstoned facts disappear from current retrieval. This is application memory, not model-weight training.
+## 3. Multi-Model Gateway
 
-`POST /model/v1/chat/completions` is optional OpenAI Chat Completions compatible passthrough, including SSE tool-call deltas and `[DONE]`. The reference provider is DeepSeek Flash. It runs no tools or reasoning loop on the cloud. Other harnesses may continue using their own model/authentication.
+- **`GET /model/v1/models`**: Lists configured models and aliases (`default`, provider models, etc.).
+- **`POST /model/v1/chat/completions`**: OpenAI-compatible JSON & SSE streaming passthrough supporting multiple configured models/providers and per-agent concurrency limits (agents on the same device no longer deadlock each other).
+  - **Optional Auto-Memory Mode**: Pass `X-AnyLink-Auto-Memory: on` (or enable `ANYLINK_AUTO_MEMORY_DEFAULT=true` on the server) to automatically assemble relevant shared memory into the request context and ingest the completed turn into the Cloud Memory Brain in the background.
+- **`POST /model/v1/speech`**: Optional TTS endpoint. Style/prompt is caller- or deployment-configurable (neutral by default, decoupled from any showcase character).
 
-## Capability and task flow
+## 4. Cross-Device Invocation & WebSocket Bus
 
-1. Each agent posts its manifest to `/edge/v1/link/capabilities`, for example `text.reverse` plus a human-readable description. The manifest lives on the agent, not the device.
-2. `GET /edge/v1/link/directory` lists every live agent per device with capabilities, `last_seen_at`-based `online` (60 seconds) and a `self` marker. `GET /edge/v1/link/peers` remains as a deprecated per-device compatibility view.
-3. The source posts `/edge/v1/link/tasks` with `capability`, `input`, optional `ttl_seconds` (10–86400; default 1800) and an optional `target`: `{agent_id}` routes to exactly that agent, `{device_id}` (or the legacy `target_device_id` field) to any capable agent on that device, and no target lets any capable agent claim it. Resolution requires a live agent advertising the capability and returns `409 NO_TARGET_AGENT` otherwise. The source identity comes from authentication, never from supplied JSON.
-4. Any agent calls `/edge/v1/link/tasks/claim`. The server atomically expires stale routable tasks, then claims one queued task whose capability the caller advertises, preferring agent-targeted, then device-targeted, then untargeted work. The source agent must still exist (its credential may have rotated). A null result means no admitted work. Never auto-requeue a running task.
-5. The host journals task ID before execution, validates its own input/workspace/permission policy, and runs its registered handler.
-6. The claiming agent posts `/edge/v1/link/tasks/{id}/result`; only it can report the result. Source, target and claiming agents can read the task; only the source agent can cancel it.
+### Task States
+`queued` → `running` (with `lease_expires_at`) → `succeeded` | `failed` | `declined` | `cancelled` | `unknown` | `expired` (plus `cancel_requested` during cooperative cancellation).
 
-```json
-{
-  "target": { "agent_id": "00000000-0000-4000-8000-000000000003" },
-  "capability": "text.reverse",
-  "input": { "text": "AnyLink" },
-  "ttl_seconds": 1800
-}
-```
+- **Create (`POST /edge/v1/tasks`, alias `POST /edge/v1/link/tasks`)**:
+  ```json
+  {
+    "target": { "device_name": "Mac" },
+    "instruction": "Move report.md from Desktop to Projects",
+    "ttl_seconds": 1800,
+    "lease_seconds": 120
+  }
+  ```
+  `target` supports `{ agent_id }`, `{ device_id }`, `{ device_name }`, `{ agent_key }`, or omitted (`any`). `capability` is optional (defaults to `"agent.invoke"`). The server never rejects a task for missing capability declarations; the receiving agent decides locally and may return `state: "declined"` with `error: { code, message }` — which the Cloud Memory Brain automatically records as a `boundary` memory.
+- **Claim, Heartbeat, Progress, Result, Cancel**:
+  - HTTP fallback: `POST /edge/v1/tasks/claim`, `POST /edge/v1/tasks/:id/heartbeat`, `POST /edge/v1/tasks/:id/progress`, `POST /edge/v1/tasks/:id/result`, `POST /edge/v1/tasks/:id/cancel` (all `/edge/v1/link/tasks*` aliases remain supported).
+  - **Lease expiration**: If a running worker crashes and fails to heartbeat before `lease_expires_at`, the server transitions the task to `unknown` (`LEASE_EXPIRED`) and notifies the sender, never silently re-running side effects.
 
-Terminal result example:
+### WebSocket Frame Schema (`GET /edge/v1/ws`)
+Connect with `Authorization: Bearer <token>` (or send `{ "type": "auth", "token": "<token>" }` as the first frame within 5s).
 
-```json
-{"state":"succeeded","output":{"text":"kniLynA"}}
-```
+- **Server → Edge**:
+  - `hello`: `{ type: "hello", protocol: "3.0", agent_id, device_id, server_time }`
+  - `pong`: `{ type: "pong", ts }`
+  - `task.available`: `{ type: "task.available", task_id, target_agent_id, target_device_id, capability, instruction }`
+  - `task.claimed`: `{ type: "task.claimed", request_id?, task }`
+  - `task.ack`: `{ type: "task.ack", request_id?, task_id, ok, task? }`
+  - `task.progress`: `{ type: "task.progress", task_id, progress }` (pushed live to sender)
+  - `task.completed`: `{ type: "task.completed", task }` (pushed live to sender)
+  - `task.cancel`: `{ type: "task.cancel", task_id }` (pushed live to claimer)
+  - `memory.updated`: `{ type: "memory.updated", episode_id, actions }`
+  - `error`: `{ type: "error", request_id?, code, message }`
+- **Edge → Server**:
+  - `ping`: `{ type: "ping", ts? }`
+  - `task.claim`: `{ type: "task.claim", request_id?, idempotency_key, task_id? }`
+  - `task.heartbeat`: `{ type: "task.heartbeat", request_id?, task_id, extend_seconds? }`
+  - `task.progress`: `{ type: "task.progress", request_id?, task_id, progress }`
+  - `task.result`: `{ type: "task.result", request_id?, task_id, idempotency_key, result }`
+  - `task.cancel`: `{ type: "task.cancel", request_id?, task_id, idempotency_key }`
 
-States are `queued`, `running`, `cancel_requested`, `succeeded`, `failed`, `cancelled`, `unknown`, `expired`. The source agent may cancel queued work or request cooperative cancellation of running work. A cancellation request does not prove an external operation stopped; a late real success may still be reported. Unknown or interrupted effects must be inspected instead of silently retried. Revoking an agent stops its credentials and makes its agent-targeted queued tasks unclaimable; it does not roll back prior effects.
+## 5. Idempotency & Crash Recovery
 
-Input/output objects each have a 64 KiB limit. Lists expose only the newest 100 source/target records; pagination and streamed task events are future work. Task content and results are readable by the server operator.
-
-## Retry contract
-
-Every state-changing request requires a caller-retained idempotency key, scoped to the authenticated agent and operation. Repeating a key with the same body returns its recorded response; changing the body returns 409. Use a fresh key for each new polling claim. Empty claims do not consume persistent keys; only admitted tasks are cached. `connect` and credential issuance are deliberately not idempotency-cached because they return one-time secrets.
-
-The SDK exposes uncertain transport outcomes and does not automatically replay requests or models. Persist a local execution journal. Completed receipts can be re-sent with the original result key. A started journal entry with no result is an unknown outcome, not an instruction to run again. This is at-most-once admission and durable deduplication, not exactly-once external execution.
-
-## Implement another SDK or adapter
-
-The [OpenAPI contract](openapi.json) is generated from server schemas with `npm run protocol:generate`; `npm run protocol:check` detects drift. HTTP callers can implement Kotlin, Swift, Python or other language bindings. The SDK's host interface is simply a capability name and `execute(input, {task, signal})`. UI, avatars, speech recognition and harness-specific session/approval events belong in adapters.
-
-The shipped Android/Mac applications currently authenticate with owner-issued device credentials, which bind each device's `default` agent; they do not yet call `connect`. They are not yet a generic AnyLink mobile controller. The Codex example starts a separate read-only CLI turn; controlling an existing desktop conversation requires a dedicated supported [app-server](https://learn.chatgpt.com/docs/app-server)/session adapter. MCP can expose memory/tools to an agent, but installing an MCP tool alone does not create inbound remote control.
-
-## Device-local reference architecture
-
-Each device connects to the AnyLink server with the join key (or a legacy owner credential) and owns its Agent conversation and tool loop per agent. Android 0.3+ no longer connects to a Mac Gateway. `client.directory()` / `GET /edge/v1/link/directory` discovers live agents and capabilities; `client.peers()` remains for older clients. `last_seen_at` is credential activity, not a worker-online guarantee. Other hosts can implement the same HTTP contract without OpenClaw or the reference UI.
+All state-changing writes require `Idempotency-Key` (replaying same key + same canonical body returns the cached result; different body returns `409 IDEMPOTENCY_CONFLICT`). Workers must persist a local execution journal before invoking a handler: completed results are safely re-sent with `result:<task_id>`, while `started`-only entries after a crash report `unknown` rather than blindly repeating external side effects.

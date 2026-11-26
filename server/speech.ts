@@ -1,14 +1,12 @@
-import type {FastifyInstance} from 'fastify';
-import {z} from 'zod';
-import {ApiError,type Db} from './db.js';
-import type {Config} from './config.js';
-import {MODEL} from './model-proxy.js';
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { ApiError } from './db.js';
+import { type Config, resolveModelRoute } from './config.js';
 
-export const SUMMARIZE_SYSTEM = `你是大肥鱼的语音播报改写器。把下面这段大肥鱼刚给主人的文字回复，改写成她会直接说出口的一到两句话口播稿：
-- 只说结论和主人最需要知道的重点；细节、步骤、代码、路径、链接、列表都留在屏幕上，不念。需要时用一句「详细的我放在屏幕上啦」这类话带过。
-- 用大肥鱼的口吻：软糯轻快、带一点傲娇，自然口语，像当面跟主人说话。
-- 不要任何符号、表情、Markdown；数字写成口语说法。
-- 总长度不超过 60 个汉字。只输出口播稿本身。`;
+export const SUMMARIZE_SYSTEM = `You are a concise spoken-reply rewriter. Rewrite the assistant's text reply into 1-2 short natural spoken sentences:
+- State only the main conclusion and key points; leave code, paths, URLs, tables, and lists on screen.
+- Match the language of the input text. Natural conversational tone, no Markdown, symbols, or emoji.
+- Keep it brief (under 60 Chinese characters or 35 English words). Output ONLY the spoken text.`;
 
 const CODE_FENCE = /```[\s\S]*?```|~~~[\s\S]*?~~~/g;
 const TABLE_LINE = /^\s*\|.*\|?\s*$/;
@@ -49,21 +47,29 @@ export function fallbackSpoken(cleaned: string): string {
 }
 
 export const VOICES = {
-  'sweet-lively': {voice: 'zh-CN-XiaoyiNeural', rate: '+8%', pitch: '+3Hz'},
-  'sweet-warm': {voice: 'zh-CN-XiaoxiaoNeural', rate: '+5%', pitch: '+2Hz'},
+  'sweet-lively': { voice: 'zh-CN-XiaoyiNeural', rate: '+8%', pitch: '+3Hz' },
+  'sweet-warm': { voice: 'zh-CN-XiaoxiaoNeural', rate: '+5%', pitch: '+2Hz' },
+  'neutral-en': { voice: 'en-US-JennyNeural', rate: '+0%', pitch: '+0Hz' },
 } as const;
 export type VoiceName = keyof typeof VOICES;
 
-export type Summarize = (text: string, persona: string | null) => Promise<string>;
+export type Summarize = (text: string, systemPrompt: string) => Promise<string>;
 export type Synthesize = (text: string, voice: VoiceName) => Promise<Buffer>;
 
 export function createSummarizer(config: Config, fetchImpl: typeof fetch = fetch): Summarize {
-  return async (text, persona) => {
-    if (!config.deepseekApiKey) throw new Error('NO_PROVIDER');
-    const response = await fetchImpl(`${config.deepseekBaseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST', headers: {Authorization: `Bearer ${config.deepseekApiKey}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({model: MODEL, stream: false, max_tokens: 200, temperature: 0.7,
-        messages: [{role: 'system', content: SUMMARIZE_SYSTEM + '\n\n' + (persona ?? '')}, {role: 'user', content: text.slice(0, 6000)}]}),
+  return async (text, systemPrompt) => {
+    const route = resolveModelRoute(config, config.defaultModel);
+    if (!route) throw new Error('NO_PROVIDER');
+    const response = await fetchImpl(`${route.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${route.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: route.upstreamModel ?? route.id,
+        stream: false,
+        max_tokens: 200,
+        temperature: 0.7,
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: text.slice(0, 6000) }],
+      }),
       signal: AbortSignal.timeout(30000),
     });
     if (!response.ok) throw new Error(`PROVIDER_HTTP_${response.status}`);
@@ -75,15 +81,15 @@ export function createSummarizer(config: Config, fetchImpl: typeof fetch = fetch
 }
 
 const MAX_AUDIO = 1536 * 1024;
-export function createSynthesizer({timeoutMs = 20000}: {timeoutMs?: number} = {}): Synthesize {
+export function createSynthesizer({ timeoutMs = 20000 }: { timeoutMs?: number } = {}): Synthesize {
   return async (text, voice) => {
-    const {MsEdgeTTS, OUTPUT_FORMAT} = await import('msedge-tts');
+    const { MsEdgeTTS, OUTPUT_FORMAT } = await import('msedge-tts');
     const profile = VOICES[voice];
     const tts = new MsEdgeTTS();
     const timer = setTimeout(() => tts.close(), timeoutMs);
     try {
       await tts.setMetadata(profile.voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-      const {audioStream} = tts.toStream(text, {rate: profile.rate, pitch: profile.pitch});
+      const { audioStream } = tts.toStream(text, { rate: profile.rate, pitch: profile.pitch });
       const chunks: Buffer[] = [];
       let size = 0;
       for await (const chunk of audioStream as AsyncIterable<Buffer>) {
@@ -100,28 +106,34 @@ export function createSynthesizer({timeoutMs = 20000}: {timeoutMs?: number} = {}
 export const speechSchema = z.object({
   text: z.string().min(1).max(8000),
   summarize: z.boolean().default(true),
-  voice: z.enum(['sweet-lively', 'sweet-warm']).default('sweet-lively'),
+  voice: z.enum(['sweet-lively', 'sweet-warm', 'neutral-en']).default('sweet-lively'),
+  style: z.enum(['neutral', 'persona']).default('neutral'),
+  system_prompt: z.string().max(2000).optional(),
 }).strict();
 
-export function registerSpeech(app: FastifyInstance, config: Config, persona: {content: string} | null, deps: {summarize?: Summarize; synthesize?: Synthesize} = {}) {
+export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize } = {}) {
   const summarize = deps.summarize ?? createSummarizer(config);
   const synthesize = deps.synthesize ?? createSynthesizer();
-  app.post('/model/v1/speech', {bodyLimit: 64 * 1024}, async (req, reply) => {
+  app.post('/model/v1/speech', { bodyLimit: 64 * 1024 }, async (req, reply) => {
     const input = speechSchema.parse(req.body);
     const cleaned = sanitizeSpeech(input.text);
-    if (!cleaned) throw new ApiError(400, 'SPEECH_EMPTY', '没有可播报的文字');
+    if (!cleaned) throw new ApiError(400, 'SPEECH_EMPTY', 'No speakable text after sanitization');
     let spoken = cleaned;
     if (input.summarize && needsSummary(input.text, cleaned)) {
+      const basePrompt = input.system_prompt?.trim() || config.speechPrompt?.trim() || SUMMARIZE_SYSTEM;
+      const fullPrompt = input.style === 'persona' && persona?.content ? `${basePrompt}\n\n${persona.content}` : basePrompt;
       try {
-        const rewritten = sanitizeSpeech(await summarize(input.text, persona?.content ?? null));
+        const rewritten = sanitizeSpeech(await summarize(input.text, fullPrompt));
         if (rewritten) spoken = rewritten.slice(0, 200);
-      } catch { spoken = fallbackSpoken(cleaned); }
+      } catch {
+        spoken = fallbackSpoken(cleaned);
+      }
     }
     let audio: Buffer;
     try { audio = await synthesize(spoken, input.voice); }
     catch {
-      return reply.code(502).send({error: {code: 'SPEECH_UNAVAILABLE', message: '语音合成暂时不可用', spoken_text: spoken}});
+      return reply.code(502).send({ error: { code: 'SPEECH_UNAVAILABLE', message: 'Speech synthesis unavailable', spoken_text: spoken } });
     }
-    return {spoken_text: spoken, voice: input.voice, format: 'mp3', audio_base64: audio.toString('base64')};
+    return { spoken_text: spoken, voice: input.voice, format: 'mp3', audio_base64: audio.toString('base64') };
   });
 }

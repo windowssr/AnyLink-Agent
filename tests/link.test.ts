@@ -12,7 +12,7 @@ const url=process.env.TEST_DATABASE_URL;
 const joinKey='test-join-key-not-for-production-0000';
 test('AnyLink SDK over real HTTP: join, agent routing and durable results',{skip:!url},async t=>{
   assert.equal(new URL(url!).pathname,'/anylink_test');
-  const config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:'http://127.0.0.1:1',origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md'};
+  const config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:'http://127.0.0.1:1',defaultModel:'deepseek-flash',memoryModel:'deepseek-flash',embeddingModel:'',embeddingBaseUrl:'http://127.0.0.1:1',embeddingApiKey:'',models:[],allowAnyModel:false,gatewayAutoMemoryDefault:false,maxGlobalConcurrency:16,maxAgentConcurrency:4,maxAgentRpm:60,trustProxy:'loopback',origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md',speechPrompt:'',leaseReaperIntervalMs:60000};
   let instance=await createApp(config,{logger:false});
   await instance.app.listen({host:'127.0.0.1',port:0});
   const address=instance.app.server.address() as {port:number};const baseUrl=`http://127.0.0.1:${address.port}`;
@@ -27,7 +27,7 @@ test('AnyLink SDK over real HTTP: join, agent routing and durable results',{skip
   const input={target:{device_id:target.deviceId},capability:'text.reverse',input:{text:'AnyLink'}};
   try{
     await t.test('memory and task deployments do not require a model provider',async()=>{
-      const memoryOnly=await createApp({databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'',deepseekBaseUrl:'http://127.0.0.1:1',origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md'},{logger:false});
+      const memoryOnly=await createApp({...config,deepseekApiKey:''},{logger:false});
       try{
         const ready=await memoryOnly.app.inject({url:'/readyz'});assert.equal(ready.statusCode,200);assert.equal(ready.json().provider_configured,false);
         const models=await memoryOnly.app.inject({url:'/model/v1/models',headers:{authorization:`Bearer ${source.token}`}});assert.deepEqual(models.json().data,[]);
@@ -45,17 +45,16 @@ test('AnyLink SDK over real HTTP: join, agent routing and durable results',{skip
       try{assert.equal((await disabled.app.inject({method:'POST',url:'/edge/v1/connect',headers:{authorization:`Bearer ${joinKey}`},payload:{device:{install_id:'install-y',name:'y',platform:'other'},agent:{key:'a',name:'a'}}})).statusCode,503);}finally{await disabled.app.close();}
     });
     await t.test('protocol, directory, persona and context expose agent identity',async()=>{
-      const p=await source.client.protocol();assert.equal(p.version,'2.0');assert.deepEqual(p.routing,['agent','device','capability']);
-      const d=await source.client.directory();assert.ok(d.items.some(i=>i.agents.some(a=>a.self)));
+      const p=await source.client.protocol();assert.equal(p.version,'3.0');assert.ok((p.routing as string[]).includes('device_name'));
+      const d=await source.client.directory();assert.ok(d.items.some(i=>i.agents.some((a:any)=>a.self)));
       const persona=await source.client.persona();assert.equal(persona.name,'dafeiyu');assert.ok(persona.sha256.length===64);
       const c=await source.client.context();assert.equal(c.device_id,source.deviceId);assert.equal(c.agent_id,source.agentId);assert.ok(c.persona.content.includes('大肥鱼'));
-      const id=await source.client.identity();assert.equal(id.device.id,source.deviceId);assert.equal(id.agent.id,source.agentId);assert.ok(id.scopes.includes('persona'));
+      const id=await source.client.identity();assert.equal(id.device.id,source.deviceId);assert.equal(id.agent.id,source.agentId);assert.ok(id.scopes.includes('memory_brain'));
       const m=await source.client.saveMemory({scope:'device',applicable_device_id:source.deviceId,title:'SDK fixture '+randomUUID(),content:'This belongs to the sender'});
       assert.equal(m.source_device_id,source.deviceId);assert.equal(m.source_agent_id,source.agentId);await source.client.deleteMemory(m.id,m.revision);
     });
-    await t.test('fresh agents create and claim tasks with no grant',async()=>{
+    await t.test('fresh agents create and claim tasks without capability gate',async()=>{
       await target.client.registerCapabilities([{name:'text.reverse',description:'Read-only text transform'}]);
-      await assert.rejects(stranger.client.createTask({...input,target:{device_id:stranger.deviceId}}),(e:unknown)=>e instanceof AnyLinkError&&e.status===409);
       const task=await source.client.createTask(input);assert.equal(task.target_device_id,target.deviceId);assert.equal(task.target_agent_id,null);assert.equal(task.source_agent_id,source.agentId);
       assert.deepEqual((await target.client.claimTask()).task!.id,task.id);
       await target.client.completeTask(task.id,{state:'succeeded',output:{text:'done'}});
@@ -79,7 +78,7 @@ test('AnyLink SDK over real HTTP: join, agent routing and durable results',{skip
       assert.equal((await target.client.completeTask(task.id,result,{idempotencyKey:resultKey})).state,'succeeded');
       assert.equal((await source.client.task(task.id)).result!.output!.text,'kniLynA');
     });
-    await t.test('routing prefers agent-targeted, then device, then any; capability gates admission',async()=>{
+    await t.test('routing prefers agent-targeted, then device, then any; capability-free targeted tasks are claimable',async()=>{
       const other=await connect('Second host agent','alt');
       await other.client.registerCapabilities([{name:'text.reverse',description:'alt'}]);
       const anyTask=await source.client.createTask({capability:'text.reverse',input:{text:'any'}});
@@ -89,9 +88,9 @@ test('AnyLink SDK over real HTTP: join, agent routing and durable results',{skip
       await other.client.completeTask(claimed.id,{state:'succeeded',output:{}});
       assert.equal((await other.client.claimTask()).task!.id,devTask.id);await other.client.completeTask(devTask.id,{state:'succeeded',output:{}});
       assert.equal((await other.client.claimTask()).task!.id,anyTask.id);await other.client.completeTask(anyTask.id,{state:'succeeded',output:{}});
-      await assert.rejects(source.client.createTask({target:{agent_id:stranger.agentId},capability:'text.reverse',input:{}}),(e:unknown)=>e instanceof AnyLinkError&&e.status===409);
-      const noCap=await connect('No capability','nocap');
-      assert.equal((await noCap.client.claimTask()).task,null);
+      const directTask=await source.client.createTask({target:{agent_id:stranger.agentId},instruction:'Try something'});
+      const strangerClaimed=(await stranger.client.claimTask()).task!;assert.equal(strangerClaimed.id,directTask.id);
+      await stranger.client.completeTask(strangerClaimed.id,{state:'declined',error:{code:'UNSUPPORTED',message:'Cannot do this here'}});
     });
     await t.test('worker recovers a lost result response without executing twice',async()=>{
       let calls=0,loseResponse=true;

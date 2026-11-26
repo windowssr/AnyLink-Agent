@@ -23,17 +23,16 @@ test('edge services: identity, memory, transparent model proxy and retirement',{
   });
   await new Promise<void>(r=>upstream.listen(0,'127.0.0.1',r));
   const joinKey='integration-join-key-0123456789abcdef';
-  const config:Config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/v1`,origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md'};
+  const config:Config={databaseUrl:url!,ownerToken:'test-owner-secret-not-production',deepseekApiKey:'test-deepseek-secret-not-production',deepseekBaseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/v1`,defaultModel:'deepseek-flash',memoryModel:'deepseek-flash',embeddingModel:'',embeddingBaseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/v1`,embeddingApiKey:'',models:[],allowAnyModel:false,gatewayAutoMemoryDefault:false,maxGlobalConcurrency:16,maxAgentConcurrency:1,maxAgentRpm:60,trustProxy:'loopback',origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey,personaFile:'persona/dafeiyu.md',speechPrompt:'',leaseReaperIntervalMs:60000};
   let instance=await createApp(config,{logger:false});let cookie='',device:any,android:any,token='',memory:any;
   async function owner(method:string,path:string,body?:unknown,key=randomUUID(),headers:Record<string,string>={}){return instance.app.inject({method:method as any,url:path,headers:{cookie,'idempotency-key':key,...headers},payload:body as any});}
   async function edge(method:string,path:string,body?:unknown,key=randomUUID(),credential=token,headers:Record<string,string>={}){return instance.app.inject({method:method as any,url:path,headers:{authorization:`Bearer ${credential}`,'idempotency-key':key,...headers},payload:body as any});}
   const model=(content:string,stream=false,extra={})=>edge('POST','/model/v1/chat/completions',{model:'deepseek-flash',messages:[{role:'user',content}],stream,...extra});
   try{
-    await t.test('owner authentication and no cloud agent endpoint',async()=>{
+    await t.test('owner authentication and cloud memory brain status',async()=>{
       assert.equal((await owner('GET','/v1/devices')).statusCode,401);
       const r=await owner('POST','/v1/auth/login',{token:config.ownerToken});cookie=String(r.headers['set-cookie']).split(';')[0];assert.equal(r.statusCode,200);
-      assert.equal((await owner('GET','/v1/status')).json().cloud_agent,false);
-      for(const path of ['/v1/conversations','/v1/tasks','/v1/conversations/'+randomUUID()+'/messages'])assert.equal((await owner('POST',path,{})).statusCode,410);
+      assert.equal((await owner('GET','/v1/status')).json().cloud_memory_brain,true);
       assert.equal((await owner('POST','/v1/devices',{name:'x',platform:'macos'},randomUUID(),{origin:'https://other.example'})).statusCode,403);
     });
     await t.test('device credentials are one-time and only hashes are persisted',async()=>{

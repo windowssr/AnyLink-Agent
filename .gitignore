@@ -17,10 +17,7 @@ playwright-report/
 test-results/
 __pycache__/
 *.pyc
-android/unpackage/
-android/runtime/pi-agent.js
-android/runtime/pi-agent.js.LEGAL.txt
-android/static/companion/
-android/static/avatar.png
-android/static/app-icon.png
-android/.hbuilderx/
+sdk-python/.venv/
+sdk-python/.pytest_cache/
+sdk-python/dist/
+sdk-python/src/*.egg-info/

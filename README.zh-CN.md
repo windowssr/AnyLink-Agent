@@ -1,20 +1,21 @@
 <p align="center"><img src="docs/assets/banner.svg" alt="AnyLink Agent — 通用协议与 SDK" width="100%"></p>
 
-<p align="center"><a href="README.md">English</a> · <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.1-preview.1">下载安装包</a> · <a href="sdk/README.zh-CN.md">SDK</a> · <a href="protocol/README.zh-CN.md">接入协议</a> · <a href="LICENSE">MIT</a></p>
+<p align="center"><a href="README.md">English</a> · <a href="protocol/README.zh-CN.md">协议 v3</a> · <a href="sdk-python/README.md">Python SDK (PyPI)</a> · <a href="sdk/README.zh-CN.md">TypeScript SDK (npm)</a> · <a href="mcp/README.md">MCP 适配器</a> · <a href="LICENSE">MIT</a></p>
 
 # AnyLink Agent
 
-**把你的 Agent 接到更多设备，让记忆共享，让执行留在宿主。**
+**个人 Agent 网络 —— 边缘自治、云端记忆大脑、多模型网关与 WebSocket 实时协同。**
 
-AnyLink 提供可自部署的云端记忆、可选模型代理、设备任务协议和 JavaScript／TypeScript SDK。它不绑定某一个 Agent 框架：你可以接入自己的应用、自动化系统、Codex 适配器或其他 Agent。每台设备自己管理会话和工具循环，统一连接云端；仓库中的 Mac OpenClaw 与 Android 原生本地 Agent 是参考实现。
+AnyLink（`Protocol v3`）把 **模型 API 调用** 与 **跨设备共享记忆** 统一收口到你的私有云端中枢，让电脑、服务器、手机等各边缘设备上的 Agent 天然共享记忆并顺畅互调：
 
-## 已实现
-
-- **通用 SDK**：读取全局／设备上下文，保存与修订记忆，流式模型调用，注册能力，下发任务并查询真实结果。
-- **设备任务通路**：任意接入的 Agent 声明能力并领取按 Agent、设备或能力路由来的任务，本机执行并回传持久回执。
-- **失败语义**：幂等写入、revision 条件、持久执行 journal、未知结果显式报告；不会自动重跑未知模型请求或外部操作。
-- **自部署服务**：TypeScript、Fastify、PostgreSQL；云端不运行 Agent 工具循环。
-- **参考客户端**：Mac `.app` 的聊天、电脑控制和桌面伙伴；Android 手机上的本地 Agent、私有便笺、统一记忆、跨设备任务与形象状态。系统语音与权限仍需真机验证。
+- **云端记忆大脑（`POST /edge/v1/memory/assemble`、`POST /edge/v1/memory/ingest`）**：中英文混合分词 + 可选向量检索、LLM 驱动的异步记忆提取/去重/合并、跨设备近期动态摘要，以及**跨设备能力边界自动学习**。
+- **云端多模型网关（`POST /model/v1/chat/completions`）**：支持多模型与多提供商路由、按 Agent 独立并发控制，并提供可选的**自动共享记忆模式**（`X-AnyLink-Auto-Memory: on`）。
+- **无能力前置约束的跨设备调用 + WebSocket 实时总线（`GET /edge/v1/ws`）**：边缘设备只需管好自己的本地环境，无需事先维护其他设备的能力表。直接向目标设备发指令，对方若做不到则返回 `declined` 与原因，云端记忆大脑自动将其沉淀为设备边界，后续各设备加载上下文后自然学会。全程支持 WS 实时推送、进度流、租约心跳与 HTTP 降级。
+- **开源封装生态**：
+  - **Python SDK（`sdk-python/`，PyPI `anylink-agent`）**：异步客户端 + `@agent.on_invoke` 装饰器 WebSocket 节点 + 零依赖持久化回执日志。
+  - **TypeScript SDK（`sdk/`，npm `@anylink-agent/sdk`）**：零第三方依赖（Node >= 22）、内置 WebSocket 客户端与 `FileJournal`。
+  - **MCP 适配器（`mcp/`，`@anylink-agent/mcp`）**：一行配置即可把 Claude Code、Cursor、Codex、OpenClaw 接入你的个人 Agent 网络。
+- **配套参考客户端（“蓝色大肥鱼”）**：Mac OpenClaw 桌宠与 Android 原生陪伴应用（第二阶段迁移至 Protocol v3）。
 
 <img src="docs/assets/architecture.svg" alt="应用、AnyLink SDK、云端中继和宿主适配器的架构" width="100%">
 

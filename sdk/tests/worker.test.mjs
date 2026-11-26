@@ -1,51 +1,143 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';
-import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {DatabaseSync} from 'node:sqlite';
-import {AnyLinkWorker,TaskFailure} from '../src/worker.mjs';
-test('a durable started receipt is unknown after restart and never re-executes',async t=>{
- const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-recovery-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
- const file=path.join(folder,'receipt.sqlite'),db=new DatabaseSync(file);
- db.exec("CREATE TABLE executions(task_id TEXT PRIMARY KEY,state TEXT NOT NULL,result TEXT); INSERT INTO executions VALUES('task-1','started',NULL)");db.close();let calls=0;
- const task={id:'task-1',state:'running',capability:'text.reverse',input:{}};
- const worker=new AnyLinkWorker({journalPath:file,client:{baseUrl:'https://fixture.test/',identity:async()=>({device:{id:'target-1'},agent:{id:'agent-1'}}),claimTask:async()=>({task}),task:async()=>task},handlers:{'text.reverse':{description:'fixture',async execute(){calls++;return {};}}}});
- try{const r=await worker.runNext();assert.equal(r.execution_unknown,true);assert.equal(calls,0);assert.deepEqual(await worker.recoverResults(),[]);assert.equal(fs.statSync(file).mode&0o777,0o600);}finally{worker.close();}
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { AnyLinkWorker, FileJournal, TaskDeclined, TaskFailure } from '../src/worker.mjs';
+
+test('a durable started receipt is unknown after restart and never re-executes', async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'anylink-recovery-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const file = path.join(folder, 'receipts.jsonl');
+  const seeded = new FileJournal(file);
+  seeded.bind('https://fixture.test/', 'target-1', 'agent-1');
+  seeded.markStarted('task-1');
+  seeded.close();
+
+  let calls = 0;
+  const task = { id: 'task-1', state: 'running', capability: 'text.reverse', input: {} };
+  const worker = new AnyLinkWorker({
+    journalPath: file,
+    client: {
+      baseUrl: 'https://fixture.test/',
+      identity: async () => ({ device: { id: 'target-1' }, agent: { id: 'agent-1' } }),
+      claimTask: async () => ({ task }),
+      task: async () => task,
+    },
+    handlers: { 'text.reverse': { description: 'fixture', async execute() { calls++; return {}; } } },
+  });
+  try {
+    const r = await worker.runNext();
+    assert.equal(r.execution_unknown, true);
+    assert.equal(calls, 0);
+    assert.deepEqual(await worker.recoverResults(), []);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  } finally { worker.close(); }
 });
-test('a journal cannot send receipts to another service or device',async t=>{
- const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-binding-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));const file=path.join(folder,'receipt.sqlite');let claims=0;
- const client={baseUrl:'https://first.test/',identity:async()=>({device:{id:'target-1'},agent:{id:'agent-1'}}),claimTask:async()=>{claims++;return {task:null};}};
- const first=new AnyLinkWorker({client,journalPath:file,handlers:{}});await first.runNext();first.close();
- for(const altered of [{...client,baseUrl:'https://second.test/'},{...client,identity:async()=>({device:{id:'target-2'},agent:{id:'agent-1'}})}]){
-  const next=new AnyLinkWorker({client:altered,journalPath:file,handlers:{}});try{await assert.rejects(next.runNext(),/another service or device/);}finally{next.close();}
- }
- assert.equal(claims,1);
+
+test('a journal cannot send receipts to another service or device', async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'anylink-binding-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const file = path.join(folder, 'receipts.jsonl');
+  let claims = 0;
+  const client = {
+    baseUrl: 'https://first.test/',
+    identity: async () => ({ device: { id: 'target-1' }, agent: { id: 'agent-1' } }),
+    claimTask: async () => { claims++; return { task: null }; },
+  };
+  const first = new AnyLinkWorker({ client, journalPath: file, handlers: {} });
+  await first.runNext();
+  first.close();
+  for (const altered of [{ ...client, baseUrl: 'https://second.test/' }, { ...client, identity: async () => ({ device: { id: 'target-2' }, agent: { id: 'agent-1' } }) }]) {
+    const next = new AnyLinkWorker({ client: altered, journalPath: file, handlers: {} });
+    try { await assert.rejects(next.runNext(), /another service or device/); } finally { next.close(); }
+  }
+  assert.equal(claims, 1);
 });
-test('a handler exception cannot prove that external effects failed',async t=>{
- const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-effect-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));let calls=0;
- let task={id:'effect-task',state:'running',capability:'text.reverse',input:{}};
- const client={baseUrl:'https://fixture.test/',identity:async()=>({device:{id:'target'},agent:{id:'agent-1'}}),claimTask:async()=>({task}),task:async()=>task,completeTask:async(_id,result)=>task={...task,...result}};
- const worker=new AnyLinkWorker({client,journalPath:path.join(folder,'journal.sqlite'),handlers:{'text.reverse':{description:'fixture',async execute(){calls++;throw new Error('Connection broke after an external effect');}}}});
- try{assert.equal((await worker.runNext()).task.state,'unknown');await worker.runNext();assert.equal(calls,1);}finally{worker.close();}
+
+test('a handler exception cannot prove that external effects failed', async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'anylink-effect-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  let calls = 0;
+  let task = { id: 'effect-task', state: 'running', capability: 'text.reverse', input: {} };
+  const client = {
+    baseUrl: 'https://fixture.test/',
+    identity: async () => ({ device: { id: 'target' }, agent: { id: 'agent-1' } }),
+    claimTask: async () => ({ task }),
+    task: async () => task,
+    completeTask: async (_id, result) => task = { ...task, ...result },
+  };
+  const worker = new AnyLinkWorker({
+    client,
+    journalPath: path.join(folder, 'journal.jsonl'),
+    handlers: { 'text.reverse': { description: 'fixture', async execute() { calls++; throw new Error('Connection broke after an external effect'); } } },
+  });
+  try {
+    assert.equal((await worker.runNext()).task.state, 'unknown');
+    await worker.runNext();
+    assert.equal(calls, 1);
+  } finally { worker.close(); }
 });
-test('TaskFailure reports failed while other throws stay unknown',async t=>{
- const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-failure-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
- const results=[];
- for(const [capability,thrown] of [['text.reverse',new TaskFailure('BAD_INPUT','bad input')],['text.reverse',Object.assign(new Error('definite'),{taskFailure:true,code:'X'})],['text.reverse',new Error('maybe sent')]]){
-  let task={id:'t-'+results.length,state:'running',capability,input:{}};
-  const client={baseUrl:'https://fixture.test/',identity:async()=>({device:{id:'target'},agent:{id:'agent-1'}}),claimTask:async()=>({task}),task:async()=>task,completeTask:async(_id,result)=>{results.push(result);task={...task,...result};}};
-  const worker=new AnyLinkWorker({client,journalPath:path.join(folder,'j'+results.length+'.sqlite'),handlers:{'text.reverse':{description:'fixture',async execute(){throw thrown;}}}});
-  try{await worker.runNext();}finally{worker.close();}
- }
- assert.equal(results[0].state,'failed');assert.equal(results[0].error.code,'BAD_INPUT');
- assert.equal(results[1].state,'failed');assert.equal(results[1].error.code,'X');
- assert.equal(results[2].state,'unknown');
+
+test('TaskFailure reports failed, TaskDeclined reports declined with learn_boundary, other throws stay unknown', async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'anylink-failure-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const results = [];
+  for (const thrown of [
+    new TaskFailure('BAD_INPUT', 'bad input'),
+    new TaskDeclined('NO_WECHAT', 'This Mac cannot send WeChat messages'),
+    new Error('maybe sent'),
+  ]) {
+    let task = { id: 't-' + results.length, state: 'running', capability: 'agent.invoke', instruction: 'Send WeChat', input: {} };
+    const client = {
+      baseUrl: 'https://fixture.test/',
+      identity: async () => ({ device: { id: 'target' }, agent: { id: 'agent-1' } }),
+      claimTask: async () => ({ task }),
+      task: async () => task,
+      completeTask: async (_id, result) => { results.push(result); task = { ...task, ...result }; },
+    };
+    const worker = new AnyLinkWorker({
+      client,
+      journalPath: path.join(folder, 'j' + results.length + '.jsonl'),
+      onInvoke: async () => { throw thrown; },
+    });
+    try { await worker.runNext(); } finally { worker.close(); }
+  }
+  assert.equal(results[0].state, 'failed');
+  assert.equal(results[0].error.code, 'BAD_INPUT');
+  assert.equal(results[1].state, 'declined');
+  assert.equal(results[1].error.code, 'NO_WECHAT');
+  assert.equal(results[1].error.learn_boundary, true);
+  assert.equal(results[2].state, 'unknown');
 });
-test('startup identity transport failure can recover without claiming or replaying early',async t=>{
- const folder=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-startup-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));let identities=0,claims=0,effects=0;
- let task={id:'after-connect',state:'running',capability:'text.reverse',input:{}};
- const client={baseUrl:'https://fixture.test/',identity:async()=>{if(++identities===1)throw new Error('Tunnel not ready');return {device:{id:'target'},agent:{id:'agent-1'}};},claimTask:async()=>{claims++;return {task};},task:async()=>task,completeTask:async(_id,result)=>task={...task,...result}};
- const worker=new AnyLinkWorker({client,journalPath:path.join(folder,'journal.sqlite'),handlers:{'text.reverse':{description:'fixture',async execute(){effects++;return {text:'done'};}}}});
- try{
-  await assert.rejects(worker.runNext(),/Tunnel not ready/);assert.equal(claims,0);assert.equal(effects,0);
-  assert.equal((await worker.runNext()).task.state,'succeeded');assert.equal(identities,2);assert.equal(effects,1);
-  await worker.runNext();assert.equal(effects,1);
- }finally{worker.close();}
+
+test('startup identity transport failure can recover without claiming or replaying early', async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'anylink-startup-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  let identities = 0, claims = 0, effects = 0;
+  let task = { id: 'after-connect', state: 'running', capability: 'agent.invoke', instruction: 'Ping', input: {} };
+  const client = {
+    baseUrl: 'https://fixture.test/',
+    identity: async () => { if (++identities === 1) throw new Error('Tunnel not ready'); return { device: { id: 'target' }, agent: { id: 'agent-1' } }; },
+    claimTask: async () => { claims++; return { task }; },
+    task: async () => task,
+    completeTask: async (_id, result) => task = { ...task, ...result },
+  };
+  const worker = new AnyLinkWorker({
+    client,
+    journalPath: path.join(folder, 'journal.jsonl'),
+    onInvoke: async () => { effects++; return 'pong'; },
+  });
+  try {
+    await assert.rejects(worker.runNext(), /Tunnel not ready/);
+    assert.equal(claims, 0);
+    assert.equal(effects, 0);
+    const ran = await worker.runNext();
+    assert.equal(ran.task.state, 'succeeded');
+    assert.equal(ran.task.output.reply, 'pong');
+    assert.equal(identities, 2);
+    assert.equal(effects, 1);
+    await worker.runNext();
+    assert.equal(effects, 1);
+  } finally { worker.close(); }
 });

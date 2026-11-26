@@ -1,20 +1,21 @@
 <p align="center"><img src="docs/assets/banner.svg" alt="AnyLink Agent — protocol and SDK" width="100%"></p>
 
-<p align="center"><a href="README.zh-CN.md">简体中文</a> · <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.8.1-preview.1">Downloads</a> · <a href="sdk/README.md">SDK</a> · <a href="protocol/README.md">Protocol</a> · <a href="LICENSE">MIT</a></p>
+<p align="center"><a href="README.zh-CN.md">简体中文</a> · <a href="protocol/README.md">Protocol v3</a> · <a href="sdk-python/README.md">Python SDK (PyPI)</a> · <a href="sdk/README.md">TypeScript SDK (npm)</a> · <a href="mcp/README.md">MCP Server</a> · <a href="LICENSE">MIT</a></p>
 
 # AnyLink Agent
 
-**Bring your agent across devices. Share memory. Keep execution with its host.**
+**Personal Agent Network — Edge autonomy, Cloud Memory Brain, Multi-Model Gateway, and real-time WebSocket invocation.**
 
-AnyLink provides self-hosted memory, optional model passthrough, a device task protocol, and a JavaScript/TypeScript SDK. It does not require a particular agent harness. Connect your own application, automation system, Codex adapter or other agent. Each device owns its conversation and tool loop and connects to the server. A local Mac OpenClaw harness and an independent native Android Agent are reference implementations.
+AnyLink (`Protocol v3`) lets you run autonomous agents across your computers, servers, and phone while keeping **shared memory** and **LLM API calls** centralized on your own cloud hub:
 
-## What works
-
-- **Standalone SDK**: read global/device context, save and revise facts, stream model responses, advertise capabilities, submit tasks and retrieve real results.
-- **Device task flow**: any joined agent advertises a capability and claims work routed to it by agent, device or capability; it executes locally and reports a durable receipt.
-- **Failure semantics**: idempotent mutations, revision preconditions, local execution journals and explicit unknown outcomes. Unknown model requests or external effects are never silently rerun.
-- **Self-hosted service**: TypeScript, Fastify and PostgreSQL. The cloud does not run an agent tool loop.
-- **Reference clients**: a Mac `.app` with chat, computer control and a desktop companion; an Android-local Agent with private notes, shared memory, cross-device tasks and character states. System speech and OS permissions still need hardware verification.
+- **Cloud Memory Brain (`POST /edge/v1/memory/assemble`, `POST /edge/v1/memory/ingest`)**: Hybrid CJK/Latin + optional vector retrieval, asynchronous LLM-driven extraction/deduplication/consolidation, cross-device episodic summaries, and **automatic device capability boundary learning**.
+- **Multi-Model Gateway (`POST /model/v1/chat/completions`)**: OpenAI-compatible multi-provider/multi-model routing with per-agent concurrency control and optional **Auto-Memory Mode** (`X-AnyLink-Auto-Memory: on`).
+- **Capability-free Cross-Device Invocation + WebSocket Bus (`GET /edge/v1/ws`)**: Edge agents manage only their own local environment and never need rigid remote capability tables. Send an instruction to any device/agent; if the receiver cannot handle it, it returns `declined` with the reason, and the Cloud Memory Brain automatically learns that boundary for future turns. Live progress, lease heartbeats, and instant completion push run over WebSocket with HTTP fallback.
+- **Open-Source Packaging**:
+  - **Python SDK (`sdk-python/`, PyPI `anylink-agent`)**: async client + `@agent.on_invoke` WebSocket worker + crash-safe JSONL journal.
+  - **TypeScript SDK (`sdk/`, npm `@anylink-agent/sdk`)**: zero-dependency Node 22+ client, WebSocket socket, and durable `FileJournal` worker.
+  - **MCP Server (`mcp/`, `@anylink-agent/mcp`)**: zero-code stdio bridge for Claude Code, Cursor, Codex, and OpenClaw.
+- **Reference Showcase Clients ("蓝色大肥鱼")**: Mac OpenClaw desktop/companion integration and native Android companion app (migration to Protocol v3 tracked in Phase 2).
 
 <img src="docs/assets/architecture.svg" alt="Applications connect through the AnyLink SDK to cloud services and host-owned execution" width="100%">
 
