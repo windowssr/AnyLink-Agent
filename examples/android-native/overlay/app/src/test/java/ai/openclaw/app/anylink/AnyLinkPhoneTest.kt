@@ -125,22 +125,84 @@ class AnyLinkPhoneTest {
       "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
       "data: [DONE]\n\n"
 
-  @Test fun `turn budget allows twenty model calls then stops`() = runBlocking {
+  @Test fun `turn budget defaults to 100, honors configured cap, prunes screens in-loop, and detects stalls`() = runBlocking {
+    assertEquals(100, DEFAULT_AGENT_MAX_STEPS)
     MockWebServer().use { server ->
       server.start()
       server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
       server.enqueue(response("""{"protocol":"anylink","version":"3.0"}"""))
       server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
-      repeat(21) { server.enqueue(stream(sseCall("call_${it + 1}", "companion_expression", "{\\\"emotion\\\":\\\"happy\\\"}"))) }
+      // Run 25 steps (> legacy 20 limit) with a custom configured cap of 25, verifying loop hint and canContinue.
+      repeat(26) { server.enqueue(stream(sseCall("call_${it + 1}", "companion_expression", "{\\\"emotion\\\":\\\"happy\\\"}"))) }
       val ledger = MemoryLedger()
       val connection = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
-      val agent = DeviceAgent(connection, CloudClient(connection), ledger, { JsonObject(emptyMap()) })
+      val agent = DeviceAgent(connection, CloudClient(connection), ledger, { JsonObject(emptyMap()) }, maxStepsProvider = { 25 })
       agent.send("动一动")
       val run = ledger.runs().first()
       assertEquals("failed", run.text("state"))
-      assertTrue(run.text("notice").contains("工具步骤上限"))
-      // 3 setup (identity + protocol + memory/assemble) + 20 tool turns = 23 requests; the 21st completion never happens.
-      assertEquals(23, server.requestCount)
+      assertTrue(run.text("notice").contains("25 步工具步骤上限"))
+      assertTrue(agent.state.value.canContinue)
+      // 3 setup (identity + protocol + memory/assemble) + 25 tool turns = 28 requests; the 26th completion never happens.
+      assertEquals(28, server.requestCount)
+      // On the 3rd consecutive identical call, _loop_hint is attached to nudge the model out of ruts.
+      val thirdOp = ledger.operations.values.elementAt(2)
+      assertTrue(thirdOp.toString().contains("_loop_hint"))
+    }
+  }
+
+  @Test fun `trimHistoryForBudget compacts oldest complete user turns without breaking tool pairs`() {
+    fun call(id: String, name: String) = buildJsonObject {
+      put("id", id); putJsonObject("function") { put("name", name); put("arguments", "{}") }
+    }
+    val history = JsonArray(listOf(
+      buildJsonObject { put("role", "user"); put("content", "第一轮：" + "甲".repeat(300)) },
+      buildJsonObject { put("role", "assistant"); putJsonArray("tool_calls") { add(call("c1", "phone_screen")) } },
+      buildJsonObject { put("role", "tool"); put("tool_call_id", "c1"); put("content", """{"nodes":["旧"]}""") },
+      buildJsonObject { put("role", "assistant"); put("content", "第一轮完成") },
+      buildJsonObject { put("role", "user"); put("content", "第二轮：" + "乙".repeat(100)) },
+      buildJsonObject { put("role", "assistant"); put("content", "第二轮完成") },
+    ))
+    val trimmed = trimHistoryForBudget(history, maxChars = 400, maxMessages = 10)
+    assertEquals("user", (trimmed.first() as JsonObject).text("role"))
+    assertTrue((trimmed.first() as JsonObject).text("content").startsWith("第二轮"))
+    assertEquals(2, trimmed.size)
+  }
+
+  @Test fun `in-loop screen pruning strips stale screen dumps before every model call`() = runBlocking {
+    var reads = 0
+    PhoneControlBridge.control = object : PhoneControl {
+      override fun screen() = buildJsonObject { put("package", "com.demo"); put("marker", "SCREEN_${++reads}") }
+      override fun tap(id: String?, text: String?, x: Float?, y: Float?) = true
+      override fun setText(text: String, id: String?, submit: Boolean) = true
+      override fun scroll(direction: String, id: String?) = true
+      override fun back() = true
+      override fun home() = true
+      override fun openApp(query: String) = true
+      override fun listApps(query: String?) = JsonArray(emptyList())
+    }
+    try {
+      MockWebServer().use { server ->
+        server.start()
+        server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
+        server.enqueue(response("""{"protocol":"anylink","version":"3.0"}"""))
+        server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
+        server.enqueue(stream(sseCall("c_s1", "phone_screen", "{}")))
+        server.enqueue(stream(sseCall("c_s2", "phone_screen", "{}")))
+        server.enqueue(stream(sse("看完了")))
+        server.enqueue(response("""{"episode_id":"ep-prune","status":"pending"}"""))
+        val ledger = MemoryLedger()
+        val connection = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+        DeviceAgent(connection, CloudClient(connection), ledger, { JsonObject(emptyMap()) }).send("连看两屏")
+        val requests = (1..server.requestCount).map { server.takeRequest() }
+        val completions = requests.filter { it.path == "/model/v1/chat/completions" }
+        assertEquals(3, completions.size)
+        val thirdBody = completions[2].body.readUtf8()
+        assertFalse("stale SCREEN_1 must be pruned before step 3", thirdBody.contains("SCREEN_1"))
+        assertTrue("latest SCREEN_2 must be preserved for step 3", thirdBody.contains("SCREEN_2"))
+        assertTrue(thirdBody.contains("[旧屏幕已省略]"))
+      }
+    } finally {
+      PhoneControlBridge.control = null
     }
   }
 

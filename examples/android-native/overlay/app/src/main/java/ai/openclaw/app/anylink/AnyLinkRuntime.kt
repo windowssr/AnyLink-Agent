@@ -54,6 +54,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val voiceNotice = MutableStateFlow("")
   val pendingFile = MutableStateFlow<PickedFile?>(null)
   val uploadingFile = MutableStateFlow(false)
+  val maxSteps = MutableStateFlow(prefs.getInt("agent_max_steps", DEFAULT_AGENT_MAX_STEPS))
   val activityVisible = MutableStateFlow(false)
   val serviceRunning = MutableStateFlow(false)
   val overlayVisible = MutableStateFlow(false)
@@ -88,7 +89,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     connection.value = value
     val chat = CloudClient(value); chatCloud = chat
     workerCloud = CloudClient(value)
-    agent.value = DeviceAgent(value, chat, SqlAgentLedger(app, value), { infoJson(value) }, PersonaProvider { readPersona() })
+    agent.value = DeviceAgent(value, chat, SqlAgentLedger(app, value), { infoJson(value) }, PersonaProvider { readPersona() }, { maxSteps.value })
     refreshOverlay()
     syncWorker()
   }
@@ -582,6 +583,11 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   fun overlayPermitted() = android.provider.Settings.canDrawOverlays(app)
   fun overlayEnabled() = prefs.getBoolean("overlay_enabled", true)
   fun setOverlayEnabled(value: Boolean) { prefs.edit().putBoolean("overlay_enabled", value).apply(); refreshOverlay() }
+  fun setMaxSteps(value: Int) {
+    val clean = if (value <= 0) 0 else value.coerceIn(10, UNLIMITED_AGENT_STEPS_CAP)
+    prefs.edit().putInt("agent_max_steps", clean).apply()
+    maxSteps.value = clean
+  }
   fun overlayDismissed() = prefs.getBoolean("overlay_dismissed", false)
   fun dismissOverlay() { prefs.edit().putBoolean("overlay_dismissed", true).apply(); refreshOverlay() }
   fun overlayPosition(): Pair<Int, Int>? {

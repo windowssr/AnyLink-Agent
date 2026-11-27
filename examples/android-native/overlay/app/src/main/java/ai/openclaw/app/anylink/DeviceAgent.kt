@@ -29,12 +29,18 @@ internal data class ChatMessage(
   val fileLocation: String = "",
 )
 
+internal const val DEFAULT_AGENT_MAX_STEPS = 100
+internal const val UNLIMITED_AGENT_STEPS_CAP = 500
+
 internal data class LocalAgentState(
   val busy: Boolean = false,
   val phase: String = "idle",
   val answer: String = "",
   val notice: String = "",
   val tool: String = "",
+  val step: Int = 0,
+  val maxSteps: Int = DEFAULT_AGENT_MAX_STEPS,
+  val canContinue: Boolean = false,
   val emotion: String = "neutral",
   val gesture: String = "none",
   val sequence: String = "",
@@ -141,6 +147,21 @@ internal fun pruneScreenPayloads(messages: JsonArray): JsonArray {
   })
 }
 
+/** Auto-sliding history compaction: drops oldest complete user turns without ever splitting assistant(tool_calls) and tool pairs. */
+internal fun trimHistoryForBudget(messages: JsonArray, maxChars: Int = 120_000, maxMessages: Int = 160): JsonArray {
+  val list = pruneScreenPayloads(messages).toMutableList()
+  while (list.size > 2 && (list.size > maxMessages || JsonArray(list).toString().length > maxChars)) {
+    val nextUser = (1 until list.size).firstOrNull { (list[it] as? JsonObject)?.text("role") == "user" }
+    if (nextUser != null) {
+      list.subList(0, nextUser).clear()
+    } else {
+      val nextSafe = (1 until list.size).firstOrNull { (list[it] as? JsonObject)?.text("role") != "tool" }
+      if (nextSafe != null) list.subList(0, nextSafe).clear() else break
+    }
+  }
+  return JsonArray(list)
+}
+
 /** Device-owned loop speaking AnyLink Protocol v3.2 (Cloud Memory Brain assemble/ingest + offline outbox + interactive tasks). */
 internal class DeviceAgent(
   private val connection: CloudConnection,
@@ -148,11 +169,12 @@ internal class DeviceAgent(
   private val ledger: AgentLedger,
   private val info: () -> JsonObject,
   private val personaProvider: PersonaProvider = PersonaProvider { "" to "" },
+  private val maxStepsProvider: () -> Int = { DEFAULT_AGENT_MAX_STEPS },
 ) {
   val state = MutableStateFlow(LocalAgentState(runs = ledger.runs(), chat = chatFromHistory(ledger.messages())))
   private val lock = Mutex()
   fun stop() { cloud.cancel() }
-  fun newConversation() { if (!state.value.busy) { ledger.messages(JsonArray(emptyList())); state.update { it.copy(answer = "", notice = "", chat = emptyList()) } } }
+  fun newConversation() { if (!state.value.busy) { ledger.messages(JsonArray(emptyList())); state.update { it.copy(answer = "", notice = "", step = 0, canContinue = false, chat = emptyList()) } } }
   fun appendEvent(role: String = "event", text: String, meta: String = "") {
     if (text.isBlank()) return
     state.update { cur -> cur.copy(chat = (cur.chat + ChatMessage(id = "evt-${UUID.randomUUID()}", role = role, text = text, meta = meta)).takeLast(100)) }
@@ -280,16 +302,17 @@ internal class DeviceAgent(
         cur.copy(answer = content, chat = list.takeLast(100))
       }
     }
+    val configuredSteps = maxStepsProvider()
+    val stepLimit = if (configuredSteps <= 0) UNLIMITED_AGENT_STEPS_CAP else configuredSteps.coerceIn(1, UNLIMITED_AGENT_STEPS_CAP)
     state.update { cur ->
       cur.copy(
-        busy = true, phase = "thinking", answer = "", notice = "", tool = "",
+        busy = true, phase = "thinking", answer = "", notice = "", tool = "", step = 0, maxSteps = stepLimit, canContinue = false,
         chat = (cur.chat + ChatMessage(id = userMsgId, role = "user", text = text)).takeLast(100),
       )
     }
     try {
       save()
-      val history = ledger.messages()
-      if (history.toString().length > 100000) throw LinkFailure("CONTEXT_FULL", "请开启新对话，共同记忆会保留")
+      val history = trimHistoryForBudget(ledger.messages())
       verify()
       val (context, summaryText) = loadMemoryContext(text)
       val messages = history.toMutableList()
@@ -304,19 +327,22 @@ internal class DeviceAgent(
       }
       val system = jsonObject("role" to str("system"), "content" to str(base + "\n\n" + android + memoryBlock))
       val usedTools = mutableListOf<String>()
-      repeat(20) {
+      var lastCallSig = ""
+      var repeatCallCount = 0
+      for (step in 1..stepLimit) {
         currentCoroutineContext().ensureActive()
-        state.update { it.copy(phase = "thinking", tool = "") }
-        val response = cloud.completion(jsonObject("model" to str("deepseek-flash"), "stream" to JsonPrimitive(true), "max_tokens" to JsonPrimitive(2048), "messages" to JsonArray(listOf(system) + messages), "tools" to specs)) { answer ->
-          if (answer.isNotBlank()) upsertAssistant(answer, meta = if (usedTools.isEmpty()) "" else "已执行：${usedTools.distinct().joinToString("、")}", streaming = true)
+        state.update { it.copy(phase = "thinking", tool = "", step = step, maxSteps = stepLimit) }
+        val modelMessages = pruneScreenPayloads(JsonArray(messages.toList()))
+        val response = cloud.completion(jsonObject("model" to str("deepseek-flash"), "stream" to JsonPrimitive(true), "max_tokens" to JsonPrimitive(4096), "messages" to JsonArray(listOf(system) + modelMessages), "tools" to specs)) { answer ->
+          if (answer.isNotBlank()) upsertAssistant(answer, meta = if (usedTools.isEmpty()) "" else "第 $step 步 · 已执行：${usedTools.distinct().take(4).joinToString("、")}", streaming = true)
         }
         messages.add(response)
         val calls = response["tool_calls"] as? JsonArray ?: JsonArray(emptyList())
         if (calls.isEmpty()) {
           val answer = response.text("content")
-          ledger.messages(pruneScreenPayloads(JsonArray(messages)))
+          ledger.messages(trimHistoryForBudget(JsonArray(messages)))
           if (answer.isNotBlank()) {
-            upsertAssistant(answer, meta = if (usedTools.isEmpty()) "" else "已调用：${usedTools.distinct().joinToString("、")}", streaming = false)
+            upsertAssistant(answer, meta = if (usedTools.isEmpty()) "" else "共 ${usedTools.size} 步 · ${usedTools.distinct().take(4).joinToString("、")}", streaming = false)
           }
           run = JsonObject(run + mapOf("state" to str("completed"), "answer" to str(answer))); save()
           // Report completed turn to Cloud Memory Brain; if offline/unreachable, persist to SQLite outbox!
@@ -347,29 +373,39 @@ internal class DeviceAgent(
           if (previous != null) throw LinkFailure("TOOL_RESULT_UNKNOWN", "已记录的工具不能重复执行", true)
           ledger.operation(key, jsonObject("state" to str("submitted"), "name" to str(name), "arguments" to args))
           usedTools += toolLabel(name)
-          state.update { it.copy(phase = "working", tool = name) }
-          upsertAssistant(state.value.answer.ifBlank { "正在${toolLabel(name)}…" }, meta = "执行中：${toolLabel(name)}", streaming = true)
-          val result = try { execute(name, args, key, text) } catch (error: LinkFailure) {
+          state.update { it.copy(phase = "working", tool = name, step = step) }
+          upsertAssistant(state.value.answer.ifBlank { "第 $step 步：正在${toolLabel(name)}…" }, meta = "第 $step 步 · ${toolLabel(name)}", streaming = true)
+          val rawResult = try { execute(name, args, key, text) } catch (error: LinkFailure) {
             if (error.unknown) throw error
             jsonObject("error" to jsonObject("code" to str(error.code), "message" to str(error.message.orEmpty())))
           }
+          val sig = "$name:$args"
+          if (sig == lastCallSig) repeatCallCount++ else { lastCallSig = sig; repeatCallCount = 1 }
+          val result = if (repeatCallCount >= 3) {
+            JsonObject(rawResult + mapOf("_loop_hint" to str("你已连续 $repeatCallCount 次执行完全相同的操作（$name），请检查当前界面状态或换用滚动、返回、点击其他元素，不要原地重复。")))
+          } else rawResult
           ledger.operation(key, jsonObject("state" to str("completed"), "result" to result))
           messages.add(jsonObject("role" to str("tool"), "tool_call_id" to str(item.text("id")), "content" to str(result.toString())))
           run = JsonObject(run + mapOf("last_tool" to str(name), "last_result" to result)); save()
         }
+        // Keep in-memory message list bounded across long multi-step UI automation runs (copy before clearing!).
+        val compacted = pruneScreenPayloads(JsonArray(messages.toList())).toList()
+        messages.clear()
+        messages.addAll(compacted)
       }
-      ledger.messages(pruneScreenPayloads(JsonArray(messages)))
-      throw LinkFailure("TURN_LIMIT", "本轮已到工具步骤上限，已完成结果保留，请继续告诉我怎么做")
+      ledger.messages(trimHistoryForBudget(JsonArray(messages)))
+      throw LinkFailure("TURN_LIMIT", "本轮已到 $stepLimit 步工具步骤上限，已完成结果保留，点「继续执行」或告诉我怎么做即可接着运行")
     } catch (error: Exception) {
+      val hitTurnLimit = (error as? LinkFailure)?.code == "TURN_LIMIT"
       val unknown = error is CancellationException || (error as? LinkFailure)?.unknown == true || (error !is LinkFailure && state.value.phase == "working")
       val notice = if (error is CancellationException) "本轮已停止；已发生的操作不会撤销，没有自动重发。" else (error as? LinkFailure)?.message ?: "本轮结果未确认，没有自动重试。"
       run = JsonObject(run + mapOf("state" to str(if (unknown) "unknown" else "failed"), "notice" to str(notice))); save()
       state.update { cur ->
         val cleaned = cur.chat.map { if (it.id == assistantMsgId) it.copy(streaming = false) else it }
-        cur.copy(notice = notice, chat = cleaned)
+        cur.copy(notice = notice, canContinue = hitTurnLimit, chat = cleaned)
       }
     } finally {
-      state.update { it.copy(busy = false, phase = if (it.notice.isEmpty()) "idle" else "attention", tool = "") }; lock.unlock()
+      state.update { it.copy(busy = false, phase = if (it.notice.isEmpty()) "idle" else "attention", tool = "", step = 0) }; lock.unlock()
     }
   }
 

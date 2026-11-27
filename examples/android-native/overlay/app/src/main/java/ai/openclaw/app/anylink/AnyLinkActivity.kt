@@ -380,6 +380,7 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
     mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
   }
   var floatEnabled by remember { mutableStateOf(runtime.overlayEnabled()) }
+  val maxSteps by runtime.maxSteps.collectAsState()
   ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color(0xFFF6FBFE), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
       Text("后台保活、悬浮窗与控屏", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = DeepInk)
@@ -405,6 +406,19 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
         Text("退到后台时显示悬浮球", Modifier.weight(1f), color = DeepInk)
         Switch(checked = floatEnabled, onCheckedChange = { runtime.setOverlayEnabled(it); floatEnabled = it })
       }
+      HorizontalDivider(color = Color(0xFFDCEEF8))
+      Text("手机 Agent 单轮执行步数上限", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
+      LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val options = listOf(50 to "50 步", 100 to "100 步（默认）", 200 to "200 步", 0 to "不限")
+        items(options) { (value, label) ->
+          FilterChip(
+            selected = maxSteps == value,
+            onClick = { runtime.setMaxSteps(value) },
+            label = { Text(label, fontSize = 12.sp) },
+          )
+        }
+      }
+      Text("控屏多步任务会自动裁剪旧屏幕，避免上下文爆掉；选「不限」时放开至 500 步防死循环兜底，且随时可点「停止」。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
       Text("提示：大肥鱼主动消息会通过高优先级渠道「大肥鱼主动消息」弹出顶部横幅；若国产 ROM 默认折叠横幅，请在通知设置中开启「横幅通知」，并在「电池优化」中设为「无限制」。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
       Spacer(Modifier.height(16.dp))
     }
@@ -610,7 +624,12 @@ internal fun CloudCompanionScreen(
               ),
             )
             Text(
-              text = if (state.tool.isNotBlank()) "正在${toolLabel(state.tool)}…" else phase.caption,
+              text = when {
+                state.tool.isNotBlank() && state.step > 0 -> "第 ${state.step} 步 · 正在${toolLabel(state.tool)}…"
+                state.tool.isNotBlank() -> "正在${toolLabel(state.tool)}…"
+                state.busy && state.step > 1 -> "第 ${state.step} 步 · ${phase.caption}"
+                else -> phase.caption
+              },
               fontSize = 11.5.sp,
               fontWeight = FontWeight.Medium,
               color = Color(0xFF135076),
@@ -719,16 +738,34 @@ internal fun CloudCompanionScreen(
             }
           }
 
-          // Subtle Error / Voice Notice Strip
+          // Subtle Error / Voice Notice Strip (with one-tap Continue when step limit is reached)
           val bannerError = error.ifBlank { state.notice }
           if (bannerError.isNotBlank()) {
             Surface(
-              color = Color(0xFFFEECEC),
+              color = if (state.canContinue) Color(0xFFE7F5FD) else Color(0xFFFEECEC),
               shape = RoundedCornerShape(12.dp),
-              border = BorderStroke(1.dp, Color(0x40D94A4A)),
+              border = BorderStroke(1.dp, if (state.canContinue) Color(0xFF8CC8EA) else Color(0x40D94A4A)),
               modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
             ) {
-              Text(bannerError, color = Color(0xFFB3261E), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+              Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Text(
+                  bannerError,
+                  color = if (state.canContinue) DeepInk else Color(0xFFB3261E),
+                  fontSize = 12.sp,
+                  modifier = Modifier.weight(1f),
+                )
+                if (state.canContinue && !state.busy && server != null) {
+                  Button(
+                    onClick = { send("请接着上一步继续完成剩余任务") },
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                  ) { Text("继续执行", fontSize = 12.sp) }
+                }
+              }
             }
           }
           if (voiceNotice.isNotBlank()) {

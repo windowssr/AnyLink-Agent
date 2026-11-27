@@ -226,4 +226,39 @@ class AnyLinkCloudUiTest {
     compose.onNodeWithText("发文件").performClick()
     assertTrue(sentTriggered)
   }
+
+  @Test fun `step counter and one-tap continue button render cleanly when step limit is reached`() {
+    var continuedPrompt = ""
+    compose.setContent {
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
+        CloudCompanionScreen(
+          state = LocalAgentState(
+            busy = false,
+            phase = "attention",
+            notice = "本轮已到 100 步工具步骤上限，已完成结果保留，点「继续执行」或告诉我怎么做即可接着运行",
+            canContinue = true,
+          ),
+          server = "https://example.invalid",
+          deviceSlug = "my-phone",
+          wsOnline = true,
+          error = "",
+          voiceNotice = "",
+          connecting = false,
+          listening = false,
+          speaking = false,
+          tasks = emptyList(),
+          showConfiguration = false,
+          openConfiguration = {},
+          closeConfiguration = {},
+          connect = { _, _, _, _, _ -> },
+          send = { continuedPrompt = it },
+          stop = {},
+          listen = {},
+          newConversation = {},
+        )
+      }
+    }
+    compose.onNodeWithText("继续执行").assertExists().performClick()
+    assertTrue(continuedPrompt.contains("继续"))
+  }
 }
