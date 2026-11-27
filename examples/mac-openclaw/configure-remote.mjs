@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {paths} from './configure.mjs';
 import {composeSoul} from './configure-companion.mjs';
 
-export const REMOTE_TOOLS = ['anylink_mac_search_files', 'anylink_files_list', 'anylink_files_read', 'anylink_files_write', 'anylink_files_mkdir', 'anylink_files_move', 'anylink_files_trash', 'anylink_files_open', 'anylink_memory_search', 'anylink_link_directory', 'anylink_task_status'];
+export const REMOTE_TOOLS = ['anylink_mac_search_files', 'anylink_files_list', 'anylink_files_read', 'anylink_files_write', 'anylink_files_mkdir', 'anylink_files_move', 'anylink_files_trash', 'anylink_files_open', 'anylink_memory_search', 'anylink_link_directory', 'anylink_task_status', 'anylink_file_send', 'anylink_artifact_upload', 'anylink_artifact_download'];
 
 function rewriteLegacyPluginPaths(list, root) {
   const replacements = new Map([

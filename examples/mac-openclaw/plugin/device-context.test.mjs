@@ -261,3 +261,54 @@ test('openclaw.plugin.json declares contracts.tools and toolMetadata for every r
     assert.deepEqual(Object.keys(manifest.toolMetadata).sort(),names);
   });
 });
+
+test('anylink_file_send uploads local file and dispatches file.deliver to Android; anylink_artifact_download verifies sha256 and saves',async()=>{
+  const { mkdtempSync, rmSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'anylink-plugin-file-'));
+  const src = path.join(dir, 'hello.txt');
+  const payload = Buffer.from('你好，来自 Mac 的测试文件！', 'utf8');
+  const sha = createHash('sha256').update(payload).digest('hex');
+  writeFileSync(src, payload);
+  let uploadedBody = null, taskBody = null;
+  try {
+    await fixture(async({tools})=>{
+      const macTools = tools(macContext);
+      const sent = await macTools.anylink_file_send.execute('send-1', { path: src, note: '给你发个测试文件' });
+      assert.equal(sent.isError, undefined, JSON.stringify(sent));
+      assert.equal(sent.details.sent, true);
+      assert.equal(sent.details.artifact_id, '11111111-1111-4111-8111-111111111111');
+      assert.equal(uploadedBody.filename, 'hello.txt');
+      assert.equal(Buffer.from(uploadedBody.data_base64, 'base64').toString('utf8'), '你好，来自 Mac 的测试文件！');
+      assert.equal(taskBody.capability, 'file.deliver');
+      assert.equal(taskBody.target.agent_id, '22222222-2222-4222-8222-222222222222');
+      assert.equal(taskBody.input.artifact_id, '11111111-1111-4111-8111-111111111111');
+
+      const outDir = path.join(dir, 'recv');
+      const dl = await macTools.anylink_artifact_download.execute('dl-1', { artifact_id: '11111111-1111-4111-8111-111111111111', destination_path: outDir + '/' });
+      assert.equal(dl.isError, undefined, JSON.stringify(dl));
+      assert.equal(readFileSync(dl.details.saved_path).toString('utf8'), '你好，来自 Mac 的测试文件！');
+      assert.equal(dl.details.sha256, sha);
+    }, {
+      onRequest: entry => {
+        if (entry.method === 'POST' && entry.path === '/edge/v1/artifacts') {
+          uploadedBody = entry.body;
+          return Response.json({ id: '11111111-1111-4111-8111-111111111111', filename: entry.body.filename, content_type: entry.body.content_type, size_bytes: payload.length, sha256: sha }, { status: 201 });
+        }
+        if (entry.method === 'GET' && entry.path === '/edge/v1/directory') {
+          return Response.json({ items: [{ device: { id: '33333333-3333-4333-8333-333333333333', name: 'Android', platform: 'android' }, agents: [{ id: '22222222-2222-4222-8222-222222222222', ws_online: true, online: true }] }] });
+        }
+        if (entry.method === 'POST' && entry.path === '/edge/v1/tasks') {
+          taskBody = entry.body;
+          return Response.json({ id: '44444444-4444-4444-8444-444444444444', state: 'queued' }, { status: 201 });
+        }
+        if (entry.method === 'GET' && entry.path === '/edge/v1/artifacts/11111111-1111-4111-8111-111111111111') {
+          return new Response(payload, { status: 200, headers: { 'Content-Type': 'text/plain', 'X-AnyLink-Filename': encodeURIComponent('hello.txt'), 'X-AnyLink-SHA256': sha } });
+        }
+        return undefined;
+      },
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

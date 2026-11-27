@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
@@ -21,9 +22,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -49,6 +52,8 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val listening = MutableStateFlow(false)
   val speaking = MutableStateFlow(false)
   val voiceNotice = MutableStateFlow("")
+  val pendingFile = MutableStateFlow<PickedFile?>(null)
+  val uploadingFile = MutableStateFlow(false)
   val activityVisible = MutableStateFlow(false)
   val serviceRunning = MutableStateFlow(false)
   val overlayVisible = MutableStateFlow(false)
@@ -177,6 +182,101 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         refreshTasks()
       } else {
         voiceNotice.value = "唔，回复没送出去，稍后再点一次试试看～"
+      }
+    }
+  }
+
+  fun selectFile(uri: Uri) {
+    runCatching { AnyLinkFiles.readPickedFile(app, uri) }
+      .onSuccess { picked ->
+        error.value = ""
+        pendingFile.value = picked
+        voiceNotice.value = "已选附件：${picked.filename}（${AnyLinkFiles.formatSize(picked.sizeBytes)}），点发送即可传给电脑或附带指令。"
+      }
+      .onFailure { e ->
+        error.value = e.message ?: "无法读取该文件"
+      }
+  }
+
+  fun clearPendingFile() { pendingFile.value = null }
+
+  fun sendWithOptionalFile(text: String) {
+    val picked = pendingFile.value
+    if (picked == null) {
+      if (text.isNotBlank()) send(text)
+      return
+    }
+    val value = connection.value ?: return
+    val active = agent.value ?: return
+    if (uploadingFile.value || active.state.value.busy) return
+    pendingFile.value = null
+    uploadingFile.value = true
+    error.value = ""
+    val note = text.trim()
+    scope.launch {
+      try {
+        voiceNotice.value = "正在上传《${picked.filename}》…"
+        val bytes = withContext(Dispatchers.IO) { AnyLinkFiles.readBytesBounded(app, picked.uri) }
+        val uploader = CloudClient(value)
+        val uploaded = uploader.uploadArtifact(bytes, picked.filename, picked.mimeType)
+        val artifactId = uploaded.text("id")
+        val filename = uploaded.text("filename").ifBlank { picked.filename }
+        val contentType = uploaded.text("content_type").ifBlank { picked.mimeType }
+        val sizeBytes = uploaded["size_bytes"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: bytes.size.toLong()
+        val sha256 = uploaded.text("sha256")
+
+        if (note.isEmpty()) {
+          // Instant 1-tap file transfer directly to Mac (no LLM latency)
+          active.appendFileMessage(
+            role = "user",
+            text = "发送文件给电脑",
+            meta = "我发送的文件",
+            fileName = filename,
+            fileUri = picked.uri.toString(),
+            fileMime = contentType,
+            fileSize = sizeBytes,
+          )
+          val dir = uploader.request("GET", "/edge/v1/directory")
+          val items = (dir["items"] as? JsonArray).orEmpty().map { it.jsonObject }
+          val peers = items.filter { (it["device"] as? JsonObject)?.text("id") != value.deviceId }
+          val macs = peers.filter { (it["device"] as? JsonObject)?.text("platform") == "macos" }
+          val chosen = macs.firstOrNull { (it["agents"] as? JsonArray).orEmpty().any { a -> a.jsonObject["ws_online"]?.jsonPrimitive?.booleanOrNull == true } }
+            ?: macs.firstOrNull()
+            ?: peers.singleOrNull()
+          if (chosen == null) throw LinkFailure("TARGET_DEVICE_REQUIRED", "没有找到在线电脑设备，请先确认 Mac 已连接云端。")
+          val agents = (chosen["agents"] as? JsonArray).orEmpty().map { it.jsonObject }
+          val preferred = agents.firstOrNull { it.text("key") == "mac-openclaw" }
+            ?: agents.firstOrNull { it["ws_online"]?.jsonPrimitive?.booleanOrNull == true }
+            ?: agents.firstOrNull()
+          val target = if (preferred != null) jsonObject("agent_id" to str(preferred.text("id"))) else jsonObject("device_id" to str((chosen["device"] as JsonObject).text("id")))
+          val targetName = (chosen["device"] as JsonObject).text("name").ifBlank { "Mac" }
+          uploader.request("POST", "/edge/v1/tasks", buildJsonObject {
+            put("target", target)
+            put("capability", str("file.deliver"))
+            put("instruction", str("接收来自手机的文件《$filename》"))
+            put("input", buildJsonObject {
+              put("artifact_id", str(artifactId))
+              put("filename", str(filename))
+              put("content_type", str(contentType))
+              put("size_bytes", JsonPrimitive(sizeBytes))
+              if (sha256.isNotBlank()) put("sha256", str(sha256))
+            })
+          }, "file-deliver:$artifactId")
+          active.appendEvent(role = "event", text = "《$filename》（${AnyLinkFiles.formatSize(sizeBytes)}）已上传云端并派发给 $targetName，签收后会通知你哦～", meta = "跨设备传文件")
+          voiceNotice.value = "文件已发给 $targetName，等待签收…"
+          refreshTasks()
+        } else {
+          // File + custom instruction: let DeviceAgent send or forward artifact_id with full context
+          val enriched = "[用户已随本消息上传本地附件：filename=\"$filename\", content_type=\"$contentType\", size_bytes=$sizeBytes, artifact_id=\"$artifactId\", sha256=\"$sha256\"。若只是保存给电脑请直接调用 file_send；若需要电脑处理该文件请在 task_invoke 的 input 里带上 artifact_id 与 filename。]\n$note"
+          voiceNotice.value = "附件《$filename》已上传，正在交给大肥鱼处理…"
+          uploadingFile.value = false
+          send(enriched)
+          return@launch
+        }
+      } catch (e: Exception) {
+        error.value = e.message ?: "上传文件失败，请稍后重试。"
+      } finally {
+        uploadingFile.value = false
       }
     }
   }
@@ -356,9 +456,40 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       ledger = ledger,
       info = { infoJson(value) },
       say = { text, source -> companionSay(text, source) },
+      receiveFile = { artifact, input, source -> receiveDeliveredFile(artifact, input, source) },
       wakeup = workerWakeup,
       isWsOnline = { wsOnline.value },
     )
+  }
+
+  private suspend fun receiveDeliveredFile(artifact: DownloadedArtifact, input: JsonObject, source: String): SavedFile {
+    val preferredName = input.text("filename").ifBlank { artifact.filename }
+    val preferredMime = input.text("content_type").ifBlank { artifact.contentType }
+    val note = input.text("note")
+    val saved = withContext(Dispatchers.IO) {
+      AnyLinkFiles.saveReceivedFile(app, artifact.bytes, preferredName, preferredMime)
+    }
+    val text = if (note.isNotBlank()) "来自 $source 的文件《${saved.filename}》：$note" else "已收到来自 $source 的文件《${saved.filename}》"
+    voiceNotice.value = "已保存文件：${saved.filename}（${saved.displayPath}）"
+    agent.value?.appendFileMessage(
+      role = "event",
+      text = text,
+      meta = "收到来自 $source 的文件",
+      fileName = saved.filename,
+      fileUri = saved.uri?.toString().orEmpty(),
+      fileMime = saved.contentType,
+      fileSize = saved.sizeBytes.toLong(),
+      fileLocation = saved.displayPath,
+    )
+    agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
+    AnyLinkCompanionService.notifyProactive(
+      app,
+      title = "大肥鱼收到来自 $source 的文件",
+      body = "《${saved.filename}》（${AnyLinkFiles.formatSize(saved.sizeBytes.toLong())}）已保存到手机「${saved.displayPath}」",
+      tag = "file:${artifact.sha256.take(12)}",
+    )
+    speechPlayer?.enqueue("主人！${source}刚给你传过来一个文件叫${saved.filename}，我已经帮你存进下载里的 AnyLink 文件夹啦！", summarize = false, interrupt = false, forceRewrite = false)
+    return saved
   }
 
   private fun companionSay(text: String, source: String) {

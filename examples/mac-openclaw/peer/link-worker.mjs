@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AnyLinkClient } from '../../../sdk/src/client.mjs';
@@ -70,14 +72,70 @@ export function createMacLinkWorker({ connection, policyFile, journalPath }) {
   });
 }
 
-// Protocol v3.2: mac-openclaw handles BOTH capability-free `agent.invoke` (via onInvoke) and legacy `agent.ask` over WebSocket!
-export function createMacAskWorker({ connection, journalPath, gatewayToken, gatewayUrl, fetchImpl }) {
-  const client = new AnyLinkClient({ baseUrl: connection.server, token: connection.token, timeoutMs: 20000 });
+const sanitizeDeliverName = raw => (path.basename(String(raw ?? 'attachment.bin').replaceAll('\\', '/')).replace(/[\x00-\x1f"<>|:*?]/g, '_').trim() || 'attachment.bin').slice(0, 200);
+
+function uniqueFileInDir(dir, rawName) {
+  const clean = sanitizeDeliverName(rawName);
+  const ext = path.extname(clean);
+  const stem = ext ? clean.slice(0, -ext.length) : clean;
+  let target = path.join(dir, clean);
+  let idx = 2;
+  while (fs.existsSync(target) && idx < 1000) {
+    target = path.join(dir, `${stem} (${idx++})${ext}`);
+  }
+  return target;
+}
+
+/** Handles incoming cross-device `file.deliver` tasks on Mac: downloads artifact, verifies SHA-256,
+ * and saves cleanly to ~/Downloads/AnyLink (or an authorized destination_dir). */
+export function createFileDeliverHandler({ client, defaultDir = path.join(os.homedir(), 'Downloads', 'AnyLink'), policy } = {}) {
+  return {
+    description: 'Receive a file uploaded via /edge/v1/artifacts and save it to Mac ~/Downloads/AnyLink',
+    async execute(input, { signal } = {}) {
+      const artifactId = String(input?.artifact_id ?? '').trim();
+      if (!artifactId) throw new TaskFailure('BAD_TOOL_INPUT', 'file.deliver 需要 artifact_id');
+      const downloaded = await client.downloadArtifact(artifactId, { signal });
+      const actualSha = createHash('sha256').update(downloaded.data).digest('hex');
+      const expectedSha = input?.sha256 || downloaded.sha256;
+      if (expectedSha && expectedSha !== actualSha) {
+        throw new TaskFailure('SHA256_MISMATCH', '文件下载校验和不一致，已拒绝保存');
+      }
+      let targetDir = defaultDir;
+      if (typeof input?.destination_dir === 'string' && input.destination_dir.trim()) {
+        const rawDir = input.destination_dir.trim();
+        const expanded = rawDir === '~' ? os.homedir() : rawDir.startsWith('~/') ? path.join(os.homedir(), rawDir.slice(2)) : path.resolve(rawDir);
+        const curPolicy = typeof policy === 'function' ? policy() : policy;
+        const allowed = curPolicy?.full_access === true || (curPolicy?.roots ?? []).some(r => expanded === r.path || expanded.startsWith(r.path + path.sep));
+        if (allowed) targetDir = expanded;
+      }
+      fs.mkdirSync(targetDir, { recursive: true });
+      const finalPath = uniqueFileInDir(targetDir, input?.filename || downloaded.filename);
+      fs.writeFileSync(finalPath, downloaded.data, { mode: 0o644 });
+      const finalName = path.basename(finalPath);
+      return {
+        saved_path: finalPath,
+        filename: finalName,
+        content_type: input?.content_type || downloaded.contentType,
+        size_bytes: downloaded.data.length,
+        sha256: actualSha,
+        reply: `已收到并保存文件《${finalName}》到 ${finalPath}`,
+      };
+    },
+  };
+}
+
+// Protocol v3.2: mac-openclaw handles `agent.invoke`, legacy `agent.ask`, AND `file.deliver` over WebSocket!
+export function createMacAskWorker({ connection, journalPath, gatewayToken, gatewayUrl, fetchImpl, policyFile }) {
+  const client = new AnyLinkClient({ baseUrl: connection.server, token: connection.token, timeoutMs: 30000 });
   const handler = createAgentAskHandler({ client, gatewayToken, gatewayUrl, fetchImpl });
+  const readPolicy = () => {
+    try { return policyFile ? JSON.parse(fs.readFileSync(policyFile, 'utf8')) : null; } catch { return null; }
+  };
+  const fileDeliver = createFileDeliverHandler({ client, policy: readPolicy });
   return new AnyLinkWorker({
     client,
     journalPath,
-    handlers: { 'agent.ask': handler },
+    handlers: { 'agent.ask': handler, 'file.deliver': fileDeliver },
     onInvoke: (task, ctx) => handler.execute(task.input, { ...ctx, task }),
   });
 }
@@ -111,7 +169,7 @@ async function main() {
   const workers = [createMacLinkWorker({ connection, policyFile, journalPath: path.join(directory, journal) })];
   if (connection.agent_id && connection.worker) {
     const gatewayToken = fs.readFileSync(path.join(root, 'secrets/mac-gateway-token'), 'utf8').trim();
-    workers.push(createMacAskWorker({ connection, journalPath: path.join(directory, `executions-${connection.agent_id}.jsonl`), gatewayToken }));
+    workers.push(createMacAskWorker({ connection, journalPath: path.join(directory, `executions-${connection.agent_id}.jsonl`), gatewayToken, policyFile }));
   }
 
   // Automatically clear stale sandbox OUTSIDE_ROOT boundary memories once cloud connection is ready.

@@ -14,7 +14,10 @@
       "anylink_task_create",
       "anylink_task_status",
       "anylink_task_reply",
-      "anylink_task_cancel"
+      "anylink_task_cancel",
+      "anylink_file_send",
+      "anylink_artifact_upload",
+      "anylink_artifact_download"
     ]
   },
   "configSchema": {
@@ -93,6 +96,21 @@
       ]
     },
     "anylink_task_cancel": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_file_send": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_artifact_upload": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_artifact_download": {
       "profiles": [
         "coding"
       ]

@@ -117,3 +117,27 @@ test('healStaleBoundaries deletes legacy OUTSIDE_ROOT boundaries and records ful
   assert.equal(saved[0].scope, 'device');
   assert.ok(saved[0].content.includes('/Users/demo'));
 });
+
+test('createFileDeliverHandler downloads artifact, verifies sha256, and deduplicates filenames', async () => {
+  const { createFileDeliverHandler } = await import('./link-worker.mjs');
+  const { createHash } = await import('node:crypto');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'anylink-deliver-'));
+  const data = Buffer.from('photo-binary-data');
+  const sha = createHash('sha256').update(data).digest('hex');
+  const fakeClient = {
+    async downloadArtifact(id) {
+      assert.equal(id, 'art-1');
+      return { data, filename: '../evil/pic.jpg', contentType: 'image/jpeg', sha256: sha };
+    },
+  };
+  try {
+    const handler = createFileDeliverHandler({ client: fakeClient, defaultDir: dir });
+    const r1 = await handler.execute({ artifact_id: 'art-1', filename: 'pic.jpg' });
+    assert.equal(r1.filename, 'pic.jpg');
+    assert.equal(r1.saved_path, path.join(dir, 'pic.jpg'));
+    assert.deepEqual(await fs.readFile(r1.saved_path), data);
+    const r2 = await handler.execute({ artifact_id: 'art-1', filename: 'pic.jpg' });
+    assert.equal(r2.filename, 'pic (2).jpg');
+    assert.equal(r2.saved_path, path.join(dir, 'pic (2).jpg'));
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});

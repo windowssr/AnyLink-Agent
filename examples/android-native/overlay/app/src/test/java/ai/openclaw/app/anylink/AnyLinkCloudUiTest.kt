@@ -157,4 +157,73 @@ class AnyLinkCloudUiTest {
       file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
   }
+
+  @Test fun `bidirectional file transfer saves sanitized files and renders file card with attachment picker`() {
+    val app = RuntimeEnvironment.getApplication()
+    val payload = "hello-from-mac-pdf".toByteArray()
+    val saved = AnyLinkFiles.saveReceivedFile(app, payload, "../evil/周报.pdf", "application/pdf")
+    assertEquals("周报.pdf", saved.filename)
+    assertEquals(payload.size, saved.sizeBytes)
+    assertNotNull(saved.uri)
+
+    var pickedClicked = false
+    var sentTriggered = false
+    val stateWithFile = LocalAgentState(
+      chat = listOf(
+        ChatMessage(
+          id = "f1",
+          role = "event",
+          text = "已收到来自 Mac 的文件《周报.pdf》",
+          meta = "收到来自 Mac 的文件",
+          fileName = "周报.pdf",
+          fileUri = saved.uri.toString(),
+          fileMime = "application/pdf",
+          fileSize = 1572864L,
+          fileLocation = "下载/AnyLink/周报.pdf",
+        ),
+      ),
+    )
+    compose.setContent {
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
+        CloudCompanionScreen(
+          state = stateWithFile,
+          server = "https://example.invalid",
+          deviceSlug = "my-phone",
+          wsOnline = true,
+          error = "",
+          voiceNotice = "",
+          connecting = false,
+          listening = false,
+          speaking = false,
+          tasks = emptyList(),
+          showConfiguration = false,
+          openConfiguration = {},
+          closeConfiguration = {},
+          connect = { _, _, _, _, _ -> },
+          send = { sentTriggered = true },
+          stop = {},
+          listen = {},
+          newConversation = {},
+          pendingFile = PickedFile(android.net.Uri.parse("content://test/contract.pdf"), "合同.pdf", "application/pdf", 524288L),
+          pickFile = { pickedClicked = true },
+        )
+      }
+    }
+    compose.onNodeWithText("📄 周报.pdf · 1.50 MB").assertExists()
+    compose.onNodeWithText("已保存至：下载/AnyLink/周报.pdf").assertExists()
+    compose.onNodeWithText("打开文件").assertExists()
+    compose.onNodeWithText("分享").assertExists()
+    compose.onNodeWithText("📎 合同.pdf（512.0 KB）").assertExists()
+    compose.onNodeWithText("发文件").assertExists()
+
+    System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
+      val file = java.io.File(directory, "android-file-transfer-v09.png"); file.parentFile?.mkdirs()
+      file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    compose.onNodeWithText("📎").performClick()
+    assertTrue(pickedClicked)
+    compose.onNodeWithText("发文件").performClick()
+    assertTrue(sentTriggered)
+  }
 }

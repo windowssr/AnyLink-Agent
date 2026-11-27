@@ -99,6 +99,7 @@ internal suspend fun linkWorkerLoop(
   ledger: AgentLedger,
   info: () -> JsonObject,
   say: suspend (String, String) -> Unit,
+  receiveFile: (suspend (DownloadedArtifact, JsonObject, String) -> SavedFile)? = null,
   wakeup: Channel<Unit>? = null,
   isWsOnline: () -> Boolean = { false },
 ) {
@@ -130,6 +131,7 @@ internal suspend fun linkWorkerLoop(
   val capabilities = jsonObject("capabilities" to JsonArray(listOf(
     jsonObject("name" to str("phone.status"), "description" to str("读取这台手机的基础状态：型号、系统版本、电量等")),
     jsonObject("name" to str("companion.say"), "description" to str("让手机上的大肥鱼用语音说一句话并显示在屏幕上，text 不超过 500 字")),
+    jsonObject("name" to str("file.deliver"), "description" to str("接收其他设备通过 /edge/v1/artifacts 上传的文件（artifact_id），自动校验并保存到手机「下载/AnyLink」且弹窗提醒")),
   )))
   var capabilitiesRegistered = false
   var names: Map<String, String>? = null
@@ -185,7 +187,7 @@ internal suspend fun linkWorkerLoop(
                 }
               }
               try {
-                executeWorkerTask(task, info, say, ::deviceName)
+                executeWorkerTask(task, transport, info, say, receiveFile, ::deviceName)
               } finally {
                 hbJob.cancel()
               }
@@ -215,12 +217,38 @@ internal suspend fun linkWorkerLoop(
 
 private suspend fun executeWorkerTask(
   task: JsonObject,
+  transport: LinkTransport,
   info: () -> JsonObject,
   say: suspend (String, String) -> Unit,
+  receiveFile: (suspend (DownloadedArtifact, JsonObject, String) -> SavedFile)?,
   deviceName: suspend (String) -> String,
 ): JsonObject {
   val input = task["input"]?.jsonObject ?: JsonObject(emptyMap())
   val capability = task.text("capability")
+  suspend fun handleArtifactDelivery(): JsonObject {
+    val artifactId = input.text("artifact_id")
+    if (artifactId.isBlank()) throw LinkFailure("BAD_TOOL_INPUT", "file.deliver 需要 artifact_id")
+    val receiver = receiveFile ?: throw LinkFailure("FILE_RECEIVER_UNAVAILABLE", "当前环境无法保存附件")
+    val downloaded = transport.downloadArtifact(artifactId)
+    val expectedSha = input.text("sha256")
+    if (expectedSha.isNotBlank() && !expectedSha.equals(downloaded.sha256, ignoreCase = true)) {
+      throw LinkFailure("SHA256_MISMATCH", "收到的文件校验和不一致，未保存")
+    }
+    val source = task["source_device_id"]?.jsonPrimitive?.contentOrNull
+    val sourceName = if (source.isNullOrBlank()) "其他设备" else deviceName(source)
+    val saved = receiver(downloaded, input, sourceName)
+    return jsonObject(
+      "state" to str("succeeded"),
+      "output" to jsonObject(
+        "saved_location" to str(saved.displayPath),
+        "filename" to str(saved.filename),
+        "content_type" to str(saved.contentType),
+        "size_bytes" to JsonPrimitive(saved.sizeBytes),
+        "sha256" to str(downloaded.sha256),
+        "reply" to str("手机已收到并保存文件《${saved.filename}》到 ${saved.displayPath}"),
+      ),
+    )
+  }
   return when (capability) {
     "phone.status" -> jsonObject("state" to str("succeeded"), "output" to info())
     "companion.say" -> {
@@ -230,10 +258,12 @@ private suspend fun executeWorkerTask(
       say(text, if (source.isNullOrBlank()) "其他设备" else deviceName(source))
       jsonObject("state" to str("succeeded"), "output" to jsonObject("spoken" to JsonPrimitive(true), "reply" to str("已播报：$text")))
     }
+    "file.deliver" -> handleArtifactDelivery()
     "agent.invoke" -> {
       val instruction = task.text("instruction").ifBlank { input.text("instruction") }
       val source = task["source_device_id"]?.jsonPrimitive?.contentOrNull
       when {
+        input.text("artifact_id").isNotBlank() -> handleArtifactDelivery()
         instruction.isBlank() -> throw LinkFailure("BAD_TOOL_INPUT", "instruction 不能为空")
         Regex("状态|电量|型号|版本|信息|status", RegexOption.IGNORE_CASE).containsMatchIn(instruction) ->
           jsonObject("state" to str("succeeded"), "output" to JsonObject(info() + mapOf("reply" to str("手机当前状态已读取"))))
@@ -246,7 +276,7 @@ private suspend fun executeWorkerTask(
           "state" to str("declined"),
           "error" to jsonObject(
             "code" to str("PHONE_REMOTE_SCOPE_LIMITED"),
-            "message" to str("手机端跨设备模式目前仅支持读取手机基础状态和让大肥鱼语音播报提醒，暂不支持远程操控其他手机 App"),
+            "message" to str("手机端跨设备模式目前支持读取手机状态、接收文件（file.deliver）与语音播报提醒，暂不支持远程操控其他手机 App"),
             "learn_boundary" to JsonPrimitive(true),
           ),
         )
@@ -256,7 +286,7 @@ private suspend fun executeWorkerTask(
       "state" to str("declined"),
       "error" to jsonObject(
         "code" to str("CAPABILITY_UNAVAILABLE"),
-        "message" to str("这台手机不支持 $capability，仅支持 phone.status 与 companion.say"),
+        "message" to str("这台手机不支持 $capability，仅支持 phone.status、companion.say 与 file.deliver"),
         "learn_boundary" to JsonPrimitive(true),
       ),
     )
@@ -270,6 +300,9 @@ class AnyLinkActivity : ComponentActivity() {
     if (allowed) runtime.startListening() else runtime.voiceNotice.value = "需要麦克风权限，也可以直接打字和我聊哦。"
   }
   private val requestNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+  private val pickDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    if (uri != null) runtime.selectFile(uri)
+  }
   private var permissionTick = mutableIntStateOf(0)
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -288,6 +321,8 @@ class AnyLinkActivity : ComponentActivity() {
         val listening by runtime.listening.collectAsState()
         val speaking by runtime.speaking.collectAsState()
         val notice by runtime.voiceNotice.collectAsState()
+        val pendingFile by runtime.pendingFile.collectAsState()
+        val uploadingFile by runtime.uploadingFile.collectAsState()
         var configuration by remember { mutableStateOf(false) }
         var floating by remember { mutableStateOf(false) }
         permissionTick.intValue
@@ -310,12 +345,16 @@ class AnyLinkActivity : ComponentActivity() {
             if (joinKey.isNotBlank()) runtime.connectJoin(server, joinKey, deviceName, deviceSlug) { configuration = false }
             else runtime.connect(server, credential) { configuration = false }
           },
-          send = { text -> runtime.interruptAll(); runtime.send(text) },
+          send = { text -> runtime.interruptAll(); runtime.sendWithOptionalFile(text) },
           stop = { runtime.interruptAll() },
           listen = { runtime.interruptAll(); if (runtime.micGranted()) runtime.startListening() else requestMic.launch(Manifest.permission.RECORD_AUDIO) },
           newConversation = { agent?.newConversation() },
           openFloating = { floating = true },
           replyTask = { taskId, approved, choice, msg -> runtime.replyToTask(taskId, approved, choice, msg) },
+          pendingFile = pendingFile,
+          uploadingFile = uploadingFile,
+          pickFile = { runCatching { pickDocument.launch(arrayOf("*/*")) } },
+          clearPendingFile = { runtime.clearPendingFile() },
         )
         if (floating) FloatingSettingsSheet(runtime, onDismiss = { floating = false; permissionTick.intValue++ })
       }
@@ -387,6 +426,10 @@ internal fun CloudCompanionScreen(
   send: (String) -> Unit, stop: () -> Unit, listen: () -> Unit, newConversation: () -> Unit,
   openFloating: () -> Unit = {},
   replyTask: (String, Boolean?, String?, String?) -> Unit = { _, _, _, _ -> },
+  pendingFile: PickedFile? = null,
+  uploadingFile: Boolean = false,
+  pickFile: () -> Unit = {},
+  clearPendingFile: () -> Unit = {},
 ) {
   val context = LocalContext.current
   var showLicenses by remember { mutableStateOf(false) }
@@ -704,61 +747,116 @@ internal fun CloudCompanionScreen(
             )
           }
 
-          // Sleek Floating Pill Composer
+          // Sleek Floating Pill Composer (with 📎 file attachment picker & preview strip)
           Surface(
             color = Color(0xD8FFFFFF),
             border = BorderStroke(1.dp, Color(0x66A9D7F0)),
             modifier = Modifier.fillMaxWidth(),
           ) {
-            Row(
-              Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              Box(
-                Modifier
-                  .weight(1f)
-                  .clip(RoundedCornerShape(22.dp))
-                  .background(Color(0xFFF1F9FE))
-                  .border(1.dp, Color(0x99B6DDF2), RoundedCornerShape(22.dp))
-                  .padding(horizontal = 14.dp, vertical = 11.dp),
-              ) {
-                if (draft.isEmpty()) {
-                  Text("和我聊聊，或安排跨设备任务…", fontSize = 13.5.sp, color = SoftMist)
+            Column(Modifier.fillMaxWidth()) {
+              if (pendingFile != null) {
+                Row(
+                  Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFE5F5FD))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                  Text(
+                    "📎 ${pendingFile.filename}（${AnyLinkFiles.formatSize(pendingFile.sizeBytes)}）",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = OceanPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                  )
+                  Text(
+                    "取消",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SeaSlate,
+                    modifier = Modifier.clickable { clearPendingFile() }.padding(horizontal = 8.dp, vertical = 2.dp),
+                  )
                 }
-                BasicTextField(
-                  value = draft,
-                  onValueChange = { draft = it },
-                  enabled = server != null && !state.busy,
-                  maxLines = 4,
-                  textStyle = TextStyle(fontSize = 14.sp, color = DeepInk),
-                  cursorBrush = SolidColor(OceanPrimary),
-                  modifier = Modifier.fillMaxWidth(),
-                )
               }
-
-              if (state.busy || listening || speaking) {
+              Row(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Surface(
+                  onClick = pickFile,
+                  enabled = server != null && !state.busy && !uploadingFile,
+                  color = Color(0xFFEAF6FD),
+                  shape = CircleShape,
+                  border = BorderStroke(1.dp, Color(0x99B6DDF2)),
+                  modifier = Modifier.size(40.dp),
+                ) {
+                  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("📎", fontSize = 16.sp)
+                  }
+                }
                 Box(
                   Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Brush.linearGradient(listOf(CoralStop, Color(0xFFB83232))))
-                    .clickable { stop() }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                  contentAlignment = Alignment.Center,
+                    .weight(1f)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color(0xFFF1F9FE))
+                    .border(1.dp, Color(0x99B6DDF2), RoundedCornerShape(22.dp))
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
                 ) {
-                  Text(if (listening) "停听" else "停止", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                  if (draft.isEmpty()) {
+                    Text(
+                      if (pendingFile != null) "附言（留空则直接把文件发给电脑）…" else "和我聊聊，或安排跨设备任务…",
+                      fontSize = 13.5.sp,
+                      color = SoftMist,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                  }
+                  BasicTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    enabled = server != null && !state.busy && !uploadingFile,
+                    maxLines = 4,
+                    textStyle = TextStyle(fontSize = 14.sp, color = DeepInk),
+                    cursorBrush = SolidColor(OceanPrimary),
+                    modifier = Modifier.fillMaxWidth(),
+                  )
                 }
-              } else {
-                if (draft.isNotBlank()) {
+
+                if (uploadingFile) {
+                  Box(
+                    Modifier
+                      .clip(RoundedCornerShape(999.dp))
+                      .background(Color(0xFF96B0C0))
+                      .padding(horizontal = 14.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Text("上传中…", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                  }
+                } else if (state.busy || listening || speaking) {
+                  Box(
+                    Modifier
+                      .clip(RoundedCornerShape(999.dp))
+                      .background(Brush.linearGradient(listOf(CoralStop, Color(0xFFB83232))))
+                      .clickable { stop() }
+                      .padding(horizontal = 16.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Text(if (listening) "停听" else "停止", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                  }
+                } else if (draft.isNotBlank() || pendingFile != null) {
                   Box(
                     Modifier
                       .clip(RoundedCornerShape(999.dp))
                       .background(Brush.linearGradient(listOf(OceanBright, OceanPrimary)))
                       .clickable(enabled = server != null) { val text = draft; draft = ""; send(text) }
-                      .padding(horizontal = 16.dp, vertical = 10.dp),
+                      .padding(horizontal = 15.dp, vertical = 10.dp),
                     contentAlignment = Alignment.Center,
                   ) {
-                    Text("发送", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(if (pendingFile != null && draft.isBlank()) "发文件" else "发送", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                   }
                 } else {
                   Box(
@@ -832,6 +930,7 @@ internal fun CloudCompanionScreen(
           "files.search" -> "搜索电脑文件"
           "phone.status" -> "读取手机状态"
           "companion.say" -> "让大肥鱼说话"
+          "file.deliver" -> "跨设备传文件"
           "agent.ask", "agent.invoke" -> task.text("instruction").take(28).ifBlank { "跨设备协作" }
           else -> "跨设备任务"
         }
@@ -898,6 +997,7 @@ private fun QuickPromptPill(label: String, onClick: () -> Unit) {
 
 @Composable
 private fun ChatBubble(msg: ChatMessage, onReplyTask: (String, Boolean?, String?, String?) -> Unit) {
+  val context = LocalContext.current
   val isUser = msg.role == "user"
   val isEvent = msg.role == "event"
   val isInteraction = msg.role == "interaction"
@@ -962,8 +1062,18 @@ private fun ChatBubble(msg: ChatMessage, onReplyTask: (String, Boolean?, String?
           .background(Brush.linearGradient(listOf(Color(0xFF1D7AB6), Color(0xFF0E5587))))
           .padding(horizontal = 14.dp, vertical = 10.dp),
       ) {
-        SelectionContainer {
-          Text(msg.text, style = MaterialTheme.typography.bodyMedium, color = Color.White, lineHeight = 20.sp)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          if (msg.fileName.isNotBlank()) {
+            Text(
+              "📎 ${msg.fileName}${if (msg.fileSize > 0) "（${AnyLinkFiles.formatSize(msg.fileSize)}）" else ""}",
+              fontSize = 12.5.sp,
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFFE0F4FF),
+            )
+          }
+          SelectionContainer {
+            Text(msg.text, style = MaterialTheme.typography.bodyMedium, color = Color.White, lineHeight = 20.sp)
+          }
         }
       }
     } else {
@@ -974,7 +1084,7 @@ private fun ChatBubble(msg: ChatMessage, onReplyTask: (String, Boolean?, String?
         shadowElevation = 1.dp,
         modifier = Modifier.widthIn(max = if (isEvent) 336.dp else 306.dp),
       ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
           Text(
             text = msg.meta.ifBlank { if (isEvent) "跨设备动态" else if (msg.streaming) "大肥鱼 · 回复中…" else "大肥鱼" },
             fontSize = 10.5.sp,
@@ -988,6 +1098,42 @@ private fun ChatBubble(msg: ChatMessage, onReplyTask: (String, Boolean?, String?
               color = DeepInk,
               lineHeight = 21.sp,
             )
+          }
+          if (msg.fileName.isNotBlank()) {
+            Surface(
+              color = Color(0xFFF3FAFF),
+              shape = RoundedCornerShape(14.dp),
+              border = BorderStroke(1.dp, Color(0xFF9CD4F2)),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                  "📄 ${msg.fileName}${if (msg.fileSize > 0) " · ${AnyLinkFiles.formatSize(msg.fileSize)}" else ""}",
+                  fontSize = 12.5.sp,
+                  fontWeight = FontWeight.SemiBold,
+                  color = DeepInk,
+                  maxLines = 2,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                if (msg.fileLocation.isNotBlank()) {
+                  Text("已保存至：${msg.fileLocation}", fontSize = 11.sp, color = SeaSlate)
+                }
+                if (msg.fileUri.isNotBlank()) {
+                  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                      onClick = { AnyLinkFiles.openFile(context, msg.fileUri, msg.fileMime) },
+                      shape = RoundedCornerShape(10.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) { Text("打开文件", fontSize = 12.sp) }
+                    OutlinedButton(
+                      onClick = { AnyLinkFiles.shareFile(context, msg.fileUri, msg.fileName, msg.fileMime) },
+                      shape = RoundedCornerShape(10.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) { Text("分享", fontSize = 12.sp) }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1020,6 +1166,7 @@ internal fun toolLabel(name: String): String = when (name) {
   "task_invoke", "task_create" -> "安排跨设备任务"
   "task_status" -> "查看任务进展"
   "task_reply" -> "回复跨设备任务"
+  "file_send" -> "跨设备发送文件"
   "task_cancel" -> "停止任务"
   "companion_expression" -> "回应你"
   "phone_screen" -> "看屏幕"

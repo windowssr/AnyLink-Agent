@@ -1,7 +1,38 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { createHash } from 'node:crypto';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
+const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
+const MIME_BY_EXT = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json', '.csv': 'text/csv', '.html': 'text/html',
+  '.zip': 'application/zip', '.gz': 'application/gzip', '.tar': 'application/x-tar',
+  '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.mp4': 'video/mp4',
+};
+const inferMime = filename => MIME_BY_EXT[path.extname(String(filename || '')).toLowerCase()] ?? 'application/octet-stream';
+const sanitizeFilename = raw => (path.basename(String(raw ?? 'attachment.bin').replaceAll('\\', '/')).replace(/[\x00-\x1f"<>|:*?]/g, '_').trim() || 'attachment.bin').slice(0, 200);
+const expandHome = p => {
+  const s = String(p ?? '').trim();
+  if (s === '~') return os.homedir();
+  if (s.startsWith('~/')) return path.join(os.homedir(), s.slice(2));
+  return path.resolve(s);
+};
+function uniqueTargetPath(dir, rawName) {
+  const clean = sanitizeFilename(rawName);
+  const ext = path.extname(clean);
+  const stem = ext ? clean.slice(0, -ext.length) : clean;
+  let candidate = path.join(dir, clean);
+  let i = 2;
+  while (existsSync(candidate) && i < 1000) {
+    candidate = path.join(dir, `${stem} (${i++})${ext}`);
+  }
+  return candidate;
+}
 
 export function memoryIntent(text) {
   if (/(?:不要|不用|别|无需|不必|不准|不(?=保存|记录|记住|更新|更正|遗忘|忘掉|删除)).{0,6}(?:记住|记录|保存|更新|更正|遗忘|忘掉|删除)|do\s*not\s*(remember|save|update|delete|forget)|don.t\s*(remember|save|update|delete|forget)/i.test(text)) return false;
@@ -30,7 +61,13 @@ const writeLinkSpecs = [
   { name: 'anylink_task_cancel', description: '取消由本 Agent 创建的任务；运行中任务发送协作取消。', parameters: object({ id: str('任务ID') }, ['id']) },
 ];
 
-const allLinkSpecs = [...readLinkSpecs, ...writeLinkSpecs];
+const artifactLinkSpecs = [
+  { name: 'anylink_file_send', description: '把 Mac 本机文件（≤10 MiB，支持图片、PDF、文档、压缩包等任意格式）上传到云端附件并发送给手机或其他设备（capability: file.deliver）。省略目标参数时自动选择在线手机设备。', parameters: object({ path: str('Mac 本地文件路径（支持 ~/Desktop/... 或绝对路径）'), target_device_slug: str('目标设备唯一短别名，可选'), target_device_name: str('目标设备名称，可选'), target_agent_id: str('目标 Agent ID，可选'), target_device_id: str('目标设备 ID，可选'), target_agent_key: str('目标 Agent key，可选'), filename: str('可选自定义显示文件名'), note: str('可选附言或说明'), ttl_seconds: { type: 'integer', minimum: 60, maximum: 86400 } }, ['path']) },
+  { name: 'anylink_artifact_upload', description: '将 Mac 本机文件（≤10 MiB）上传到 AnyLink 云端临时附件存储，返回 artifact_id 与 sha256，供后续跨设备任务引用。', parameters: object({ path: str('Mac 本地文件路径'), filename: str('可选文件名'), content_type: str('可选 MIME 类型'), task_id: str('可选关联任务 ID'), ttl_seconds: { type: 'integer', minimum: 60, maximum: 86400 } }, ['path']) },
+  { name: 'anylink_artifact_download', description: '从 AnyLink 云端下载其他设备传来的附件（artifact_id），自动校验 SHA-256 并保存到本机 ~/Downloads/AnyLink/ 或指定路径。', parameters: object({ artifact_id: str('云端附件 UUID'), destination_path: str('可选保存目录或完整文件路径，省略默认保存到 ~/Downloads/AnyLink/') }, ['artifact_id']) },
+];
+
+const allLinkSpecs = [...readLinkSpecs, ...writeLinkSpecs, ...artifactLinkSpecs];
 
 const result = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value });
 const failure = (code, message) => ({ ...result({ error: { code, message } }), isError: true });
@@ -220,11 +257,11 @@ export default {
 
     api.registerTool(ctx => {
       const agentId = ctx.agentId ?? 'main';
-      // main gets full cross-device invoke tools; remote gets read-only directory & task_status (fixes v2 mismatch with configure-remote.mjs).
+      // main gets full cross-device invoke + file transfer tools; remote gets read-only directory/status + file transfer tools so phone can request files from Mac.
       const active = agentId === 'main'
         ? [...specs, ...allLinkSpecs]
         : agentId === 'remote'
-          ? [...specs, ...readLinkSpecs]
+          ? [...specs, ...readLinkSpecs, ...artifactLinkSpecs]
           : specs;
 
       return active.map(spec => ({
@@ -233,12 +270,113 @@ export default {
         async execute(callId, params) {
           const grant = grants.get(ctx.runId), route = grant?.route ?? resolveRoute(ctx);
           const conn = !route.unavailable && route.getConnection ? route.getConnection() : null;
-          const isLink = spec.name.startsWith('anylink_link_') || spec.name.startsWith('anylink_task_') || spec.name === 'anylink_invoke';
+          const isArtifact = spec.name === 'anylink_file_send' || spec.name.startsWith('anylink_artifact_');
+          const isLink = isArtifact || spec.name.startsWith('anylink_link_') || spec.name.startsWith('anylink_task_') || spec.name === 'anylink_invoke';
 
           if (isLink) {
             if (route.unavailable || !conn) return failure('DEVICE_CONTEXT_UNCONFIGURED', '当前 Agent 没有可用的云端连接，未执行任务操作。');
             const headers = { 'Idempotency-Key': hash(`${ctx.runId ?? ctx.sessionKey ?? 'local'}:${callId}:${spec.name}`) };
             try {
+              if (spec.name === 'anylink_artifact_upload' || spec.name === 'anylink_file_send') {
+                const localPath = expandHome(params.path);
+                if (!existsSync(localPath)) return failure('FILE_NOT_FOUND', `本地文件不存在：${localPath}`);
+                const st = statSync(localPath);
+                if (!st.isFile()) return failure('NOT_A_FILE', `路径不是普通文件：${localPath}`);
+                if (st.size > MAX_ARTIFACT_BYTES) return failure('ARTIFACT_TOO_LARGE', `文件大小 ${(st.size / 1024 / 1024).toFixed(2)} MiB 超过 10 MiB 限制`);
+                const bytes = readFileSync(localPath);
+                const filename = sanitizeFilename(params.filename || path.basename(localPath));
+                const contentType = params.content_type || inferMime(filename);
+                const uploaded = await request(conn, '/edge/v1/artifacts', 'POST', {
+                  filename,
+                  content_type: contentType,
+                  data_base64: bytes.toString('base64'),
+                  ...(params.task_id ? { task_id: params.task_id } : {}),
+                  ...(params.ttl_seconds !== undefined ? { ttl_seconds: params.ttl_seconds } : {}),
+                }, {}, 60000);
+                if (spec.name === 'anylink_artifact_upload') return result(uploaded);
+
+                let target = params.target_agent_id ? { agent_id: params.target_agent_id }
+                  : params.target_device_slug ? { device_slug: params.target_device_slug }
+                  : params.target_device_id ? { device_id: params.target_device_id }
+                  : params.target_device_name ? { device_name: params.target_device_name }
+                  : params.target_agent_key ? { agent_key: params.target_agent_key }
+                  : undefined;
+                if (!target) {
+                  const dir = await request(conn, '/edge/v1/directory');
+                  const peers = (dir.items ?? []).filter(i => i.device?.id && i.device.id !== conn.device_id);
+                  const androidOnline = peers.filter(i => i.device.platform === 'android' && (i.agents ?? []).some(a => a.ws_online || a.online));
+                  const androidAny = peers.filter(i => i.device.platform === 'android');
+                  const chosen = androidOnline.length === 1 ? androidOnline[0]
+                    : androidAny.length === 1 ? androidAny[0]
+                    : peers.length === 1 ? peers[0] : null;
+                  if (!chosen) return failure('TARGET_DEVICE_REQUIRED', '未指定目标设备且无法唯一确定接收手机，请先调用 anylink_link_directory 并传入 target_device_slug 或 target_device_id。');
+                  const preferredAgent = (chosen.agents ?? []).find(a => a.ws_online || a.online) ?? (chosen.agents ?? [])[0];
+                  target = preferredAgent ? { agent_id: preferredAgent.id } : { device_id: chosen.device.id };
+                }
+                const note = params.note ? String(params.note).slice(0, 500) : undefined;
+                const task = await request(conn, '/edge/v1/tasks', 'POST', {
+                  target,
+                  capability: 'file.deliver',
+                  instruction: note ? `接收来自 Mac 的文件《${filename}》：${note}` : `接收来自 Mac 的文件《${filename}》`,
+                  input: {
+                    artifact_id: uploaded.id,
+                    filename: uploaded.filename,
+                    content_type: uploaded.content_type,
+                    size_bytes: uploaded.size_bytes,
+                    sha256: uploaded.sha256,
+                    ...(note ? { note } : {}),
+                  },
+                }, headers, 20000);
+                return result({
+                  sent: true,
+                  artifact_id: uploaded.id,
+                  task_id: task.id,
+                  state: task.state,
+                  filename: uploaded.filename,
+                  content_type: uploaded.content_type,
+                  size_bytes: uploaded.size_bytes,
+                  sha256: uploaded.sha256,
+                  target,
+                });
+              }
+              if (spec.name === 'anylink_artifact_download') {
+                const resp = await fetch(conn.server + '/edge/v1/artifacts/' + encodeURIComponent(params.artifact_id), {
+                  method: 'GET',
+                  signal: AbortSignal.timeout(60000),
+                  headers: { Authorization: `Bearer ${conn.token}` },
+                });
+                if (!resp.ok) {
+                  let errCode = `HTTP_${resp.status}`;
+                  try { const j = await resp.json(); if (j?.error?.code) errCode = j.error.code; } catch {}
+                  return failure(errCode, `下载云端附件失败：${errCode}`);
+                }
+                const buf = Buffer.from(await resp.arrayBuffer());
+                const expectedSha = resp.headers.get('x-anylink-sha256');
+                const actualSha = createHash('sha256').update(buf).digest('hex');
+                if (expectedSha && expectedSha !== actualSha) return failure('SHA256_MISMATCH', '下载的文件校验和不一致，已拒绝保存');
+                const rawName = resp.headers.get('x-anylink-filename') ? decodeURIComponent(resp.headers.get('x-anylink-filename')) : 'attachment.bin';
+                const cleanName = sanitizeFilename(rawName);
+                const contentType = resp.headers.get('content-type') || inferMime(cleanName);
+                let outFile;
+                if (params.destination_path) {
+                  const dest = expandHome(params.destination_path);
+                  if (existsSync(dest) && statSync(dest).isDirectory()) {
+                    outFile = uniqueTargetPath(dest, cleanName);
+                  } else if (String(params.destination_path).endsWith('/') || String(params.destination_path).endsWith(path.sep)) {
+                    mkdirSync(dest, { recursive: true });
+                    outFile = uniqueTargetPath(dest, cleanName);
+                  } else {
+                    mkdirSync(path.dirname(dest), { recursive: true });
+                    outFile = existsSync(dest) ? uniqueTargetPath(path.dirname(dest), path.basename(dest)) : dest;
+                  }
+                } else {
+                  const defaultDir = path.join(os.homedir(), 'Downloads', 'AnyLink');
+                  mkdirSync(defaultDir, { recursive: true });
+                  outFile = uniqueTargetPath(defaultDir, cleanName);
+                }
+                writeFileSync(outFile, buf, { mode: 0o644 });
+                return result({ saved_path: outFile, filename: path.basename(outFile), content_type: contentType, size_bytes: buf.length, sha256: actualSha });
+              }
               if (spec.name === 'anylink_link_directory') return result(await request(conn, '/edge/v1/directory'));
               if (spec.name === 'anylink_task_status') return result(await request(conn, '/edge/v1/tasks/' + encodeURIComponent(params.id)));
               if (spec.name === 'anylink_task_cancel') return result(await request(conn, '/edge/v1/tasks/' + encodeURIComponent(params.id) + '/cancel', 'POST', {}, headers));

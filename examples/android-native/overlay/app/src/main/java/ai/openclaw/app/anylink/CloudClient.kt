@@ -114,6 +114,10 @@ internal data class CloudConnection(
 internal interface LinkTransport {
   suspend fun request(method: String, path: String, body: JsonObject? = null, key: String? = null, revision: Int? = null): JsonObject
   suspend fun completion(body: JsonObject, onText: (String) -> Unit): JsonObject
+  suspend fun uploadArtifact(bytes: ByteArray, filename: String, contentType: String = "application/octet-stream"): JsonObject =
+    throw LinkFailure("UNSUPPORTED", "当前传输不支持上传附件")
+  suspend fun downloadArtifact(artifactId: String): DownloadedArtifact =
+    throw LinkFailure("UNSUPPORTED", "当前传输不支持下载附件")
   fun cancel()
 }
 
@@ -213,6 +217,44 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
       throw if (error is LinkFailure) error else LinkFailure("STREAM_INCOMPLETE", "模型响应未完整确认，没有自动重发", true)
     } catch (_: Exception) {
       throw LinkFailure("INVALID_STREAM", "模型响应格式未完整确认，没有自动重发或执行工具", true)
+    } finally { inFlight.remove(call) }
+  }
+
+  override suspend fun uploadArtifact(bytes: ByteArray, filename: String, contentType: String): JsonObject = withContext(Dispatchers.IO) {
+    if (bytes.size > AnyLinkFiles.MAX_BYTES) throw LinkFailure("ARTIFACT_TOO_LARGE", "文件超过 10 MiB 上限")
+    val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+    val payload = buildJsonObject {
+      put("filename", str(AnyLinkFiles.sanitizeFilename(filename)))
+      put("content_type", str(contentType.substringBefore(';').trim().ifBlank { "application/octet-stream" }))
+      put("data_base64", str(b64))
+    }
+    request("POST", "/edge/v1/artifacts", payload)
+  }
+
+  override suspend fun downloadArtifact(artifactId: String): DownloadedArtifact = withContext(Dispatchers.IO) {
+    val encodedId = java.net.URLEncoder.encode(artifactId.trim(), "UTF-8")
+    val call = call("GET", "/edge/v1/artifacts/$encodedId", null, null, null)
+    inFlight.add(call)
+    try {
+      call.execute().use { response ->
+        if (!response.isSuccessful) {
+          val raw = runCatching { response.body.string() }.getOrDefault("")
+          val code = runCatching { (linkJson.parseToJsonElement(raw).jsonObject["error"] as? JsonObject)?.text("code") }.getOrNull()?.takeIf { it.isNotBlank() } ?: "HTTP_${response.code}"
+          throw LinkFailure(code, "下载附件失败：$code", response.code >= 500)
+        }
+        val bytes = response.body.bytes()
+        if (bytes.size > AnyLinkFiles.MAX_BYTES + 1024) throw LinkFailure("ARTIFACT_TOO_LARGE", "下载的附件超过 10 MiB 上限")
+        val actualSha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val expectedSha = response.header("X-AnyLink-SHA256")?.trim().orEmpty()
+        if (expectedSha.isNotBlank() && !expectedSha.equals(actualSha, ignoreCase = true)) {
+          throw LinkFailure("SHA256_MISMATCH", "附件完整性校验未通过")
+        }
+        val rawName = response.header("X-AnyLink-Filename")?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) } ?: "attachment.bin"
+        val mime = response.header("Content-Type")?.substringBefore(';')?.trim()?.ifBlank { "application/octet-stream" } ?: "application/octet-stream"
+        DownloadedArtifact(bytes = bytes, filename = AnyLinkFiles.sanitizeFilename(rawName), contentType = mime, sha256 = actualSha)
+      }
+    } catch (error: IOException) {
+      throw if (error is LinkFailure) error else LinkFailure("TRANSPORT_ERROR", "下载附件连接中断", false)
     } finally { inFlight.remove(call) }
   }
 
