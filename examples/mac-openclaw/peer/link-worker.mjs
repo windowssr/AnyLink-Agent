@@ -11,7 +11,7 @@ import { createAgentAskHandler } from './agent-ask.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
-const STALE_FULL_ACCESS_BOUNDARY = /OUTSIDE_ROOT|开放目录内|不在.*开放目录|主目录根层|仅限.*开放目录|无法.*主目录|不能.*\/Users\//i;
+const STALE_FULL_ACCESS_BOUNDARY = /OUTSIDE_ROOT|开放目录内|不在.*开放目录|主目录根层|仅限.*开放目录|无法.*主目录|不能.*\/Users\/|MAC_CONTROL_HANDSHAKE_FAILED|控制主机握手暂未完成/i;
 const FULL_ACCESS_FACT_TITLE = 'Mac 跨设备全权限模式已开启';
 
 /** When Mac has full_access enabled, automatically delete stale OUTSIDE_ROOT / sandbox boundary memories

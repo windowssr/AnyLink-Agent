@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
 import {paths} from './configure.mjs';
+import {ensureControlHost} from './control/client.mjs';
 const connection=JSON.parse(fs.readFileSync(paths.connection,'utf8'));
 const node=path.join(paths.runtime,'node_modules/node/bin/node'),cli=path.join(paths.runtime,'node_modules/openclaw/openclaw.mjs');
 const log=event=>process.stdout.write(JSON.stringify({event,time:new Date().toISOString()})+'\n');
@@ -20,6 +21,8 @@ function connect(){
   tunnel.on('error',retry);tunnel.on('exit',retry);
 }
 if(connection.ssh_host!==null)connect();
+// When the owner has enabled Mac computer control, disable App Nap for Peekaboo and silently launch it in the background.
+ensureControlHost(paths.root).then(res=>{if(res.attempted)log('peekaboo_control_host_started');}).catch(()=>{});
 const env={...process.env,PATH:path.dirname(node)+':'+(process.env.PATH??'/usr/bin:/bin'),OPENCLAW_STATE_DIR:paths.state,OPENCLAW_CONFIG_PATH:path.join(paths.state,'openclaw.json'),OPENCLAW_NO_RESPAWN:'1',NODE_COMPILE_CACHE:path.join(paths.state,'compile-cache'),ANYLINK_DEVICE_TOKEN:connection.token};
 // The native local Gateway stays alive while the cloud tunnel reconnects.
 // DeepSeek credentials never enter this process; OpenClaw owns the Agent loop.

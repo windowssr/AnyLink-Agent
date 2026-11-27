@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {controlStatus,bridgeSocket} from './client.mjs';
+import {controlStatus,bridgeSocket,ensureControlHost} from './client.mjs';
 
 async function fixture(fn){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-control-status-'));
@@ -30,4 +30,9 @@ test('wrong host identity and explicit trust failures never fall back or retry',
   let calls=0;const wrong={success:true,data:{selected:{...host.data.selected,socketPath:'/tmp/other-host.sock'}}};
   assert.equal((await controlStatus(root,async()=>{calls++;return wrong;})).ready,false);assert.equal(calls,1);
   calls=0;assert.equal((await controlStatus(root,async()=>{calls++;return {success:false,error:{code:'AUTHENTICATION_FAILED'}};})).ready,false);assert.equal(calls,1);
+}));
+test('ensureControlHost is a safe no-op when computer control is disabled',()=>fixture(async root=>{
+  fs.writeFileSync(path.join(root,'data/mac/control/control.json'),'{"enabled":false}');
+  const res=await ensureControlHost(root,{forceWake:true});
+  assert.deepEqual(res,{attempted:false,running:false});
 }));

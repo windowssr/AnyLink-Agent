@@ -70,6 +70,12 @@ final class MacControlCoordinator: NSObject {
         guard FileManager.default.fileExists(atPath: helper.path) else {
             information.stringValue = "缺少 Peekaboo 控制组件，请重新安装当前版本的 AnyLink.app。"; return
         }
+        // Prevent macOS App Nap from throttling Peekaboo below its 1.0s diagnostic handshake window.
+        let defaults = Process()
+        defaults.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        defaults.arguments = ["write", "boo.peekaboo.mac", "NSAppSleepDisabled", "-bool", "YES"]
+        try? defaults.run()
+        defaults.waitUntilExit()
         let running = NSWorkspace.shared.runningApplications.contains { $0.bundleURL?.standardizedFileURL == helper.standardizedFileURL }
         guard !running else { return }
         let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = false; configuration.hides = true
