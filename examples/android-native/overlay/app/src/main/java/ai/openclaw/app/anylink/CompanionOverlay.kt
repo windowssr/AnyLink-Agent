@@ -126,7 +126,7 @@ internal object CompanionOverlay {
       WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
       WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
       PixelFormat.TRANSLUCENT,
-    ).apply { gravity = Gravity.TOP or Gravity.START; this.x = x; this.y = y }
+    ).apply { gravity = Gravity.TOP or Gravity.START; this.x = x; this.y = y; alpha = runtime.overlayOpacity.value }
 
     val gestures = OverlayGestures(application, runtime, wm, { params }, { hideTargetRect }) { nx, ny ->
       layout.x = nx; layout.y = ny; runCatching { wm.updateViewLayout(frame, layout) }
@@ -151,6 +151,14 @@ internal object CompanionOverlay {
   private fun removeHideTarget() {
     hideTarget?.let { runCatching { windowManager?.removeView(it) } }
     hideTarget = null
+  }
+
+  @Synchronized
+  fun setOpacity(value: Float) {
+    val view = root ?: return
+    val layout = params ?: return
+    layout.alpha = value.coerceIn(0.2f, 1f)
+    runCatching { windowManager?.updateViewLayout(view, layout) }
   }
 
   private fun showHideTarget(context: Context) {

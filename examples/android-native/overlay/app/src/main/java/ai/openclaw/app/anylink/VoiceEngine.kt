@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -157,10 +159,11 @@ internal class VoiceVadDetector(
 }
 
 /** Capability selection is shared by preflight and capture; an unavailable cloud is never a fallback. */
-internal fun chooseVoiceEngine(preferred: String, system: Boolean, cloud: Boolean): String? = when (preferred) {
+internal fun chooseVoiceEngine(preferred: String, system: Boolean, cloud: Boolean, offline: Boolean = false): String? = when (preferred) {
   "cloud" -> if (cloud) "cloud" else null
   "system" -> if (system) "system" else null
-  else -> if (cloud) "cloud" else if (system) "system" else null
+  "offline" -> if (offline) "offline" else null
+  else -> if (offline) "offline" else if (cloud) "cloud" else if (system) "system" else null
 }
 
 /** One immutable callback set per capture. Retired recognizers and HTTP responses cannot finish a newer turn. */
@@ -169,11 +172,17 @@ internal class VoiceRecognizerController(
   private val scope: CoroutineScope,
   private val connection: () -> CloudConnection?,
   private val isCloudAsrAvailable: () -> Boolean,
+  private val systemSpeech: SystemSpeechPlatform = AndroidSystemSpeechPlatform(context),
+  private val systemPreference: () -> String = { "auto" },
+  private val onSystemStatus: (String) -> Unit = {},
+  private val onActivity: (Boolean) -> Unit = {},
+  private val offlineSpeech: OfflineSpeechPlatform? = null,
 ) {
   companion object {
     const val MODE_AUTO = "auto"
     const val MODE_CLOUD = "cloud"
     const val MODE_SYSTEM = "system"
+    const val MODE_OFFLINE = "offline"
     private const val SAMPLE_RATE = 16000
   }
   private class Session(
@@ -194,10 +203,11 @@ internal class VoiceRecognizerController(
   private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
     .connectTimeout(12, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(35, TimeUnit.SECONDS).build()
   @Volatile private var current: Session? = null
+  private val offlineCaptureMutex = Mutex()
   val isActive: Boolean get() = current != null
   private fun owns(s: Session) = current === s && !s.stopped
-  fun available(preferred: String): Boolean = chooseVoiceEngine(preferred,
-    runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false), isCloudAsrAvailable()) != null
+  private fun systemAvailable() = systemSpeech.catalog().candidates(systemPreference()).isNotEmpty()
+  fun available(preferred: String): Boolean = chooseVoiceEngine(preferred, systemAvailable(), isCloudAsrAvailable(), offlineSpeech?.available() == true) != null
 
   fun start(preferredMode: String = MODE_AUTO, silenceEndMs: Long = 1300L,
     onState: (String) -> Unit, onLevel: (Float) -> Unit, onPartial: (String) -> Unit,
@@ -205,19 +215,32 @@ internal class VoiceRecognizerController(
   ) {
     cancel()
     val mode = chooseVoiceEngine(preferredMode,
-      runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false), isCloudAsrAvailable())
+      systemAvailable(), isCloudAsrAvailable(), offlineSpeech?.available() == true)
     if (mode == null) {
-      onError("ASR_NOT_AVAILABLE", if (preferredMode == MODE_CLOUD) "服务器尚未启用语音识别，可在语音设置切换系统识别。" else "手机没有可用的系统识别服务，服务器也尚未启用语音识别。请先配置识别服务。")
+      val message = when (preferredMode) {
+        MODE_OFFLINE -> "请先在「保活」中下载本地离线识别模型。"
+        MODE_CLOUD -> "服务器尚未启用语音识别，可在语音设置切换本地或系统识别。"
+        else -> "手机未提供可调用的系统识别服务，或所选服务已不可用。请在「保活」下载本地离线模型，或检测系统服务。"
+      }
+      onSystemStatus(message)
+      onError("ASR_NOT_AVAILABLE", message)
       return
     }
     val s = Session(mode, silenceEndMs, onState, onLevel, onPartial, onFinal, onError)
     current = s
+    onActivity(true)
     onState("starting")
-    if (mode == MODE_CLOUD) startCloud(s) else startSystem(s, preferredMode == MODE_AUTO)
+    when (mode) {
+      MODE_OFFLINE -> startOffline(s)
+      MODE_CLOUD -> startCloud(s)
+      else -> startSystem(s, preferredMode == MODE_AUTO)
+    }
   }
-  fun cancel() {
+  fun cancel(reason: String = "识别已取消") {
     val s = current ?: return
     current = null; s.stopped = true
+    onActivity(false)
+    if (s.mode == MODE_SYSTEM) onSystemStatus(reason)
     s.request?.cancel()
     runCatching { s.recorder?.stop() }
     s.job?.cancel()
@@ -228,11 +251,14 @@ internal class VoiceRecognizerController(
     s.watchdog?.let(main::removeCallbacks); s.watchdog = null
     val recognizer = s.recognizer; s.recognizer = null
     // Capture the retired instance, never access a new session's recognizer from a posted cleanup.
-    main.post { runCatching { recognizer?.cancel() }; runCatching { recognizer?.destroy() } }
+    val cleanup = Runnable { runCatching { recognizer?.cancel() }; runCatching { recognizer?.destroy() } }
+    if (Looper.myLooper() == Looper.getMainLooper()) cleanup.run() else main.post(cleanup)
   }
   private fun finish(s: Session, text: String = "", code: String = "NO_SPEECH", message: String = "没有听清，请再说一次。") {
     if (!owns(s)) return
     current = null; s.stopped = true
+    onActivity(false)
+    if (s.mode == MODE_SYSTEM) onSystemStatus(if (text.isNotBlank()) "系统识别已完成" else "识别已结束：$message（$code）")
     destroySystem(s); s.level(0f)
     if (text.isNotBlank()) s.final(text.trim()) else s.error(code, message)
   }
@@ -242,54 +268,87 @@ internal class VoiceRecognizerController(
   }
   fun finishNow() {
     val s = current ?: return
-    if (s.mode == MODE_CLOUD) s.finish = true else {
+    s.finish = true
+    if (s.mode == MODE_SYSTEM) {
+      if (s.recognizer == null) { finish(s, s.latest); return }
       runCatching { s.recognizer?.stopListening() }
       watchdog(s, 2000) { finish(s, s.latest) }
     }
   }
   private fun startSystem(s: Session, fallback: Boolean) {
+    // Only the OS default/on-device services are selected automatically. Other installed services need an explicit choice.
+    val attempts = systemSpeech.catalog().attempts(systemPreference())
+    startSystemAttempt(s, fallback, attempts, 0)
+  }
+  private fun startSystemAttempt(s: Session, fallback: Boolean, attempts: List<SystemSpeechTarget>, index: Int) {
     main.post {
-      if (!owns(s)) return@post
+      if (!owns(s) || s.finish) return@post
+      val target = attempts.getOrNull(index) ?: run {
+        finish(s, code = "NO_SYSTEM_ASR", message = "没有可用的系统语音识别服务，请在「保活」中检测服务。"); return@post
+      }
+      val sr = runCatching { systemSpeech.create(target) }.getOrNull()
+      // A retired service must not deliver callbacks or timeouts into its replacement in the same capture.
+      fun active() = owns(s) && s.recognizer === sr && sr != null
       fun fail(code: String, message: String) {
         if (!owns(s)) return
-        if (fallback && isCloudAsrAvailable()) {
+        onSystemStatus("${target.label}：$message（$code）")
+        if (s.finish) { finish(s, s.latest, code, message); return }
+        val terminal = code in setOf("MIC_PERMISSION", "MIC_UNAVAILABLE")
+        if (!terminal && index + 1 < attempts.size) {
+          destroySystem(s)
+          s.level(0f); s.state("starting")
+          onSystemStatus("${target.label}未完成识别，正在重试${attempts[index + 1].label}…")
+          main.postDelayed({ if (owns(s) && !s.finish) startSystemAttempt(s, fallback, attempts, index + 1) }, 350)
+        } else if (!terminal && fallback && isCloudAsrAvailable()) {
           destroySystem(s)
           // A new capture has its own mode and callback ownership, including finishNow().
           start(MODE_CLOUD, s.silenceMs, s.state, s.level, s.partial, s.final, s.error)
         } else finish(s, code = code, message = message)
       }
-      val sr = runCatching { SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
-      if (sr == null) { fail("NO_SYSTEM_ASR", "无法启动手机系统语音识别。"); return@post }
+      if (sr == null) { fail("NO_SYSTEM_ASR", "无法创建${target.label}。"); return@post }
       s.recognizer = sr
-      watchdog(s, 8000) { fail("ASR_START_TIMEOUT", "系统语音识别没有响应，请检查系统语音服务。") }
-      sr.setRecognitionListener(object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-          if (!owns(s)) return
-          s.state("listening")
-          watchdog(s, 32000) { runCatching { sr.stopListening() }; watchdog(s, 2000) { finish(s, s.latest) } }
-        }
-        override fun onBeginningOfSpeech() = Unit
-        override fun onRmsChanged(rmsdB: Float) { if (owns(s)) s.level(((rmsdB + 2f) / 12f).coerceIn(0f, 1f)) }
-        override fun onBufferReceived(buffer: ByteArray?) = Unit
-        override fun onEndOfSpeech() { if (owns(s)) { s.state("transcribing"); watchdog(s, 6000) { finish(s, s.latest, "ASR_TIMEOUT", "识别超时，请重试。") } } }
+      if (index > 0) { s.latest = ""; s.partial("") }
+      var capturing = false
+      var ending = false
+      fun captureStarted() {
+        if (!active() || capturing || ending || s.finish) return
+        capturing = true
+        s.state("listening")
+        onSystemStatus("${target.label}已响应，正在收音")
+        watchdog(s, 32000) { if (active()) {
+          ending = true; s.finish = true; s.state("transcribing")
+          runCatching { sr.stopListening() }; watchdog(s, 2000) { if (active()) finish(s, s.latest) }
+        } }
+      }
+      onSystemStatus("正在启动${target.label}（第 ${index + 1}/${attempts.size} 次）…")
+      watchdog(s, 12000) { if (active()) fail("ASR_START_TIMEOUT", "${target.label}未返回识别状态。请在「保活」中检测或更换系统服务；输入法语音输入也可用于文字聊天。") }
+      val listener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) = captureStarted()
+        override fun onBeginningOfSpeech() = captureStarted()
+        override fun onRmsChanged(rmsdB: Float) { if (active()) { captureStarted(); s.level(if (rmsdB.isFinite()) ((rmsdB + 2f) / 12f).coerceIn(0f, 1f) else 0f) } }
+        override fun onBufferReceived(buffer: ByteArray?) { if (buffer != null && buffer.isNotEmpty()) captureStarted() }
+        override fun onEndOfSpeech() { if (active()) { ending = true; s.level(0f); s.state("transcribing"); onSystemStatus("${target.label}正在转写")
+          watchdog(s, 6000) { if (active()) finish(s, s.latest, "ASR_TIMEOUT", "系统服务已收音，但没有返回文字，请重试或更换系统服务。") }
+        } }
         override fun onPartialResults(results: Bundle?) {
-          if (!owns(s)) return
+          if (!active()) return
+          captureStarted()
           val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
           if (text.isNotBlank()) { s.latest = text; s.partial(text) }
         }
-        override fun onResults(results: Bundle?) = finish(s,
-          results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().ifBlank { s.latest })
+        override fun onResults(results: Bundle?) { if (active()) {
+          onSystemStatus("${target.label}已返回识别结果")
+          finish(s, results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().ifBlank { s.latest })
+        } }
         override fun onError(error: Int) {
-          if (!owns(s)) return
+          if (!active()) return
           when (error) {
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT, SpeechRecognizer.ERROR_NO_MATCH -> finish(s, s.latest)
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> finish(s, code = "MIC_PERMISSION", message = "请授予麦克风权限后重试。")
-            SpeechRecognizer.ERROR_AUDIO -> finish(s, code = "MIC_UNAVAILABLE", message = "麦克风无法录音，请检查是否被其他应用占用。")
-            else -> fail("ASR_ERROR_$error", "系统识别暂时不可用，请检查语音服务或切换识别引擎。")
+            else -> systemSpeechError(error).let { (code, message) -> fail(code, message) }
           }
         }
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
-      })
+      }
       val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
@@ -297,7 +356,65 @@ internal class VoiceRecognizerController(
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, s.silenceMs)
       }
-      runCatching { sr.startListening(intent) }.onFailure { fail("ASR_START_FAILED", "无法启动系统语音识别。") }
+      runCatching { sr.setRecognitionListener(listener); sr.startListening(intent) }.onFailure {
+        fail(if (it is SecurityException) "MIC_PERMISSION" else "ASR_START_FAILED", if (it is SecurityException) "系统未允许语音服务访问麦克风，请检查应用权限和系统麦克风开关。" else "无法启动${target.label}。")
+      }
+    }
+  }
+  @SuppressLint("MissingPermission")
+  private fun startOffline(s: Session) {
+    s.job = scope.launch(Dispatchers.IO) {
+      try { offlineCaptureMutex.withLock {
+        if (!owns(s)) return@withLock
+        if (s.finish) { withContext(Dispatchers.Main) { finish(s, s.latest) }; return@withLock }
+        val capture = requireNotNull(offlineSpeech).open()
+        var recorder: AudioRecord? = null
+        try {
+          if (!owns(s)) return@withLock
+          if (s.finish) { withContext(Dispatchers.Main) { finish(s, s.latest) }; return@withLock }
+          val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+          check(minimum > 0)
+          recorder = listOf(MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC).firstNotNullOfOrNull { source ->
+            runCatching { AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minimum * 4, SAMPLE_RATE * 4)) }.getOrNull()?.let {
+              if (it.state == AudioRecord.STATE_INITIALIZED) it else { it.release(); null }
+            }
+          } ?: throw IllegalStateException("麦克风无法录音，请检查权限及音频占用。")
+          val rec = recorder
+          s.recorder = rec
+          if (!owns(s)) return@withLock
+          rec.startRecording()
+          withContext(Dispatchers.Main) { if (owns(s)) s.state("listening") }
+          val buffer = ShortArray(640)
+          val started = android.os.SystemClock.elapsedRealtime()
+          val vad = VoiceVadDetector(silenceEndMs = s.silenceMs).also { it.reset(started) }
+          var samples = 0
+          while (isActive && owns(s) && !s.finish) {
+            val count = rec.read(buffer, 0, buffer.size)
+            if (count < 0) throw IllegalStateException("麦克风录音中断，请重试。")
+            if (count == 0) continue
+            samples += count
+            val rms = WavEncoder.pcm16Rms(buffer, count)
+            val result = capture.accept(buffer, count)
+            withContext(Dispatchers.Main) { if (owns(s)) {
+              s.level((rms * 5.5f).coerceIn(0f, 1f))
+              if (result.text.isNotBlank() && result.text != s.latest) { s.latest = result.text; s.partial(result.text) }
+            } }
+            val now = android.os.SystemClock.elapsedRealtime()
+            val ended = vad.feed(rms, now) == VoiceVadDetector.Decision.SPEECH_ENDED
+            if ((result.text.isNotBlank() && (ended || (result.endpoint && !vad.hasSpeech))) || (result.text.isBlank() && now - started > 12000) || samples >= SAMPLE_RATE * 30) break
+          }
+          if (!owns(s)) return@withLock
+          rec.stop(); s.recorder = null
+          withContext(Dispatchers.Main) { if (owns(s)) { s.level(0f); s.state("transcribing") } }
+          val text = capture.finish().ifBlank { s.latest }
+          withContext(Dispatchers.Main) { finish(s, text) }
+        } finally {
+          s.recorder = null
+          runCatching { recorder?.stop() }; recorder?.release(); capture.close()
+        }
+      } } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+      catch (_: LinkageError) { withContext(Dispatchers.Main) { finish(s, code = "OFFLINE_RUNTIME_UNAVAILABLE", message = "当前安装包无法加载本地识别引擎，请更新安装包。") } }
+      catch (error: Exception) { withContext(Dispatchers.Main) { finish(s, code = "OFFLINE_ASR_FAILED", message = error.message?.take(140) ?: "本地语音识别失败，请重试或重新下载模型。") } }
     }
   }
   @SuppressLint("MissingPermission")

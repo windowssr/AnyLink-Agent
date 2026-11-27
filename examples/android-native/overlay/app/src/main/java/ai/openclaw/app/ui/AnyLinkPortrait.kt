@@ -5,7 +5,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
+import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -29,6 +31,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +48,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -50,6 +59,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.ByteArrayInputStream
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -67,7 +81,7 @@ private fun mimeForAsset(path: String): Pair<String, String?> = when {
   else -> "application/octet-stream" to null
 }
 
-private fun openBundledAsset(context: Context, rawPath: String): WebResourceResponse {
+internal fun openBundledAsset(context: Context, rawPath: String): WebResourceResponse {
   // Use Uri.decode (RFC 3986) rather than URLDecoder so '+' in filenames is never turned into spaces.
   val decoded = runCatching { Uri.decode(rawPath) }.getOrDefault(rawPath)
   val rel = decoded.removePrefix("/assets/").trimStart('/')
@@ -109,7 +123,13 @@ internal fun AnyLinkPortrait(
   var webFailed by remember { mutableStateOf(false) }
   var paused by remember { mutableStateOf(false) }
   var webEpoch by remember { mutableIntStateOf(0) }
-  var autoReloaded by remember { mutableStateOf(false) }
+  var restarting by remember { mutableStateOf(false) }
+  val monitor = remember(reloadTrigger) { AvatarLoadMonitor() }
+  val context = LocalContext.current
+  val privateCharacter = remember(context) {
+    runCatching { context.assets.open("anylink/character-mode.json").bufferedReader().use { org.json.JSONObject(it.readText()).optBoolean("private_character") } }.getOrDefault(false)
+  }
+  var status by remember { mutableStateOf("正在加载形象…") }
   val animationsEnabled = rememberSystemAnimationsEnabled()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val statusCallback by rememberUpdatedState(onStatusChange)
@@ -129,13 +149,66 @@ internal fun AnyLinkPortrait(
     }.toString()
   val currentPayload by rememberUpdatedState(payload)
 
+  fun report(message: String) {
+    status = message
+    statusCallback(message)
+  }
+
+  fun failed(view: WebView, reason: String) {
+    if (web !== view || webFailed || restarting) return
+    ready = false
+    if (monitor.retry()) {
+      restarting = true
+      report("${reason.take(180)}；正在以兼容模式重试…")
+      webEpoch++
+    } else {
+      webFailed = true
+      report("形象加载失败：${reason.take(200)}")
+    }
+  }
+
+  fun receive(view: WebView, signal: AvatarSignal) {
+    if (web !== view || webFailed || restarting) return
+    when (signal.state) {
+      "ready" -> if (!ready) {
+        ready = true
+        report(if (privateCharacter) "Live2D 已就绪" else "公开版形象已就绪")
+        view.evaluateJavascript("window.anylinkMobileAvatar?.update($currentPayload)", null)
+      }
+      "loading" -> if (!ready && signal.message.isNotBlank() && signal.message != status) report(signal.message)
+      "failed" -> failed(view, signal.message.ifBlank { "脚本执行失败" })
+    }
+  }
+
+  // Start with the actual WebView, not ON_RESUME: Compose can create the view after that event.
+  // Poll a keyless presentation snapshot as well as listening to console messages (OEM WebViews differ).
+  LaunchedEffect(web, paused, ready, webEpoch) {
+    val view = web ?: return@LaunchedEffect
+    if (paused || ready || webFailed) return@LaunchedEffect
+    monitor.start(SystemClock.elapsedRealtime())
+    while (isActive && web === view && !ready && !webFailed) {
+      val encoded = withTimeoutOrNull(1500) {
+        suspendCancellableCoroutine<String?> { continuation ->
+          view.evaluateJavascript("JSON.stringify(window.anylinkAvatarStatus || null)") { value ->
+            if (continuation.isActive) continuation.resume(value)
+          }
+        }
+      }
+      parseAvatarSignal(encoded)?.let { receive(view, it) }
+      if (monitor.timedOut(SystemClock.elapsedRealtime()) && !ready) {
+        failed(view, "加载超时（$status）")
+        break
+      }
+      delay(500)
+    }
+  }
+
   LaunchedEffect(reloadTrigger) {
     if (reloadTrigger > 0) {
       ready = false
       webFailed = false
-      autoReloaded = false
       webEpoch++
-      statusCallback("正在重新初始化 Live2D WebView…")
+      report("正在重新初始化形象…")
     }
   }
 
@@ -148,15 +221,6 @@ internal fun AnyLinkPortrait(
       } else if (event == Lifecycle.Event.ON_RESUME) {
         paused = false
         web?.onResume()
-        val view = web
-        if (view != null && !webFailed && !autoReloaded) view.postDelayed({
-          if (web === view && !ready && !webFailed && !autoReloaded) {
-            autoReloaded = true
-            Log.w(TAG, "avatar not ready 25s after resume; reloading once")
-            statusCallback("加载超时，正在自动重试一次…")
-            view.reload()
-          }
-        }, 25_000)
       }
     }
     lifecycle.addObserver(observer)
@@ -177,14 +241,15 @@ internal fun AnyLinkPortrait(
     // or cover with an opaque full-screen layer (which causes Android Chromium to throttle WebGL rAF).
     if (!webFailed) {
       key(webEpoch) {
-        DisposableEffect(webEpoch) {
-          onDispose { web?.stopLoading(); web?.destroy(); web = null }
-        }
         AndroidView(
           modifier = Modifier.fillMaxSize(),
           factory = { context ->
             WebView(context).apply {
+              // AndroidView's default WRAP_CONTENT makes Chromium force a zero-height HTML
+              // layout viewport even when Compose measures this view to fill the screen.
+              layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
               web = this
+              restarting = false
               isFocusable = false
               setBackgroundColor(AndroidColor.TRANSPARENT)
               settings.javaScriptEnabled = true
@@ -198,35 +263,39 @@ internal fun AnyLinkPortrait(
               settings.mediaPlaybackRequiresUserGesture = true
               webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                  val uri = request.url
-                  // Let WebView handle inline data: and blob: URLs natively (used by Pixi ImageBitmap/Blob & Cubism).
-                  if (uri.scheme == "data" || uri.scheme == "blob") return null
-                  if (uri.scheme == "https" && uri.host == "appassets.androidplatform.net" && uri.path?.startsWith("/assets/anylink/") == true) {
-                    return openBundledAsset(context, uri.encodedPath ?: uri.path.orEmpty())
-                  }
-                  Log.w(TAG, "blocked request: ${uri.scheme}://${uri.host}${uri.path}")
-                  return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                  return avatarResourceResponse(context, request.url)
                 }
 
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                  request.url.scheme != "https" || request.url.host != "appassets.androidplatform.net" || request.url.path != "/assets/anylink/portrait.html"
+
+                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                  if (web === view) report("正在打开形象页面…")
+                }
+
+                override fun onPageFinished(view: WebView, url: String?) {
+                  if (web === view && !ready && !webFailed) {
+                    view.evaluateJavascript("JSON.stringify(window.anylinkAvatarStatus || null)") { value ->
+                      parseAvatarSignal(value)?.let { receive(view, it) }
+                    }
+                  }
+                }
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                   val desc = "${error.errorCode}: ${error.description} (${request.url.lastPathSegment})"
                   Log.w(TAG, "web error: $desc")
-                  if (request.isForMainFrame) statusCallback("WebView 加载失败：$desc")
+                  if (isRequiredAvatarResource(request.url, request.isForMainFrame)) failed(view, "页面或模型资源加载失败：$desc")
                 }
 
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
                   val desc = "HTTP ${errorResponse.statusCode} (${request.url.lastPathSegment})"
                   Log.w(TAG, "http error: $desc")
-                  statusCallback("资源加载异常：$desc")
+                  if (isRequiredAvatarResource(request.url, request.isForMainFrame)) failed(view, "资源加载异常：$desc")
                 }
 
                 override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
                   Log.w(TAG, "render process gone didCrash=${detail.didCrash()}; recreating WebView")
-                  ready = false
-                  statusCallback("WebView 渲染进程已重启（crash=${detail.didCrash()}）")
-                  if (webEpoch < 2) webEpoch++ else webFailed = true
+                  failed(view, "渲染进程退出（crash=${detail.didCrash()}）")
                   return true
                 }
               }
@@ -234,26 +303,21 @@ internal fun AnyLinkPortrait(
                 override fun onConsoleMessage(message: ConsoleMessage): Boolean {
                   val text = message.message().orEmpty()
                   Log.i(TAG, "console: ${text.take(400)}")
+                  if (web !== this@apply || webFailed || restarting) return true
                   when {
-                    text == "ANYLINK_AVATAR_READY" -> {
-                      ready = true
-                      statusCallback("Live2D 已就绪")
-                      evaluateJavascript("window.anylinkMobileAvatar?.update($currentPayload)", null)
-                    }
+                    text == "ANYLINK_AVATAR_READY" -> receive(this@apply, AvatarSignal("ready", ""))
                     text.startsWith("ANYLINK_AVATAR_STAGE:") -> {
-                      statusCallback(text.removePrefix("ANYLINK_AVATAR_STAGE:").trim())
+                      receive(this@apply, AvatarSignal("loading", text.removePrefix("ANYLINK_AVATAR_STAGE:").trim()))
                     }
                     text.startsWith("ANYLINK_AVATAR_WARN:") -> {
                       Log.w(TAG, text)
                     }
                     text == "ANYLINK_AVATAR_CONTEXT_LOST" -> {
                       ready = false
-                      statusCallback("WebGL 上下文丢失，等待恢复…")
+                      report("WebGL 上下文丢失，等待恢复…")
                     }
                     text.startsWith("ANYLINK_AVATAR_FAILED") -> {
-                      ready = false
-                      webFailed = true
-                      statusCallback("已回退静态头像（${text.removePrefix("ANYLINK_AVATAR_FAILED:").trim().ifBlank { "未知错误" }}）")
+                      failed(this@apply, text.removePrefix("ANYLINK_AVATAR_FAILED:").trim().ifBlank { "未知错误" })
                     }
                   }
                   return true
@@ -261,11 +325,20 @@ internal fun AnyLinkPortrait(
 
                 override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
               }
-              statusCallback("正在加载 Live2D 引擎与模型…")
-              loadUrl("https://appassets.androidplatform.net/assets/anylink/portrait.html")
+              report(if (monitor.compatible) "正在以兼容模式打开形象页面…" else "正在打开形象页面…")
+              // Attach and measure before starting Chromium; the lifecycle may already be RESUMED.
+              post { if (web === this) {
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) onResume()
+                loadUrl("https://appassets.androidplatform.net/assets/anylink/portrait.html" + if (monitor.compatible) "?compat=1" else "")
+              } }
             }
           },
           update = { if (ready) it.evaluateJavascript("window.anylinkMobileAvatar?.update($payload)", null) },
+          onRelease = { view ->
+            if (web === view) web = null
+            view.stopLoading()
+            view.destroy()
+          },
         )
       }
     }
@@ -286,12 +359,26 @@ internal fun AnyLinkPortrait(
           },
         contentAlignment = Alignment.TopCenter,
       ) {
-        Image(
+        if (!privateCharacter || webFailed) Image(
           painter = painterResource(R.drawable.anylink_portrait),
           contentDescription = "大肥鱼形象",
           contentScale = ContentScale.Fit,
           modifier = Modifier.fillMaxSize(),
         )
+        if (privateCharacter) Column(
+          Modifier.align(Alignment.BottomCenter),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          if (!webFailed) CircularProgressIndicator(Modifier.size(24.dp))
+          Text(if (webFailed) "形象暂未加载" else status, textAlign = TextAlign.Center)
+          if (webFailed) TextButton(onClick = {
+            monitor.reset()
+            ready = false
+            webFailed = false
+            webEpoch++
+          }) { Text("重新加载") }
+        }
       }
     }
   }

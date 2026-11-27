@@ -56,6 +56,14 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val partialTranscript = MutableStateFlow("")
   val voiceEngineMode = MutableStateFlow(prefs.getString("voice_engine_mode", VoiceRecognizerController.MODE_AUTO) ?: VoiceRecognizerController.MODE_AUTO)
   val cloudAsrEnabled = MutableStateFlow(false)
+  val systemVoiceService = MutableStateFlow(prefs.getString("system_voice_service", "auto") ?: "auto")
+  val systemVoiceOptions = MutableStateFlow<List<SystemSpeechTarget>>(emptyList())
+  val systemVoiceDiagnostic = MutableStateFlow("")
+  val systemVoiceStatus = MutableStateFlow("尚未启动识别")
+  val voiceCaptureActive = MutableStateFlow(false)
+  val systemVoiceTestActive = MutableStateFlow(false)
+  val systemVoiceTestResult = MutableStateFlow("")
+  val systemVoiceTestMode = MutableStateFlow(VoiceRecognizerController.MODE_SYSTEM)
   val callActive = MutableStateFlow(false)
   val callState = MutableStateFlow("idle") // "listening" | "transcribing" | "thinking" | "speaking" | "muted"
   val callMuted = MutableStateFlow(false)
@@ -81,8 +89,13 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val activityVisible = MutableStateFlow(false)
   val serviceRunning = MutableStateFlow(false)
   val overlayVisible = MutableStateFlow(false)
+  val overlayOpacity = MutableStateFlow(prefs.getFloat("overlay_opacity", 1f).let { if (it.isFinite()) it.coerceIn(0.2f, 1f) else 1f })
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  private val offlineModels = OfflineAsrModels(app, scope)
+  val offlineModelState = offlineModels.state
+  private val offlineSpeech = SherpaOfflineSpeech(offlineModels)
+  private var offlineDownloadJob: Job? = null
   private val pendingLocalApprovals = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
   // Separate CloudClient instances for chat vs background worker prevent concurrent cancel clobbering.
   private var chatCloud: CloudClient? = null
@@ -92,6 +105,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private var turn: Job? = null
   private var workerJob: Job? = null
   private var callTimerJob: Job? = null
+  private var callEndSoundJob: Job? = null
   private var callTurnJob: Job? = null
   @Volatile private var callTurnRunning = false
   private var voiceStartJob: Job? = null
@@ -104,10 +118,13 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private var lastGestureAt = 0L
   private val localSpeech = SystemSpeechSynthesizer(app) { reportVoiceError(it) }
   private val callAudio = CallAudioController(app, { speaker, label -> callSpeakerOn.value = speaker; callAudioRoute.value = label }, { voiceNotice.value = it }, {
-    endVoiceCall(); voiceNotice.value = "通话已暂停：音频被其他应用接管。"
+    endVoiceCall(playSound = false); voiceNotice.value = "通话已暂停：音频被其他应用接管。"
   })
+  private val callSounds = CallSoundPlayer(app)
   private var speechPlayer: SpeechPlayer? = null
-  private val voiceEngine = VoiceRecognizerController(app, scope, { connection.value }, { cloudAsrEnabled.value })
+  private val systemSpeech = AndroidSystemSpeechPlatform(app)
+  private val voiceEngine = VoiceRecognizerController(app, scope, { connection.value }, { cloudAsrEnabled.value },
+    systemSpeech, { systemVoiceService.value }, { systemVoiceStatus.value = it }, { voiceCaptureActive.value = it }, offlineSpeech)
   private var lastSpokenRun = ""
   private val announcedTasks = mutableSetOf<String>()
 
@@ -797,16 +814,95 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   }
 
   fun onActivityStarted() { activityVisible.value = true; prefs.edit().putBoolean("overlay_dismissed", false).apply(); syncWorker(); refreshOverlay() }
-  fun onActivityStopped() { activityVisible.value = false; syncWorker(); refreshOverlay() }
+  fun onActivityStopped() { cancelSystemVoiceTest(); activityVisible.value = false; syncWorker(); refreshOverlay() }
   fun onServiceStarted() { serviceRunning.value = true; syncWorker(); refreshOverlay() }
-  fun onServiceStopped() { serviceRunning.value = false; endVoiceCall(); voiceEngine.cancel(); listening.value = false; syncWorker(); refreshOverlay() }
+  fun onServiceStopped() {
+    serviceRunning.value = false
+    // The activity owns foreground voice input; losing the background keepalive must not cancel it.
+    if (!activityVisible.value) {
+      voiceEngine.cancel("后台保活服务停止，识别已取消")
+      endVoiceCall(playSound = false)
+      listening.value = false
+    }
+    syncWorker(); refreshOverlay()
+  }
 
   // ---- voice input & real-time voice call ----------------------------------
 
   fun setVoiceEngineMode(mode: String) {
-    val clean = if (mode in setOf(VoiceRecognizerController.MODE_AUTO, VoiceRecognizerController.MODE_CLOUD, VoiceRecognizerController.MODE_SYSTEM)) mode else VoiceRecognizerController.MODE_AUTO
+    val clean = if (mode in setOf(VoiceRecognizerController.MODE_AUTO, VoiceRecognizerController.MODE_CLOUD, VoiceRecognizerController.MODE_SYSTEM, VoiceRecognizerController.MODE_OFFLINE)) mode else VoiceRecognizerController.MODE_AUTO
     prefs.edit().putString("voice_engine_mode", clean).apply()
     voiceEngineMode.value = clean
+  }
+
+  fun downloadOfflineModel() {
+    if (offlineDownloadJob?.isActive == true || offlineModelState.value.ready) return
+    offlineDownloadJob = scope.launch {
+      offlineModels.download()
+      if (offlineModelState.value.ready) setVoiceEngineMode(VoiceRecognizerController.MODE_OFFLINE)
+    }
+  }
+
+  fun cancelOfflineModelDownload() { offlineModels.cancelDownload(); offlineDownloadJob?.cancel(); offlineDownloadJob = null }
+
+  fun refreshSystemVoiceServices() {
+    val catalog = systemSpeech.catalog()
+    systemVoiceOptions.value = catalog.options
+    systemVoiceDiagnostic.value = buildString {
+      append("应用版本：${ai.openclaw.app.BuildConfig.VERSION_NAME}\n")
+      append("设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}\n")
+      append("麦克风权限：${if (micGranted()) "已允许" else "未允许"}\n")
+      append("默认识别服务：${catalog.defaultService.ifBlank { "系统未报告默认服务" }}\n")
+      append("标准识别入口：${if (catalog.defaultAvailable) "已注册（需实际启动验证）" else "未提供"}\n")
+      append("设备内识别入口：${if (catalog.onDeviceAvailable) "已提供（中文模型需由系统支持）" else "未提供"}\n")
+      append("可选择的识别服务：${catalog.services.size}")
+      for (service in catalog.services) append("\n${service.label}：${service.id}")
+      for (detail in catalog.discoveryDetails) append("\n$detail")
+    }
+  }
+
+  fun setSystemVoiceService(id: String) {
+    refreshSystemVoiceServices()
+    if (systemVoiceOptions.value.none { it.id == id }) return
+    prefs.edit().putString("system_voice_service", id).apply()
+    systemVoiceService.value = id
+    systemVoiceStatus.value = "服务已选择，下次识别生效"
+  }
+
+  fun testSystemVoice(mode: String = VoiceRecognizerController.MODE_SYSTEM) {
+    if (callActive.value) { systemVoiceTestResult.value = "请先挂断通话，再测试系统识别。"; return }
+    if (!micGranted()) { systemVoiceTestResult.value = "请先允许麦克风权限。"; return }
+    interruptVoice()
+    val offline = mode == VoiceRecognizerController.MODE_OFFLINE
+    systemVoiceTestMode.value = if (offline) VoiceRecognizerController.MODE_OFFLINE else VoiceRecognizerController.MODE_SYSTEM
+    systemVoiceTestActive.value = true
+    systemVoiceTestResult.value = if (offline) "正在加载本地识别模型，请稍候。" else "正在启动，请说「你好，大肥鱼」。"
+    listening.value = true
+    voiceEngine.start(systemVoiceTestMode.value,
+      onState = { state -> systemVoiceTestResult.value = when (state) {
+        "listening" -> "正在听，请说「你好，大肥鱼」。"
+        "transcribing" -> "正在等待识别结果…"
+        else -> if (offline) "正在加载本地识别模型…" else "正在连接系统语音服务…"
+      } },
+      onLevel = { voiceLevel.value = it },
+      onPartial = { if (it.isNotBlank()) systemVoiceTestResult.value = "正在识别：$it" },
+      onFinal = { text ->
+        systemVoiceTestActive.value = false; listening.value = false; voiceLevel.value = 0f
+        systemVoiceTestResult.value = "识别成功：$text"
+      },
+      onError = { code, message ->
+        systemVoiceTestActive.value = false; listening.value = false; voiceLevel.value = 0f
+        systemVoiceTestResult.value = "$message（$code）"
+      },
+    )
+  }
+
+  fun cancelSystemVoiceTest() {
+    if (!systemVoiceTestActive.value) return
+    systemVoiceTestActive.value = false
+    voiceEngine.cancel("识别测试已取消")
+    listening.value = false; voiceLevel.value = 0f
+    systemVoiceTestResult.value = "测试已停止。"
   }
 
   fun micGranted() = androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -857,30 +953,46 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     if (callActive.value) return
     if (connection.value == null) { voiceNotice.value = "请先连接服务器。"; return }
     if (!micGranted()) { voiceNotice.value = "需要麦克风权限才能开始通话。"; return }
+    callEndSoundJob?.cancel(); callEndSoundJob = null
+    callSounds.stop(); callAudio.stop()
     interruptAll()
     if (!runCatching { callAudio.start(callSpeakerOn.value) }.onFailure { voiceNotice.value = "无法准备通话音频，请检查音频设备后重试。" }.getOrDefault(false)) { callAudio.stop(); return }
     val stamp = ++callEpoch
     callActive.value = true; callMuted.value = false; callState.value = "connecting"
     callDurationSec.value = 0; callStartedAt = 0; callRetries = 0
     callUserCaption.value = ""; callAssistantCaption.value = "正在准备通话…"
-    callTimerJob = scope.launch {
+    resumeListeningJob = scope.launch {
       connection.value?.let { withTimeoutOrNull(3500) { refreshAudioStatus(it) } }
       if (!callActive.value || stamp != callEpoch) return@launch
-      startCallListening()
+      try {
+        if (callAudio.requestPlaybackFocus()) callSounds.play(CallCue.Start)
+      } finally { if (stamp == callEpoch && callActive.value) callAudio.releasePlaybackFocus() }
+      delay(100) // Let the cue's acoustic tail settle before the recognizer opens the microphone.
+      if (callActive.value && stamp == callEpoch) startCallListening()
+    }
+    callTimerJob = scope.launch {
       while (isActive && callActive.value && stamp == callEpoch) {
         if (callStartedAt > 0) callDurationSec.value = ((android.os.SystemClock.elapsedRealtime() - callStartedAt) / 1000).toInt()
         delay(1000)
       }
     }
   }
-  fun endVoiceCall() {
-    if (!callActive.value) return
+  fun endVoiceCall(playSound: Boolean = true) {
+    if (!callActive.value) {
+      if (!playSound) { callEndSoundJob?.cancel(); callEndSoundJob = null; callSounds.stop(); callAudio.stop() }
+      return
+    }
     callActive.value = false; callEpoch++; callTurnEpoch++
     callState.value = "idle"; callMuted.value = false; callTurnRunning = false
     callTimerJob?.cancel(); callTimerJob = null
     callTurnJob?.cancel(); callTurnJob = null
     resumeListeningJob?.cancel(); resumeListeningJob = null
-    interruptAll(); callAudio.stop()
+    interruptAll()
+    val stamp = callEpoch
+    if (playSound) callEndSoundJob = scope.launch {
+      try { if (callAudio.requestPlaybackFocus()) callSounds.play(CallCue.End) }
+      finally { if (stamp == callEpoch && !callActive.value) callAudio.stop() }
+    } else { callSounds.stop(); callAudio.stop() }
     voiceNotice.value = "通话已结束，聊天记录已保留。"
   }
   fun toggleCallMute() {
@@ -972,9 +1084,10 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     }
   }
   fun interruptVoice() {
+    cancelSystemVoiceTest()
     voiceEpoch++; voiceStartJob?.cancel(); voiceStartJob = null
     resumeListeningJob?.cancel(); resumeListeningJob = null
-    speechPlayer?.interrupt(); localSpeech.cancel(); voiceEngine.cancel(); callAudio.releasePlaybackFocus()
+    speechPlayer?.interrupt(); localSpeech.cancel(); voiceEngine.cancel(); callSounds.stop(); callAudio.releasePlaybackFocus()
     listening.value = false; speaking.value = false; voiceLevel.value = 0f; playbackLevel.value = 0f; partialTranscript.value = ""
     agent.value?.state?.update { it.copy(gesture = "none", sequence = UUID.randomUUID().toString()) }
   }
@@ -992,6 +1105,12 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   fun overlayPermitted() = android.provider.Settings.canDrawOverlays(app)
   fun overlayEnabled() = prefs.getBoolean("overlay_enabled", true)
   fun setOverlayEnabled(value: Boolean) { prefs.edit().putBoolean("overlay_enabled", value).apply(); refreshOverlay() }
+  fun setOverlayOpacity(value: Float) {
+    val clean = if (value.isFinite()) value.coerceIn(0.2f, 1f) else 1f
+    overlayOpacity.value = clean
+    prefs.edit().putFloat("overlay_opacity", clean).apply()
+    CompanionOverlay.setOpacity(clean)
+  }
   fun setMaxSteps(value: Int) {
     val clean = if (value <= 0) 0 else value.coerceIn(10, UNLIMITED_AGENT_STEPS_CAP)
     prefs.edit().putInt("agent_max_steps", clean).apply()

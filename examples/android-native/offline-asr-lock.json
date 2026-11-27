@@ -1,0 +1,22 @@
+{
+  "runtime": {
+    "version": "2.0.3",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.3/sherpa-onnx-2.0.3.aar",
+    "bytes": 52411426,
+    "sha256": "4c766e2e74c9d33d595338c21fe3b305c73ba45d47e96a235675c33142a2ec50"
+  },
+  "model": {
+    "id": "zipformer-bilingual-zh-en-int8-2023-02-20",
+    "label": "中英流式离线识别",
+    "repository": "csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+    "revision": "98590b7ed6443e77b714204da2757d75e1a642f4",
+    "license": "Apache-2.0",
+    "files": [
+      {"name": "encoder-epoch-99-avg-1.int8.onnx", "bytes": 181895032, "sha256": "8fa764187a261844f859d7143ebaa563af5d10adfece4c18a8f414c88cba2a9b"},
+      {"name": "decoder-epoch-99-avg-1.onnx", "bytes": 13876452, "sha256": "2e3b5ec371f8899ee6acd829fd753ba45772df57a91bdf37cde3136354e7db7d"},
+      {"name": "joiner-epoch-99-avg-1.onnx", "bytes": 12833618, "sha256": "5f2adc585dd1bec6421c8bb8660d2a73fc8b9ceb24491ef51399ba2a2f0fc31b"},
+      {"name": "tokens.txt", "bytes": 56317, "sha256": "a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3"}
+    ],
+    "downloadOrigins": ["https://huggingface.co", "https://hf-mirror.com"]
+  }
+}

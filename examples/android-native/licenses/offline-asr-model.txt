@@ -1,0 +1,18 @@
+AnyLink optional offline Chinese and English speech recognition
+
+Runtime: sherpa-onnx 2.0.3, Apache License 2.0
+https://github.com/k2-fsa/sherpa-onnx/tree/v2.0.3
+ONNX Runtime: MIT License (Microsoft Corporation).
+Full license texts are included with this application.
+
+Model: csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+Revision: 98590b7ed6443e77b714204da2757d75e1a642f4
+License declared by the model author: Apache License 2.0
+https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+
+The model is downloaded separately after the user selects download. Model files
+are verified against pinned SHA-256 digests before use and stored in the app's
+private files directory. Speech recognition runs locally and does not upload
+recordings. Sending the resulting text in chat follows the existing chat flow.
+Contextual biasing includes the application character name 大肥鱼. It does not
+replace arbitrary recognition results or add test phrases to the language model.

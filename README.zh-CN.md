@@ -12,6 +12,7 @@
   <a href="README.md"><img src="https://img.shields.io/badge/lang-English-0ea5e9?style=flat-square" alt="English" /></a>
   <a href="protocol/README.zh-CN.md"><img src="https://img.shields.io/badge/Protocol-v3.2-22d3ee?style=flat-square" alt="Protocol v3.2" /></a>
   <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.9.2"><img src="https://img.shields.io/badge/Release-v0.9.2-0284c7?style=flat-square" alt="Release v0.9.2" /></a>
+  <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.8"><img src="https://img.shields.io/badge/Android-v0.10.0--preview.8-0ea5e9?style=flat-square" alt="Android v0.10.0-preview.8" /></a>
   <a href="sdk-python/README.md"><img src="https://img.shields.io/badge/Python-anylink--agent-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python SDK" /></a>
   <a href="sdk/README.zh-CN.md"><img src="https://img.shields.io/badge/TypeScript-@anylink--agent%2Fsdk-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript SDK" /></a>
   <a href="mcp/README.md"><img src="https://img.shields.io/badge/MCP-@anylink--agent%2Fmcp-10b981?style=flat-square" alt="MCP Server" /></a>
@@ -170,8 +171,10 @@ AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protoc
 2. **手机端（Android 原生独立 Agent）** — 详见配置文档：[`examples/android-native/README.md`](examples/android-native/README.md)
    - 手机本地运行完整对话循环与 SQLite 幂等账本，**不依赖 Mac 在线**；全新「深海玻璃陪伴」视觉设计：全屏无遮挡 Live2D 舞台（纯 ASCII 模型资产路径 + 无遮挡 WebView 渲染 +「保活」内实时引擎状态诊断与一键重载）+ 陪伴/阅读双视图切换 + **原生 Compose Markdown 渲染**（标题、加粗、行内/多行代码块、列表、引用、表格、可点链接）+ v3.2 高危审批/追问交互卡片 + 预设密码一键登录 + 后台保活与高优先级主动消息弹窗通知；
    - **双向跨设备操控**：与 Mac 完全对等，收到来自电脑的 `agent.invoke` 后直接调用手机无障碍工具（打开 App、看屏、点击、输入、滚动等）实际执行并实时汇报进度（可在「保活」页一键开关远程操控权限）；
-   - **双引擎语音输入 + 全屏 Live2D 实时通话 + 人设精炼口播**：输入框常驻 `🎤` 语音输入按钮（系统在线/厂商识别 + `AudioRecord` 回声消除/VAD 云端识别 `POST /model/v1/audio/transcriptions` 自动兜底，兼容国产无 GMS 机型）；顶栏一键 **「📞 通话」** 进入全屏 Live2D 实时通话（免手连续多轮、逐句流式抢先播报、实时口型联动、随时打断、静音与扬声器/听筒切换）；普通回复播报统一经独立人设改写 API 提炼为 1–2 句核心口语；
-   - **📎 跨设备双向传文件**（200 MiB 流式读写、事前能力/容量协商、大文件确认弹窗与收件卡片）+ **手机 Agent 默认 100 步执行上限**（`50 / 100 / 200 / 不限`、循环内自动裁剪旧屏幕与一键「继续执行」）+ 离线 Outbox / SSE 断线续接。
+   - **本地离线、系统与可选云端语音识别**：在「保活 → 本地离线识别」下载约 199 MiB 的中英模型，逐文件校验 SHA-256；本地转文字无需云端 ASR 密钥。自动模式优先使用已安装的本地模型，也可手动选择系统识别；识别后的文字仍按正常流程交给服务器处理。
+   - **电话式轮流对话**：接通/挂断音效、静音、挂断、系统确认的听筒/外放切换、全屏人物以及随播报同步的口型和动作。点击人物可停止播报继续说话；外放下全双工开口打断仍不在已验证范围内。
+   - **Android v0.10.0-preview.8**：[公开 APK 与发布说明](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.8)。修复 WebView 网页零高度导致的人物空白，提供 SVG 控件、聊天文件预览和可保存的悬浮窗透明度。公开 APK 使用原创 SVG 形象；含授权 Live2D 模型/Core 的私有 APK 仅保留本地。云端服务、SDK 与 Mac 版本仍为 v0.9.2。
+   - **跨设备双向传文件**（200 MiB 流式读写、事前能力/容量协商、大文件确认弹窗与收件卡片）+ **手机 Agent 默认 100 步执行上限**（`50 / 100 / 200 / 不限`、循环内自动裁剪旧屏幕与一键「继续执行」）+ 离线 Outbox / SSE 断线续接。
 
 ### 跨设备双向文件互传、能力协商与上传上限配置
 
@@ -181,7 +184,7 @@ AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protoc
   - `GET /edge/v1/protocol` 动态下发云端当前真实 `limits`（`artifact_max_bytes` / `artifact_quota_bytes` / `artifact_default_ttl_seconds`），各端不再依赖硬编码。
   - 每个边缘 Agent 通过 `POST /edge/v1/link/capabilities` 或 `PATCH /edge/v1/agent/profile` 声明结构化 `file_policy`（`accepts_files`、`max_file_bytes`、`confirm_over_bytes`、`available_bytes`、`allowed_mime_prefixes`），并在 `GET /edge/v1/directory` 公开。
   - **上传前预检 + 服务端兜底拦截**：发送方与云端在上传/派发前即核对对方是否允许收文件、单文件接收上限与剩余磁盘空间，不满足时直接返回明确错误提示（`TARGET_FILE_RECEIVE_DISABLED` / `TARGET_FILE_TOO_LARGE` / `TARGET_INSUFFICIENT_STORAGE` / `TARGET_FILE_TYPE_NOT_ALLOWED`），**不白白浪费上传流量**；因单次文件过大、空间不足或主人拒收导致的 `declined` 显式标记 `learn_boundary: false`，绝不污染云端能力边界记忆。
-- **手机 → 电脑**：在 Android 对话框左下角点 `📎` 选文件（支持文档、图片、音视频、压缩包等）；**留空附言点「发文件」**直接事前校验并零延迟传给在线 Mac 保存到 `~/Downloads/AnyLink/`；也可**附加文字指令**（如"帮我整理这份 PDF 的重点"），手机上传后自动带 `artifact_id` 派发给电脑处理。
+- **手机 → 电脑**：在 Android 对话框左下角点附件按钮选文件（支持文档、图片、音视频、压缩包等）；**留空附言点「发文件」**直接事前校验并零延迟传给在线 Mac 保存到 `~/Downloads/AnyLink/`；也可**附加文字指令**（如"帮我整理这份 PDF 的重点"），手机上传后自动带 `artifact_id` 派发给电脑处理。
 - **电脑 → 手机（含大文件确认弹窗）**：在 Mac 或手机对话中直接让大肥鱼发送本机文件（如"把桌面的周报发到我手机"），Mac 预检通过后调用 `anylink_file_send` 流式上传并派发 `file.deliver`；手机端下载前先校验本机开关、上限与剩余存储空间——若文件超过手机设置的**大文件确认阈值（默认 50 MB）**，会先弹出高优先级横幅通知与聊天确认卡片，等主人点头后再开始流式下载（防止流量环境下偷跑大文件）；完成后写入 `下载/AnyLink/` 并生成带「打开文件 / 分享」按钮的文件卡片。
 - **手机端可视化策略开关**：在手机右上角 **「保活」→「跨设备接收文件策略」** 中可一键开关是否允许接收文件、切换单文件最大接收上限（`50 MB / 200 MB / 500 MB / 1 GB`）与大文件弹窗确认阈值（`不弹窗 / 20 MB / 50 MB / 100 MB`），修改后实时同步到云端目录。
 - **SDK / 服务器脚本节点**：使用 `@anylink-agent/sdk` 的 `client.checkFileTransferTarget(...)`、`client.uploadArtifact(...)` / `client.downloadArtifactToFile(...)` 或 `AnyLinkWorker({ filePolicy })`。

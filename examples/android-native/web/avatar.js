@@ -5,11 +5,11 @@
   const emotions = new Set(['neutral', 'happy', 'curious', 'comfort', 'apologetic', 'excited', 'shy']);
   let app, model, ready = false, paused = false, expressionKey = '', gestureSequence, actionEpoch = 0;
   let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false, safeTop: 0, safeBottom: 0, mini: false, call: false};
-  let touch = 0, lastFrame = performance.now(), baseWidth = 0, baseHeight = 0;
+  let touch = 0, lastFrame = performance.now(), baseWidth = 0, baseHeight = 0, viewWidth = 0, viewHeight = 0;
   const pose = {x: 0, y: 0, tilt: 0, pitch: 0, mouth: 0, body: 0};
 
   function stage(msg) {
-    console.info('ANYLINK_AVATAR_STAGE: ' + msg);
+    window.anylinkAvatarReport('loading', msg);
   }
 
   function viewportSize() {
@@ -33,21 +33,34 @@
     if (!model || !app) return;
     const {w, h} = viewportSize();
     if (w < 16 || h < 16) return;
-    if (app.renderer.width !== w || app.renderer.height !== h) app.renderer.resize(w, h);
+    // renderer.width/height are physical pixels; remember CSS dimensions to avoid resizing
+    // on every fit at fractional Android device densities.
+    if (viewWidth !== w || viewHeight !== h) {
+      app.renderer.resize(w, h);
+      viewWidth = w; viewHeight = h;
+    }
     // Cubism renders outside Pixi stencil masks; clip the canvas rectangle itself, leaving WebView unoccluded.
-    app.view.style.clipPath = `inset(0 0 ${Math.max(0, state.safeBottom)}px 0)`;
+    app.view.style.clipPath = state.call ? 'none' : `inset(0 0 ${Math.max(0, state.safeBottom)}px 0)`;
     if (!baseWidth || !baseHeight) {
       model.scale.set(1);
       baseWidth = Math.max(1, model.width);
       baseHeight = Math.max(1, model.height);
     }
     const mw = baseWidth, mh = baseHeight;
+    if (state.call) {
+      // Fill the viewport from the head through the calves; feet fall below the screen.
+      // Compensate for the character canvas's transparent headroom instead of shrinking to fit the controls.
+      const scale = Math.max((w * 1.18) / mw, (h * 1.38) / mh);
+      model.scale.set(scale);
+      model.position.set(w / 2, 24 - mh * scale * 0.10);
+      return;
+    }
     // Full-bleed deep-sea portrait framing:
     // - Companion mode (!mini): place 大肥鱼 head, maid headdress, whale ears & upper torso
     //   centered cleanly in the upper 54% of the screen, unobstructed above the glass chat sheet.
     // - Reading / keyboard mode (mini): gently scale down and lift slightly so her face peeks above the sheet.
     const safeTop = Math.max(24, Math.min(state.safeTop || 42, h * 0.14));
-    const targetScale = state.call ? (w * 1.7) / mw : state.mini
+    const targetScale = state.mini
       ? Math.min((w * 0.86) / mw, (h * 0.72) / mh)
       : Math.min((w * 1.32) / mw, Math.max((w * 0.96) / mw, (h * 0.96) / mh));
     model.scale.set(targetScale);
@@ -84,15 +97,12 @@
     }
   }
 
-  function hasValidModelAssets() {
-    try {
-      const gl = app?.renderer?.gl;
-      if (!gl || gl.isContextLost?.()) return false;
-      const textures = model?.textures || [];
-      return Boolean(model?.internalModel && textures.length > 0 && textures.every(t => t && t.valid) && baseWidth > 10 && baseHeight > 10);
-    } catch {
-      return false;
-    }
+  function hasVisibleLayout() {
+    // A valid backbuffer can still be clipped away by a zero-height WebView document.
+    return [document.documentElement, document.body, app.view].every(element => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.width >= 16 && bounds.height >= 16;
+    });
   }
 
   async function gesture(name) {
@@ -161,17 +171,16 @@
       try { model.update(16); } catch {}
       app.renderer.render(app.stage);
       try { app.renderer.gl?.finish?.(); } catch {}
-      if (hasRenderedPixels()) return 'pixels';
+      if (hasVisibleLayout() && hasRenderedPixels()) return 'pixels';
       await new Promise(r => setTimeout(r, 200));
     }
-    if (hasValidModelAssets()) {
-      console.warn('ANYLINK_AVATAR_WARN: readpixels_zero_but_textures_valid');
-      return 'textures';
-    }
+    console.warn('ANYLINK_AVATAR_WARN: invisible_surface ' + JSON.stringify({viewport: viewportSize(), htmlHeight: document.documentElement.getBoundingClientRect().height, bodyHeight: document.body.getBoundingClientRect().height}));
     return '';
   }
 
   function createPixiApp(w, h) {
+    const compatible = new URLSearchParams(location.search).get('compat') === '1';
+    if (compatible && PIXI.settings && PIXI.ENV) PIXI.settings.PREFER_ENV = PIXI.ENV.WEBGL;
     // Disable MSAA (antialias: false) on mobile WebView WebGL to avoid Adreno/Mali transparent-canvas blanking bugs.
     try {
       return new PIXI.Application({
@@ -180,8 +189,8 @@
         backgroundAlpha: 0,
         antialias: false,
         autoDensity: true,
-        preserveDrawingBuffer: true,
-        resolution: Math.min(devicePixelRatio || 1, 1.5),
+        preserveDrawingBuffer: !compatible,
+        resolution: compatible ? 1 : Math.min(devicePixelRatio || 1, 1.5),
         powerPreference: 'default',
       });
     } catch (firstErr) {
@@ -240,6 +249,7 @@
     let contextLost = false;
     canvas.addEventListener('webglcontextlost', (event) => {
       event.preventDefault(); contextLost = true; ready = false; console.info('ANYLINK_AVATAR_CONTEXT_LOST');
+      window.anylinkAvatarReport('loading', 'WebGL 上下文丢失，等待恢复…');
       setTimeout(() => { if (contextLost) location.reload(); }, 2500);
     });
     canvas.addEventListener('webglcontextrestored', () => { contextLost = false; console.info('ANYLINK_AVATAR_CONTEXT_RESTORED'); location.reload(); });
@@ -248,15 +258,15 @@
     stage('验证首帧渲染…');
     const verified = await waitForVisibleFrame(16);
     if (!verified) {
-      console.error('ANYLINK_AVATAR_FAILED: blank_webgl_surface');
+      window.anylinkAvatarReport('failed', 'blank_webgl_surface');
       return;
     }
     ready = true;
     apply();
-    console.info('ANYLINK_AVATAR_READY');
+    window.anylinkAvatarReport('ready', 'Live2D 已就绪');
   }
 
   start().catch((err) => {
-    console.error('ANYLINK_AVATAR_FAILED: ' + (err && err.message ? err.message : String(err)));
+    window.anylinkAvatarReport('failed', err && err.message ? err.message : String(err));
   });
 })();

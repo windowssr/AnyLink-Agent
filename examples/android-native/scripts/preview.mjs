@@ -3,22 +3,34 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {root, home} from './layout.mjs';
 const web = path.join(home,'web'), companion = path.join(root,'examples/mac-openclaw/companion');
-const publicMode=process.argv.includes('--public'),port=publicMode?5182:5181;
+const publicMode=process.argv.includes('--public'),packaged=process.argv.includes('--packaged'),port=packaged?5183:publicMode?5182:5181;
+const packagedAssets=path.join(root,'data/android-native/openclaw/apps/android/app/src/main/assets/anylink');
+if(packaged&&publicMode)throw new Error('Choose either packaged assets or the public source preview.');
+if(packaged&&!fs.existsSync(path.join(packagedAssets,'character-mode.json')))throw new Error('Prepare an Android build first.');
 const assets = new Map([
+  ['/avatar/favicon.svg',path.join(web,'favicon.svg')],
+  ['/floating-avatar.png',path.join(root,'data/mac/branding/avatar.png')],
+  ['/call-start.wav',path.join(home,'overlay/app/src/main/res/raw/anylink_call_start.wav')],
+  ['/call-end.wav',path.join(home,'overlay/app/src/main/res/raw/anylink_call_end.wav')],
   ['/preview-speech.mp3',path.join(root,'artifacts/android-native/preview-speech.mp3')],
   ['/avatar/pixi.min.js',path.join(companion,'vendor/pixi.min.js')],
   ['/avatar/cubism4-colors.min.js',path.join(companion,'vendor/cubism4-colors.min.js')],
   ['/avatar/live2dcubismcore.min.js',path.join(root,'data/mac/companion/runtime/live2dcubismcore.min.js')],
 ]);
-const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json','.png':'image/png','.moc3':'application/octet-stream','.svg':'image/svg+xml','.mp3':'audio/mpeg'};
+const types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json','.png':'image/png','.moc3':'application/octet-stream','.svg':'image/svg+xml','.mp3':'audio/mpeg','.wav':'audio/wav'};
 const server = http.createServer((req,res) => {
   if(req.headers.host!==`127.0.0.1:${port}`||!['GET','HEAD'].includes(req.method)){res.writeHead(403).end();return;}
   let route;try{route=decodeURIComponent(new URL(req.url,`http://127.0.0.1:${port}`).pathname);}catch{res.writeHead(400).end();return;}
-  if(publicMode&&((assets.has(route)&&route.startsWith('/avatar/'))||route.startsWith('/avatar/model/'))){res.writeHead(404).end();return;}
+  if(publicMode&&((assets.has(route)&&route.startsWith('/avatar/')&&route!=='/avatar/favicon.svg')||route.startsWith('/avatar/model/'))){res.writeHead(404).end();return;}
+  if(publicMode&&route==='/floating-avatar.png'){res.writeHead(404).end();return;}
   let file=assets.get(route);
+  if(packaged&&route.startsWith('/avatar/')){
+    file=path.resolve(packagedAssets,route.slice('/avatar/'.length));
+    if(!file.startsWith(packagedAssets+path.sep)){res.writeHead(403).end();return;}
+  }
   if(!file){
     const model=route.startsWith('/avatar/model/'),base=model?path.join(root,'data/mac/companion/model'):web;
-    const name=model?route.slice('/avatar/model/'.length):({'/':'preview.html','/avatar/portrait.html':publicMode?'public-portrait.html':'portrait.html','/avatar/avatar.js':'avatar.js','/avatar/public-avatar.js':'public-avatar.js'}[route]??route.slice(1));
+    const name=model?route.slice('/avatar/model/'.length):({'/':'preview.html','/avatar/portrait.html':publicMode?'public-portrait.html':'portrait.html','/avatar/avatar-loader.js':'avatar-loader.js','/avatar/avatar.js':'avatar.js','/avatar/public-avatar.js':'public-avatar.js'}[route]??route.slice(1));
     file=path.resolve(base,name);if(!file.startsWith(base+path.sep)){res.writeHead(403).end();return;}
   }
   if(!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404).end();return;}

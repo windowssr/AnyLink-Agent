@@ -48,6 +48,9 @@ with zipfile.ZipFile(sys.argv[2]) as z:
   assert 'assets/anylink/model/entry.model3.json' in names, 'Private APK is missing the Live2D model'
   assert any('live2dcubismcore' in n.lower() for n in names), 'Private APK is missing the Cubism core'
   assert 'assets/anylink/avatar.js' in names
+  assert 'assets/anylink/avatar-loader.js' in names, 'Private APK is missing the startup monitor'
+  assert any('anylink_portrait' in n and n.endswith('.png') for n in names), 'Private APK must use the private character fallback'
+  assert not any('anylink_portrait' in n and n.endswith('.xml') for n in names), 'Private APK must not use the public robot fallback'
   model_entries = [n for n in names if n.startswith('assets/anylink/model/')]
   assert all(n.isascii() for n in model_entries), f'Non-ASCII Live2D asset paths found: {[n for n in model_entries if not n.isascii()]}'
   model_json = json.loads(z.read('assets/anylink/model/entry.model3.json').decode('utf-8'))
@@ -66,8 +69,18 @@ with zipfile.ZipFile(sys.argv[2]) as z:
  else:
   assert not any(n.endswith('.moc3') or 'live2dcubismcore' in n.lower() or '/anylink/model/' in n for n in names), 'Restricted character assets found in public APK'
   assert not any('anylink_avatar' in n and n.endswith('.png') for n in names), 'Private derived avatar found in public APK'
+  assert not any('anylink_portrait' in n and n.endswith('.png') for n in names), 'Private derived portrait found in public APK'
   assert 'assets/anylink/public-avatar.js' in names
  assert 'assets/anylink/portrait.html' in names
+ assert 'assets/anylink/favicon.svg' in names, 'Missing bundled avatar favicon'
+ assert json.loads(z.read('assets/anylink/offline-asr.json')) == json.loads((root/'examples/android-native/offline-asr-lock.json').read_text()), 'Offline ASR model pins differ from source'
+ assert not any(n.startswith('assets/anylink/') and n.endswith('.onnx') for n in names), 'Offline ASR model should be downloaded separately'
+ for abi in ('arm64-v8a','armeabi-v7a','x86','x86_64'):
+  assert f'lib/{abi}/libsherpa-onnx-jni.so' in names, f'Missing local speech runtime for {abi}'
+ for license_name in ('sherpa-onnx-Apache-2.0.txt','onnxruntime-MIT.txt','offline-asr-model.txt'):
+  assert any(n.endswith('AnyLink-'+license_name) for n in names), f'Missing offline speech notice: {license_name}'
+ for cue in ('anylink_call_start.wav', 'anylink_call_end.wav'):
+  assert any(n.endswith('/'+cue) for n in names), f'Missing call cue: {cue}'
  print(json.dumps({'entries':len(names),'credential_matches':bad}))
 `,root,apk,privateMode?'1':'0'],{encoding:'utf8',maxBuffer:1024*1024}));
 assert.deepEqual(scan.credential_matches,[]);

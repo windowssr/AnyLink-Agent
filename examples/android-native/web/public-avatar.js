@@ -9,4 +9,5 @@ window.anylinkMobileAvatar={update(v){
  document.getElementById('head').style.transform=v?.phase==='listening'?'rotate(2deg)':'none';
  document.getElementById('head').style.transformOrigin='128px 176px';
 }};
+window.anylinkAvatarStatus={state:'ready',message:'公开版形象已就绪'};
 console.info('ANYLINK_AVATAR_READY');

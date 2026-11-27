@@ -39,28 +39,38 @@ internal fun VoiceCallOverlay(
     else -> "正在连接"
   }
   Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-    Text("大肥鱼", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
-    Text("语音通话", fontSize = 12.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 5.dp))
-    Text(if (durationSec > 0 || callState == "listening" || callState == "speaking" || callState == "thinking") "%02d:%02d".format(durationSec / 60, durationSec % 60) else "连接中", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = colors.primary, modifier = Modifier.padding(top = 10.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+      Surface(color = colors.surface.copy(alpha = 0.72f), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+          Text("大肥鱼", fontSize = 21.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
+          Text("语音通话", fontSize = 11.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp))
+        }
+      }
+      Surface(color = colors.surface.copy(alpha = 0.72f), shape = RoundedCornerShape(16.dp)) {
+        Text(if (durationSec > 0 || callState == "listening" || callState == "speaking" || callState == "thinking") "%02d:%02d".format(durationSec / 60, durationSec % 60) else "连接中", fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = colors.primary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+      }
+    }
     Box(Modifier.weight(1f).fillMaxWidth().semantics { contentDescription = if (callState == "error") "重试语音通话" else "打断播报" }.clickable(onClick = onBargeIn))
-    Surface(color = colors.surface.copy(alpha = 0.94f), shape = RoundedCornerShape(24.dp), modifier = Modifier.onGloballyPositioned { onPanelTop(it.positionInRoot().y.toInt()) }) {
-      Column(Modifier.fillMaxWidth().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-          Box(Modifier.size(6.dp).clip(CircleShape).background(if (callState == "error") colors.error else colors.primary))
-          Text(status, fontSize = 12.sp, color = if (callState == "error") colors.error else colors.primary)
-        }
-        if (userCaption.isNotBlank()) Text("你：$userCaption", fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (assistantCaption.isNotBlank()) Text(assistantCaption, fontSize = 15.sp, lineHeight = 22.sp, color = colors.onSurface, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-          CallAction(AppIcon.MicOff.takeIf { muted } ?: AppIcon.Mic, if (muted) "取消静音" else "静音", muted, onToggleMute)
-          Column(modifier = Modifier.clickable(onClick = onEndCall), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(onClick = onEndCall, shape = CircleShape, color = Color(0xFFD94A4A), contentColor = Color.White, modifier = Modifier.size(76.dp)) {
-              Box(contentAlignment = Alignment.Center) { AppIcon(AppIcon.HangUp, "挂断通话", Modifier.size(30.dp)) }
-            }
-            Text("挂断", fontSize = 12.sp, color = colors.onSurfaceVariant)
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Surface(color = colors.surface.copy(alpha = 0.82f), shape = RoundedCornerShape(18.dp)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(if (callState == "error") colors.error else colors.primary))
+            Text(status, fontSize = 12.sp, color = if (callState == "error") colors.error else colors.primary)
           }
-          CallAction(if (speakerOn) AppIcon.Speaker else AppIcon.Earpiece, audioRoute, speakerOn, onToggleSpeaker)
+          if (userCaption.isNotBlank()) Text("你：$userCaption", fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          if (assistantCaption.isNotBlank()) Text(assistantCaption, fontSize = 14.sp, lineHeight = 20.sp, color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
+      }
+      Row(Modifier.fillMaxWidth().padding(top = 8.dp).onGloballyPositioned { onPanelTop(it.positionInRoot().y.toInt()) }, horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+        CallAction(AppIcon.MicOff.takeIf { muted } ?: AppIcon.Mic, if (muted) "取消静音" else "静音", muted, onToggleMute)
+        Column(modifier = Modifier.clickable(onClick = onEndCall), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Surface(onClick = onEndCall, shape = CircleShape, color = Color(0xFFD94A4A), contentColor = Color.White, modifier = Modifier.size(76.dp)) {
+            Box(contentAlignment = Alignment.Center) { AppIcon(AppIcon.HangUp, "挂断通话", Modifier.size(30.dp)) }
+          }
+          Text("挂断", fontSize = 12.sp, color = colors.onSurfaceVariant)
+        }
+        CallAction(if (speakerOn) AppIcon.Speaker else AppIcon.Earpiece, audioRoute, speakerOn, onToggleSpeaker)
       }
     }
   }

@@ -6,11 +6,12 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 
 ---
 
-## 一、核心特性与前端架构（Android `0.10.0-preview.1`）
+## 一、核心特性与前端架构（Android `0.10.0-preview.8`）
 
-- **透明半身舞台与 SVG 图标**：主界面和通话页保留 Live2D 半身形象，按面板实际位置裁切，阅读模式缩小人物。加载失败使用原创透明半身矢量兜底，不再显示圆形头像。界面操作图标来自 `web/icons/` 的 SVG 源文件，并生成原生 VectorDrawable；修改路径定义后运行 `node examples/android-native/scripts/generate-icons.mjs`。
-- **系统识别与可选云端 ASR**：自动模式只选择实际可用的引擎；没有云端配置时保留手机系统识别。录音会话独立管理，取消后的回调、超时和 HTTP 响应不能进入下一轮。服务不可用时明确提示，不进入假接通状态。
-- **电话式语音界面**：静音、居中挂断、听筒/外放，点人物可停止播报并继续说话。使用 API 31+ 通信设备路由，界面跟随系统确认的输出；结束通话恢复音频模式。当前采用自动轮流听说，播放结束后恢复识别，不宣称已实现外放下的全双工开口打断。
+- **透明人物舞台与 SVG 图标**：主界面显示半身，通话页将人物放大至小腿以上、不露脚，阅读模式缩小人物。WebView 明确使用 `MATCH_PARENT`，避免网页零高度；Live2D 就绪同时验证可见布局和真实 GPU 像素。私有版加载失败使用私有形象兜底，公开版使用原创矢量形象。界面操作图标来自 `web/icons/` 的 SVG 源文件，并生成原生 VectorDrawable；修改路径定义后运行 `node examples/android-native/scripts/generate-icons.mjs`。
+- **本地离线、系统与可选云端 ASR**：本地使用 sherpa-onnx 2.0.3 与约 199 MiB 中英流式模型，无需云端密钥，使用束搜索并给人物名称“大肥鱼”加入适度热词偏置。顶栏「保活」下载模型并校验 SHA-256 后即可用于语音输入、通话和本地测试；自动模式优先使用已下载模型，手动系统模式保留原调用。本地模式的录音只在手机内转写，识别后的文字按原有聊天流程发送；对话与回复仍需要 AnyLink 服务器。录音会话独立管理，取消后的回调、超时和 HTTP 响应不能进入下一轮。
+- **电话式语音界面**：接通/挂断音效、静音、居中挂断、听筒/外放，点人物可停止播报并继续说话。使用 API 31+ 通信设备路由，界面跟随系统确认的输出；结束通话恢复音频模式。当前采用自动轮流听说，播放结束后恢复识别，不宣称已实现外放下的全双工开口打断。
+- **悬浮窗透明度**：在「保活」中设置 0–80% 透明度，修改即时生效并保存，重建悬浮窗后继续使用。
 - **真实音频口型与句子动作**：云端音频和系统 TTS 兜底都经过同一播放器；本地 TTS 等待初始化并合成音频文件。按解码后的 20ms RMS 包络及实际播放进度驱动嘴部，静音时闭嘴；字幕使用实际口播，句子开始播放时触发适量挥手、点头或指示动作，打断和挂断取消动作并收口。
 - **聊天内文件预览与持久记录**：接收文件仍保存到“下载/AnyLink”。聊天中显示图片、视频封面、PDF 首页和有长度上限的文本预览；图片可以放大。文件卡片、保存 URI 和接收状态独立存入 SQLite，重启可恢复，不混入模型上下文；未完成接收显示中断。系统打开与分享通过 content URI 授予临时只读权限。
 - **原生 Markdown 与交互卡片**：保留多轮聊天、代码块、列表、表格、跨设备任务确认和追问。
@@ -34,7 +35,7 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 ## 二、数据通路（Protocol v3）
 
 ```text
-Android 原生界面（Live2D 舞台 + Markdown 对话流 + 双引擎语音输入 / 全屏实时通话）
+Android 原生界面（Live2D 舞台 + Markdown 对话流 + 本地/系统/可选云端语音输入 / 全屏实时通话）
   → 本机 DeviceAgent（会话 / 工具循环 / 远程 agent.invoke 执行 / SQLite 幂等账本）
     → AnyLink Cloud Hub (HTTPS + WSS /edge/v1/ws)
       ├── 云端记忆大脑：/edge/v1/memory/assemble & /edge/v1/memory/ingest
@@ -60,7 +61,7 @@ node examples/android-native/scripts/install-gradle.mjs
 node examples/android-native/scripts/build.mjs --test
 ```
 
-### 3. 构建公开版 APK（原创占位形象，可公开分发）
+### 3. 构建公开版 APK（原创 SVG 形象，可公开分发）
 ```bash
 node examples/android-native/scripts/build.mjs
 node examples/android-native/scripts/inspect-apk.mjs
@@ -79,10 +80,13 @@ node examples/android-native/scripts/inspect-apk.mjs --private
 开启手机「USB 调试」连接电脑，使用项目内置 `adb` 安装（或直接把 APK 传到手机点击安装）：
 ```bash
 data/android-native/sdk/platform-tools/adb devices
-data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.10.0-preview.1-private.apk
+data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.10.0-preview.8.apk
+# 已使用私有 Live2D 版的本地自用设备，改为安装同版本 -private.apk
 ```
 
 ---
+
+公开版与私有版使用相同的开发包名和签名，覆盖安装会切换形象资源。需要保留大肥鱼 Live2D 的自用设备，应安装本地私有版；GitHub Release 只提供原创 SVG 形象的公开版。
 
 ## 四、真机使用与后台保活配置
 
@@ -93,6 +97,9 @@ data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/A
    - **电池优化**：强烈建议在国产 ROM（小米/华为/OPPO/vivo/荣耀等）里设为「无限制 / 允许后台高耗电」，避免锁屏或隐藏后被系统强杀。
    - **悬浮权限**（可选）：开启后切后台出现轻量化悬浮球。
    - **无障碍权限**（可选）：开启后可语音或文字让大肥鱼自动操作手机 App（Android 13+ 侧载包需先在「应用信息」右上角允许「受限设置」）。
+   - **本地离线识别**：下载识别模型（约 199 MiB），成功后自动选中本地模式；「测试本地识别」只显示结果，不发送聊天消息。模型下载源、固定修订和文件摘要在 `offline-asr-lock.json`，模型保存在 App 私有目录，同一模型在更新安装包后可继续使用。
+
+构建准备阶段自动下载并校验固定版 sherpa-onnx AAR，缓存到忽略目录 `data/android-native/offline-asr/`。AAR 随公开版和私有版客户端分发，模型在手机上另行下载；两者的许可证位于 `licenses/`，模型二进制不提交仓库。
 
 ## 五、本机视觉与语音样本检查
 
@@ -105,4 +112,6 @@ node examples/android-native/scripts/preview.mjs
 
 预览页覆盖陪伴/阅读、文件卡片、PDF 示例、语音输入状态和电话式控制。点击“播放语音与口型”使用固定中文样本和 Web Audio 实际音量，不启用麦克风、不发送任务。预览不能替代真机系统识别、听筒/耳机路由和后台生命周期验收。
 
-构建产物记录 `source_dirty`，开发 APK 与已经发布的 v0.9.2 分开命名。私有 APK、模型和 Cubism Core 仍只保留本机；公开 APK 使用原创形象。
+79 项 Android Agent/Compose/phone 测试与 13 项脚本测试通过。HONOR BRP-AN80 / Android 15 上已检查私有版 Live2D 显示、阅读视图、前后台切换、冷启动、本地转写和语音通话回复；用户确认听到了回复。同音字准确率仍需后续优化，长时间后台通话、蓝牙/有线耳机及外放全双工尚未完整验收。
+
+发布 APK 从已提交的干净源码构建，记录完整 `source` 和 `source_dirty: false`；公开 Release 提供公开 APK、`release-manifest.json` 和 `SHA256SUMS`。私有 APK、Live2D 模型素材与 Cubism Core 只保留本机；本地 ASR 模型从固定公开源另行下载，不随 APK 或源码分发。

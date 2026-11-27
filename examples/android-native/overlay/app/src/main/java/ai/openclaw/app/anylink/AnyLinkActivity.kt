@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -455,6 +456,7 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
     mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
   }
   var floatEnabled by remember { mutableStateOf(runtime.overlayEnabled()) }
+  val overlayOpacity by runtime.overlayOpacity.collectAsState()
   val maxSteps by runtime.maxSteps.collectAsState()
   val acceptsFiles by runtime.acceptsFiles.collectAsState()
   val maxReceiveBytes by runtime.maxReceiveFileBytes.collectAsState()
@@ -463,6 +465,21 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
   val avatarStatus by runtime.avatarStatus.collectAsState()
   val voiceEngineMode by runtime.voiceEngineMode.collectAsState()
   val cloudAsrEnabled by runtime.cloudAsrEnabled.collectAsState()
+  val offlineModel by runtime.offlineModelState.collectAsState()
+  val systemVoiceService by runtime.systemVoiceService.collectAsState()
+  val systemVoiceOptions by runtime.systemVoiceOptions.collectAsState()
+  val systemVoiceDiagnostic by runtime.systemVoiceDiagnostic.collectAsState()
+  val systemVoiceStatus by runtime.systemVoiceStatus.collectAsState()
+  val voiceCaptureActive by runtime.voiceCaptureActive.collectAsState()
+  val systemVoiceTestActive by runtime.systemVoiceTestActive.collectAsState()
+  val systemVoiceTestResult by runtime.systemVoiceTestResult.collectAsState()
+  val voiceTestMode by runtime.systemVoiceTestMode.collectAsState()
+  var requestedTestMode by remember { mutableStateOf(VoiceRecognizerController.MODE_SYSTEM) }
+  val testMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    if (granted) runtime.testSystemVoice(requestedTestMode) else runtime.systemVoiceTestResult.value = "未获得麦克风权限，测试未开始。"
+  }
+  LaunchedEffect(Unit) { runtime.refreshSystemVoiceServices() }
+  DisposableEffect(runtime) { onDispose { runtime.cancelSystemVoiceTest() } }
   val freeBytes = remember { AnyLinkFiles.availableStorageBytes(context) }
   ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color(0xFFF6FBFE), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -489,6 +506,7 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
         Text("退到后台时显示悬浮球", Modifier.weight(1f), color = DeepInk)
         Switch(checked = floatEnabled, onCheckedChange = { runtime.setOverlayEnabled(it); floatEnabled = it })
       }
+      OverlayTransparencyControl(overlayOpacity, runtime::setOverlayOpacity)
       Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
           Text("允许 Mac 等设备远程操控本机", color = DeepInk)
@@ -498,8 +516,11 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       }
       HorizontalDivider(color = Color(0xFFDCEEF8))
       Text("大肥鱼形象引擎状态", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
+      val webViewVersion = remember {
+        runCatching { android.webkit.WebView.getCurrentWebViewPackage()?.let { "${it.packageName} ${it.versionName}" } }.getOrNull() ?: "不可用"
+      }
       Text(
-        "安装包模式：${if (runtime.privateCharacterMode) "私有 Live2D 版（含大肥鱼模型）" else "开源占位版（不含私有 Live2D 模型）"}\n当前状态：$avatarStatus",
+        "安装包模式：${if (runtime.privateCharacterMode) "私有 Live2D 版（含大肥鱼模型）" else "开源占位版（不含私有 Live2D 模型）"}\n当前状态：$avatarStatus\n系统 WebView：$webViewVersion",
         style = MaterialTheme.typography.bodySmall,
         color = SeaSlate,
       )
@@ -511,8 +532,9 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val voiceModes = listOf(
           VoiceRecognizerController.MODE_AUTO to "自动（推荐）",
-          VoiceRecognizerController.MODE_CLOUD to "云端识别（国产机推荐）",
+          VoiceRecognizerController.MODE_OFFLINE to "本地离线识别",
           VoiceRecognizerController.MODE_SYSTEM to "系统识别",
+          VoiceRecognizerController.MODE_CLOUD to "云端识别",
         )
         items(voiceModes) { (mode, label) ->
           FilterChip(
@@ -525,10 +547,62 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       }
       Text(
         if (cloudAsrEnabled) "云端语音识别已配置，可用于语音输入和通话。"
-        else "当前使用手机系统识别。手机没有系统语音服务时，需要先配置云端识别；文字聊天可正常使用。",
+        else "自动模式优先使用已下载的本地模型；没有模型时尝试系统识别。当前未启用云端识别。",
         style = MaterialTheme.typography.bodySmall,
         color = SoftMist,
       )
+      Text("本地离线语音识别", style = MaterialTheme.typography.titleSmall, color = DeepInk)
+      Text(
+        when {
+          offlineModel.ready -> "中文模型已就绪 · 语音输入和通话均可使用"
+          offlineModel.downloading -> "正在下载识别模型：${offlineModel.receivedBytes / 1048576} / ${offlineModel.totalBytes / 1048576} MB"
+          else -> "首次下载约 ${offlineModel.totalBytes / 1048576} MB，支持中文和英语，之后在手机本地转文字，无需云端密钥。识别后的文字会按现有聊天流程发送。"
+        }, style = MaterialTheme.typography.bodySmall, color = SeaSlate,
+      )
+      if (offlineModel.downloading) LinearProgressIndicator(progress = { (offlineModel.receivedBytes.toFloat() / offlineModel.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+      if (offlineModel.error.isNotBlank()) Text(offlineModel.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!offlineModel.ready) AssistChip(onClick = {
+          if (offlineModel.downloading) runtime.cancelOfflineModelDownload() else runtime.downloadOfflineModel()
+        }, label = { Text(if (offlineModel.downloading) "取消下载" else "下载中文模型") })
+        if (offlineModel.ready) AssistChip(onClick = {
+          if (systemVoiceTestActive) runtime.cancelSystemVoiceTest()
+          else if (runtime.micGranted()) runtime.testSystemVoice(VoiceRecognizerController.MODE_OFFLINE)
+          else { requestedTestMode = VoiceRecognizerController.MODE_OFFLINE; testMicrophone.launch(Manifest.permission.RECORD_AUDIO) }
+        }, label = { Text(if (systemVoiceTestActive && voiceTestMode == VoiceRecognizerController.MODE_OFFLINE) "停止测试" else "测试本地识别") })
+      }
+      if (voiceTestMode == VoiceRecognizerController.MODE_OFFLINE && systemVoiceTestResult.isNotBlank()) Text(systemVoiceTestResult, style = MaterialTheme.typography.bodySmall, color = SeaSlate)
+      Text("系统识别服务", style = MaterialTheme.typography.titleSmall, color = DeepInk)
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        systemVoiceOptions.forEach { service ->
+          FilterChip(
+            selected = systemVoiceService == service.id,
+            onClick = { runtime.setSystemVoiceService(service.id) },
+            label = { Text(service.label) },
+          )
+        }
+      }
+      val captureStatus = if (voiceCaptureActive) "进行中" else "未运行"
+      Text("语音识别诊断\n$systemVoiceDiagnostic\n识别会话：$captureStatus\n最近状态：$systemVoiceStatus", style = MaterialTheme.typography.bodySmall, color = SeaSlate)
+      AssistChip(onClick = {
+        if (systemVoiceTestActive) runtime.cancelSystemVoiceTest()
+        else if (runtime.micGranted()) runtime.testSystemVoice()
+        else { requestedTestMode = VoiceRecognizerController.MODE_SYSTEM; testMicrophone.launch(Manifest.permission.RECORD_AUDIO) }
+      }, label = { Text(if (systemVoiceTestActive) "停止测试" else "测试系统识别") })
+      if (voiceTestMode == VoiceRecognizerController.MODE_SYSTEM) Text(systemVoiceTestResult.ifBlank { "可先说一句「你好，大肥鱼」测试；测试结果只显示在这里，不会发送聊天消息。" }, style = MaterialTheme.typography.bodySmall, color = SeaSlate)
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AssistChip(onClick = { runtime.refreshSystemVoiceServices() }, label = { Text("重新检测") })
+        AssistChip(onClick = {
+          val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+          clipboard.setPrimaryClip(android.content.ClipData.newPlainText("语音识别诊断", "$systemVoiceDiagnostic\n识别会话：$captureStatus\n最近状态：$systemVoiceStatus\n所选服务：$systemVoiceService"))
+        }, label = { Text("复制诊断") })
+      }
+      AssistChip(onClick = {
+        val opened = listOf(Settings.ACTION_VOICE_INPUT_SETTINGS, Settings.ACTION_INPUT_METHOD_SETTINGS).any { action ->
+          runCatching { context.startActivity(Intent(action)); true }.getOrDefault(false)
+        }
+        if (!opened) runtime.voiceNotice.value = "当前系统没有提供此设置入口，可到系统设置中查找语音输入。"
+      }, label = { Text("系统语音设置") })
       HorizontalDivider(color = Color(0xFFDCEEF8))
       Text("手机 Agent 单轮执行步数上限", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
       LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -701,7 +775,7 @@ internal fun CloudCompanionScreen(
       gesture = state.gesture,
       sequence = state.sequence,
       audioLevel = playbackLevel,
-      safeTopPx = statusTopPx + with(density) { (if (callActive) 156.dp else 76.dp).roundToPx() },
+      safeTopPx = statusTopPx + with(density) { (if (callActive) 100.dp else 76.dp).roundToPx() },
       safeBottomPx = if (stageBottom > 0) (viewportHeight - stageBottom).coerceAtLeast(0) else 0,
       call = callActive,
       mini = compactStage && !callActive,

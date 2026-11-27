@@ -1,5 +1,27 @@
 package ai.openclaw.app.anylink
 
+import ai.openclaw.app.ui.AvatarLoadMonitor
+import ai.openclaw.app.ui.parseAvatarSignal
+import ai.openclaw.app.ui.avatarResourceResponse
+import ai.openclaw.app.ui.isRequiredAvatarResource
+import android.content.ComponentName
+import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
+import android.content.pm.ResolveInfo
+import android.content.pm.ServiceInfo
+import android.net.Uri
+import android.provider.Settings
+import android.os.Bundle
+import android.os.Looper
+import android.speech.SpeechRecognizer
+import android.speech.RecognitionService
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -9,11 +31,19 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowSpeechRecognizer
+import org.robolectric.shadows.ShadowMediaPlayer
+import java.time.Duration
 
 private fun sn(
   id: String, text: String = "", desc: String = "", cls: String = "View",
@@ -27,6 +57,285 @@ private fun sn(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class AnyLinkPhoneTest {
+
+  @Test fun `automatic favicon requests get an empty response and cannot fail the avatar`() {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    for (path in listOf("/favicon.ico", "/assets/anylink/favicon.ico?version=1")) {
+      val uri = Uri.parse("https://appassets.androidplatform.net$path")
+      val response = avatarResourceResponse(app, uri)
+      assertEquals(204, response?.statusCode)
+      assertEquals(-1, response?.data?.read())
+      assertFalse(isRequiredAvatarResource(uri, false))
+    }
+    val icon = avatarResourceResponse(app, Uri.parse("https://appassets.androidplatform.net/assets/anylink/favicon.svg"))
+    assertEquals(200, icon?.statusCode); assertEquals("image/svg+xml", icon?.mimeType)
+  }
+
+  @Test fun `only page engine and required model errors are fatal to the avatar`() {
+    val root = "https://appassets.androidplatform.net/assets/anylink/"
+    for (path in listOf("portrait.html", "avatar-loader.js", "avatar.js", "live2dcubismcore.min.js", "pixi.min.js", "cubism4-colors.min.js", "model/entry.model3.json", "model/dafeiyu.moc3", "model/textures/texture_00.png")) {
+      assertTrue(path, isRequiredAvatarResource(Uri.parse(root + path), false))
+    }
+    for (path in listOf("favicon.svg", "favicon.ico", "model/Animation/wave.motion3.json", "model/Exp3/smile.exp3.json")) {
+      assertFalse(path, isRequiredAvatarResource(Uri.parse(root + path), false))
+    }
+    assertTrue(isRequiredAvatarResource(Uri.parse(root + "portrait.html"), true))
+  }
+
+  @Test fun `ignoring optional avatar errors never opens external network or unsafe asset paths`() {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    for (url in listOf("https://example.invalid/favicon.ico", "https://example.invalid/assets/anylink/avatar.js", "https://appassets.androidplatform.net:8443/favicon.ico", "https://appassets.androidplatform.net/assets/anylink/%2e%2e/private.txt")) {
+      assertEquals(url, 403, avatarResourceResponse(app, Uri.parse(url))?.statusCode)
+    }
+    assertNull(avatarResourceResponse(app, Uri.parse("blob:https://appassets.androidplatform.net/test")))
+  }
+
+  @Test fun `registered non-exported recognition services remain discoverable through the system proxy`() {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    val component = ComponentName("com.hihonor.magicvoice", "com.hihonor.magicvoice.voiceui.service.MagicVoiceRecognitionService")
+    val result = ResolveInfo().apply {
+      nonLocalizedLabel = "YOYO"
+      serviceInfo = ServiceInfo().apply {
+        packageName = component.packageName; name = component.className; enabled = true; exported = false
+        applicationInfo = ApplicationInfo().apply { packageName = component.packageName; enabled = true }
+      }
+    }
+    shadowOf(app.packageManager).addOrUpdateService(result.serviceInfo)
+    shadowOf(app.packageManager).addIntentFilterForService(component, IntentFilter(RecognitionService.SERVICE_INTERFACE))
+    Settings.Secure.putString(app.contentResolver, "voice_recognition_service", component.flattenToShortString())
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(false)
+    val catalog = AndroidSystemSpeechPlatform(app).catalog()
+    assertTrue(catalog.services.any { it.id == component.flattenToString() })
+    assertTrue(catalog.discoveryDetails.any { it.contains("exported=false") })
+    assertEquals(listOf("default", component.flattenToString()), catalog.attempts("auto").map { it.id })
+  }
+
+  @Test fun `stopping the keepalive service preserves foreground voice input but clears background capture`() {
+    val runtime = AnyLinkRuntime.get(org.robolectric.RuntimeEnvironment.getApplication())
+    runtime.onActivityStarted(); runtime.listening.value = true
+    runtime.onServiceStopped()
+    assertTrue(runtime.listening.value)
+    runtime.onActivityStopped(); runtime.onServiceStopped()
+    assertFalse(runtime.listening.value)
+  }
+
+  @Test fun `call entry cue finishes before capture continues and uses the communication route`() {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val players = mutableListOf<MediaPlayer>()
+    ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(300, 0) }
+    val cues = CallSoundPlayer(org.robolectric.RuntimeEnvironment.getApplication()) { MediaPlayer().also { players += it } }
+    var captureStarted = false
+    try {
+      scope.launch { cues.play(CallCue.Start); captureStarted = true }
+      shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+      assertFalse(captureStarted)
+      val player = shadowOf(players.single())
+      assertEquals(AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING, player.audioAttributes.usage)
+      assertEquals(AudioAttributes.CONTENT_TYPE_SONIFICATION, player.audioAttributes.contentType)
+      assertEquals(0.55f, player.leftVolume)
+      shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(250))
+      assertTrue(captureStarted); assertEquals(ShadowMediaPlayer.State.END, player.state)
+    } finally { cues.stop(); scope.cancel() }
+  }
+
+  @Test fun `cancelled cue and late completion cannot release a newer hangup cue`() {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val players = mutableListOf<MediaPlayer>()
+    ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(300, 0) }
+    val cues = CallSoundPlayer(org.robolectric.RuntimeEnvironment.getApplication()) { MediaPlayer().also { players += it } }
+    var finished = false
+    try {
+      val connecting = scope.launch { cues.play(CallCue.Start) }
+      shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1))
+      val old = shadowOf(players.single()); val lateCompletion = old.onCompletionListener
+      connecting.cancel()
+      scope.launch { cues.play(CallCue.End); finished = true }
+      shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1))
+      lateCompletion.onCompletion(players.first())
+      assertEquals(ShadowMediaPlayer.State.END, old.state)
+      assertEquals(ShadowMediaPlayer.State.STARTED, shadowOf(players.last()).state)
+      assertFalse(finished)
+      shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(350)); assertTrue(finished)
+    } finally { cues.stop(); scope.cancel() }
+  }
+
+  @Test fun `stalled or failed cue releases resources and cannot block the call indefinitely`() {
+    for (error in listOf(false, true)) {
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+      val players = mutableListOf<MediaPlayer>()
+      ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(300, if (error) 0 else 5000) }
+      val cues = CallSoundPlayer(org.robolectric.RuntimeEnvironment.getApplication()) { MediaPlayer().also { players += it } }
+      var result: Boolean? = null
+      try {
+        scope.launch { result = cues.play(CallCue.Start) }
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1))
+        if (error) shadowOf(players.single()).invokeErrorListener(MediaPlayer.MEDIA_ERROR_UNKNOWN, 0)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1300))
+        assertEquals(false, result)
+        assertEquals(ShadowMediaPlayer.State.END, shadowOf(players.single()).state)
+      } finally { cues.stop(); scope.cancel() }
+    }
+  }
+
+  private class SpeechFixture(onDevice: Boolean = false, default: Boolean = true, val preferred: String = "auto",
+    defaultService: String = "test/Recognizer", services: List<SystemSpeechTarget> = listOf(SystemSpeechTarget("test.voice/Other", "其他已安装服务")),
+  ) : AutoCloseable {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    val created = mutableListOf<Pair<SystemSpeechTarget, SpeechRecognizer>>()
+    val states = mutableListOf<String>()
+    val statuses = mutableListOf<String>()
+    val partials = mutableListOf<String>()
+    val finals = mutableListOf<String>()
+    val errors = mutableListOf<Pair<String, String>>()
+    val activity = mutableListOf<Boolean>()
+    val platform = object : SystemSpeechPlatform {
+      override fun catalog() = SystemSpeechCatalog(default, onDevice, defaultService, services)
+      override fun create(target: SystemSpeechTarget) = SpeechRecognizer.createSpeechRecognizer(app,
+        ComponentName("test.voice", target.id.replace('-', '_'))).also { created += target to it }
+    }
+    val controller = VoiceRecognizerController(app, scope, { null }, { false }, platform, { preferred }, { statuses += it }, { activity += it })
+    fun start() = controller.start(VoiceRecognizerController.MODE_SYSTEM, onState = { states += it }, onLevel = {},
+      onPartial = { partials += it }, onFinal = { finals += it }, onError = { code, message -> errors += code to message })
+    fun pump(ms: Long = 0) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms)) }
+    fun recognizer(index: Int = created.lastIndex): ShadowSpeechRecognizer = shadowOf(created[index].second)
+    fun result(text: String) = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf(text)) }
+    override fun close() { controller.cancel(); scope.cancel(); pump() }
+  }
+
+  @Test fun `cancel updates diagnostics and activity instead of leaving a stale starting message`() {
+    SpeechFixture().use { f ->
+      f.start(); f.pump(); assertTrue(f.activity.last())
+      f.controller.cancel("后台保活服务停止，识别已取消"); f.pump(30_000)
+      assertFalse(f.activity.last()); assertFalse(f.controller.isActive)
+      assertEquals("后台保活服务停止，识别已取消", f.statuses.last())
+      assertTrue(f.errors.isEmpty())
+    }
+  }
+
+  @Test fun `a stalled default service can retry its registered explicit component`() {
+    val component = ComponentName("com.hihonor.magicvoice", "com.hihonor.magicvoice.voiceui.service.MagicVoiceRecognitionService")
+    SpeechFixture(defaultService = component.flattenToShortString(), services = listOf(SystemSpeechTarget(component.flattenToString(), "YOYO"))).use { f ->
+      f.start(); f.pump(12_350)
+      assertEquals(listOf("default", component.flattenToString()), f.created.map { it.first.id })
+      f.recognizer().triggerOnResults(f.result("新的组件路径")); f.pump()
+      assertEquals(listOf("新的组件路径"), f.finals); assertFalse(f.activity.last())
+    }
+  }
+
+  @Test fun `partial results without ready callback do not trigger a false startup timeout`() {
+    SpeechFixture().use { f ->
+      f.start(); f.pump()
+      f.recognizer().triggerOnPartialResults(f.result("你好")); f.pump()
+      f.pump(13_000)
+      assertTrue(f.states.contains("listening")); assertTrue(f.errors.isEmpty()); assertEquals(1, f.created.size)
+      f.recognizer().triggerOnResults(f.result("你好大肥鱼")); f.pump()
+      assertEquals(listOf("你好大肥鱼"), f.finals)
+      assertFalse(f.statuses.any { it.contains("你好") })
+    }
+  }
+
+  @Test fun `RMS callbacks without ready callback establish an active system capture`() {
+    SpeechFixture().use { f ->
+      f.start(); f.pump(); f.recognizer().triggerOnRmsChanged(2f); f.pump(13_000)
+      assertTrue(f.states.contains("listening")); assertTrue(f.errors.isEmpty()); assertEquals(1, f.created.size)
+    }
+  }
+
+  @Test fun `startup timeout rebuilds once and rejects callbacks from the retired recognizer`() {
+    SpeechFixture().use { f ->
+      f.start(); f.pump(); val old = f.recognizer()
+      f.pump(12_350)
+      assertEquals(2, f.created.size); assertTrue(old.isDestroyed); assertTrue(f.errors.isEmpty())
+      old.triggerOnReadyForSpeech(Bundle()); old.triggerOnPartialResults(f.result("旧请求")); old.triggerOnResults(f.result("不能发送")); f.pump()
+      assertTrue(f.partials.all { it.isEmpty() }); assertTrue(f.finals.isEmpty())
+      f.recognizer().triggerOnReadyForSpeech(Bundle()); f.recognizer().triggerOnResults(f.result("新请求")); f.pump()
+      assertEquals(listOf("新请求"), f.finals)
+    }
+  }
+
+  @Test fun `on-device only phones pass preflight and unsupported Chinese falls back to default when available`() {
+    SpeechFixture(onDevice = true, default = false).use { f ->
+      assertTrue(f.controller.available(VoiceRecognizerController.MODE_SYSTEM))
+      f.start(); f.pump(); assertEquals("on-device", f.created.single().first.id)
+    }
+    SpeechFixture(onDevice = true).use { f ->
+      f.start(); f.pump(); assertEquals("on-device", f.created.single().first.id)
+      f.recognizer().triggerOnError(SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED); f.pump(350)
+      assertEquals(listOf("on-device", "default"), f.created.map { it.first.id })
+      f.recognizer().triggerOnResults(f.result("普通话识别正常")); f.pump()
+      assertEquals(listOf("普通话识别正常"), f.finals); assertTrue(f.errors.isEmpty())
+    }
+  }
+
+  @Test fun `missing microphone permission is terminal and cannot start another service`() {
+    SpeechFixture(onDevice = true).use { f ->
+      f.start(); f.pump(); f.recognizer().triggerOnError(SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS); f.pump(20_000)
+      assertEquals(1, f.created.size); assertEquals("MIC_PERMISSION", f.errors.single().first); assertFalse(f.controller.isActive)
+    }
+  }
+
+  @Test fun `a new service attempt cannot submit a previous attempt's partial text`() {
+    SpeechFixture(onDevice = true).use { f ->
+      f.start(); f.pump(); f.recognizer().triggerOnPartialResults(f.result("未完成的旧识别")); f.pump()
+      f.recognizer().triggerOnError(SpeechRecognizer.ERROR_NETWORK); f.pump(350)
+      assertEquals("", f.partials.last())
+      f.recognizer().triggerOnError(SpeechRecognizer.ERROR_NO_MATCH); f.pump()
+      assertTrue(f.finals.isEmpty()); assertEquals("NO_SPEECH", f.errors.single().first)
+      assertFalse(f.activity.last()); assertTrue(f.statuses.last().contains("NO_SPEECH"))
+    }
+  }
+
+  @Test fun `unresponsive services have bounded retries and cancel prevents a pending restart`() {
+    SpeechFixture().use { f ->
+      f.start(); f.pump(25_000)
+      assertEquals(2, f.created.size); assertEquals("ASR_START_TIMEOUT", f.errors.single().first); assertFalse(f.controller.isActive)
+    }
+    SpeechFixture().use { f ->
+      f.start(); f.pump(12_000); f.controller.cancel(); f.pump(20_000)
+      assertEquals(1, f.created.size); assertTrue(f.errors.isEmpty()); assertFalse(f.controller.isActive)
+    }
+  }
+
+  @Test fun `finish before a posted startup cannot open the microphone afterwards`() {
+    SpeechFixture().use { f ->
+      f.start(); f.controller.finishNow(); f.pump(30_000)
+      assertTrue(f.created.isEmpty()); assertEquals("NO_SPEECH", f.errors.single().first); assertFalse(f.controller.isActive)
+    }
+  }
+
+  @Test fun `automatic selection never silently chooses an unrelated installed speech service`() {
+    val catalog = SystemSpeechCatalog(false, false, "", listOf(SystemSpeechTarget("other/Recognizer", "输入法语音服务")))
+    assertTrue(catalog.candidates("auto").isEmpty())
+    assertTrue(catalog.candidates("removed/Recognizer").isEmpty())
+    assertEquals("other/Recognizer", catalog.candidates("other/Recognizer").single().id)
+    assertEquals("ASR_LANGUAGE_UNAVAILABLE", systemSpeechError(SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE).first)
+    assertEquals("ASR_SYSTEM_NETWORK", systemSpeechError(SpeechRecognizer.ERROR_NETWORK).first)
+  }
+
+  @Test fun `avatar readiness accepts WebView JSON snapshots without console callbacks`() {
+    val signal = parseAvatarSignal(JsonPrimitive("""{"state":"ready","message":"Live2D 已就绪"}""").toString())
+    assertEquals("ready", signal?.state)
+    assertEquals("Live2D 已就绪", signal?.message)
+    for (invalid in listOf(null, "null", "undefined", "\"null\"", "{}", JsonPrimitive("""{"state":"unknown"}""").toString())) assertNull(parseAvatarSignal(invalid))
+    val failed = parseAvatarSignal(JsonPrimitive("""{"state":"failed","message":"pixi.min.js 加载失败"}""").toString())
+    assertEquals("failed", failed?.state)
+    assertEquals("pixi.min.js 加载失败", failed?.message)
+  }
+
+  @Test fun `first avatar load has a deadline and only one automatic compatible retry`() {
+    val monitor = AvatarLoadMonitor()
+    monitor.start(100)
+    assertFalse(monitor.timedOut(30_099))
+    assertTrue(monitor.timedOut(30_100))
+    assertTrue(monitor.retry()); assertTrue(monitor.compatible)
+    monitor.start(40_000)
+    assertFalse(monitor.timedOut(69_999)); assertTrue(monitor.timedOut(70_000))
+    assertFalse(monitor.retry())
+    // Explicit user retry gets a fresh budget; pause/resume restarts the active deadline.
+    monitor.reset(); monitor.start(200_000)
+    assertFalse(monitor.compatible); assertFalse(monitor.timedOut(200_000)); assertTrue(monitor.retry())
+  }
 
   @Test fun `screen serializer keeps only visible foreign nodes within caps`() {
     val nodes = listOf(
@@ -280,6 +589,83 @@ class AnyLinkPhoneTest {
     assertNull(chooseVoiceEngine("cloud", system = true, cloud = false))
     assertEquals("cloud", chooseVoiceEngine("auto", system = false, cloud = true))
     assertEquals("system", chooseVoiceEngine("system", system = true, cloud = true))
+  }
+
+  @Test fun `downloaded offline recognition takes priority without changing explicit system or cloud choices`() {
+    assertEquals("offline", chooseVoiceEngine("auto", system = true, cloud = true, offline = true))
+    assertEquals("offline", chooseVoiceEngine("offline", system = false, cloud = false, offline = true))
+    assertNull(chooseVoiceEngine("offline", system = true, cloud = true, offline = false))
+    assertEquals("system", chooseVoiceEngine("system", system = true, cloud = true, offline = true))
+    assertNull(chooseVoiceEngine("cloud", system = true, cloud = false, offline = true))
+  }
+
+  @Test fun `offline model validation refuses truncated and same size corrupted files`() {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    val file = java.io.File.createTempFile("model-check-", ".bin", app.cacheDir)
+    val bytes = "validated model".toByteArray()
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+    val spec = OfflineModelFile("model.int8.onnx", bytes.size.toLong(), digest)
+    try {
+      file.writeBytes(bytes); assertTrue(verifyOfflineModelFile(file, spec))
+      file.writeBytes(bytes.copyOf(bytes.size - 1)); assertFalse(verifyOfflineModelFile(file, spec))
+      file.writeBytes(bytes.copyOf().also { it[0] = 0 }); assertFalse(verifyOfflineModelFile(file, spec))
+    } finally { file.delete() }
+  }
+
+  @Test fun `offline model manifest requires fixed HTTPS origins revision and expected safe filenames`() {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    val spec = OfflineAsrModelSpec.load(app)
+    assertTrue(spec.bytes in 100_000_000..300_000_000)
+    assertEquals(4, spec.files.size)
+    for (files in listOf(spec.files + spec.files.first(), spec.files.map { it.copy(name = "../model.int8.onnx") })) {
+      assertThrows(IllegalArgumentException::class.java) { spec.copy(files = files) }
+    }
+    assertThrows(IllegalArgumentException::class.java) { spec.copy(origins = listOf("http://example.com")) }
+    assertThrows(IllegalArgumentException::class.java) { spec.copy(revision = "main") }
+  }
+
+  private fun modelFixture(): Pair<OfflineAsrModelSpec, Map<String, ByteArray>> {
+    val content = listOf("encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx", "joiner-epoch-99-avg-1.onnx", "tokens.txt")
+      .mapIndexed { index, name -> name to "fixture model $index".toByteArray() }.toMap()
+    val files = content.map { (name, bytes) -> OfflineModelFile(name, bytes.size.toLong(), java.security.MessageDigest.getInstance("SHA-256")
+      .digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }) }
+    return OfflineAsrModelSpec("test-" + java.util.UUID.randomUUID(), "0".repeat(40), "test/model", listOf("https://huggingface.co", "https://hf-mirror.com"), files) to content
+  }
+
+  @Test fun `offline model installation publishes only complete verified files and rechecks stored integrity`() = runBlocking {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    val (spec, content) = modelFixture()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    org.robolectric.shadows.ShadowStatFs.registerStats(app.filesDir.absolutePath, 1000000, 1000000, 1000000)
+    val http = OkHttpClient.Builder().addInterceptor { chain -> Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+      .code(200).message("OK").body(content.getValue(chain.request().url.pathSegments.last()).toResponseBody()).build() }.build()
+    val models = OfflineAsrModels(app, scope, spec, http)
+    try {
+      models.download()
+      assertTrue(models.state.value.ready); assertFalse(models.state.value.downloading)
+      assertTrue(spec.files.all { verifyOfflineModelFile(java.io.File(models.directory, it.name), it) })
+      assertFalse(java.io.File(models.directory.parentFile, models.directory.name + ".pending").exists())
+      java.io.File(models.directory, "tokens.txt").writeText("corrupted")
+      models.refresh(); assertFalse(models.state.value.ready)
+    } finally { scope.cancel(); models.directory.deleteRecursively() }
+  }
+
+  @Test fun `corrupted model download never becomes available or leaves a partial installation`() = runBlocking {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    val (spec, _) = modelFixture()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    org.robolectric.shadows.ShadowStatFs.registerStats(app.filesDir.absolutePath, 1000000, 1000000, 1000000)
+    val http = OkHttpClient.Builder().addInterceptor { chain ->
+      val file = spec.files.first { it.name == chain.request().url.pathSegments.last() }
+      Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(ByteArray(file.bytes.toInt()).toResponseBody()).build()
+    }.build()
+    val models = OfflineAsrModels(app, scope, spec, http)
+    try {
+      models.download()
+      assertFalse(models.state.value.ready); assertFalse(models.state.value.downloading)
+      assertTrue(models.state.value.error.contains("校验")); assertFalse(models.directory.exists())
+      assertFalse(java.io.File(models.directory.parentFile, models.directory.name + ".pending").exists())
+    } finally { scope.cancel(); models.directory.deleteRecursively() }
   }
 
   @Test fun `lip envelope closes for silent audio and outside playback bounds`() {

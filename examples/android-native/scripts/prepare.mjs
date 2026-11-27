@@ -5,6 +5,8 @@ import {execFileSync} from 'node:child_process';
 import {root, home, source, lock, node, tools} from './layout.mjs';
 const run=(args,options={})=>execFileSync('git',args,{cwd:source,encoding:'utf8',...options});
 const privateCharacter=process.env.ANYLINK_CHARACTER_MODE==='private';
+execFileSync(process.execPath,[path.join(home,'scripts/install-offline-asr.mjs')],{stdio:'inherit'});
+const offlineAsr=JSON.parse(fs.readFileSync(path.join(home,'offline-asr-lock.json'),'utf8'));
 execFileSync(process.execPath,[path.join(home,'scripts/generate-icons.mjs'),'--check'],{stdio:'inherit'});
 const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 if(!fs.existsSync(path.join(source,'.git'))){
@@ -45,6 +47,7 @@ build=build.replace(mermaidCommand,`commandLine(${JSON.stringify(node)}, ${JSON.
 // Gateway companion runtime. Explicit source sets prevent dormant node/voice
 // entry points and their unrelated tests from entering the product artifact.
 build += `
+dependencies { implementation(files(${JSON.stringify(path.join(root,'data/android-native/offline-asr',`sherpa-onnx-${offlineAsr.runtime.version}.aar`))})) }
 android.sourceSets.configureEach {
   java.directories.clear()
   kotlin.directories.clear()
@@ -81,16 +84,18 @@ for(const [relative,expected] of Object.entries(prior)) {
   if(baseline!==undefined)fs.writeFileSync(target,baseline);else fs.unlinkSync(target);
 }
 const assets=path.join(source,'apps/android/app/src/main/assets/anylink');fs.mkdirSync(assets,{recursive:true});
+fs.copyFileSync(path.join(home,'offline-asr-lock.json'),path.join(assets,'offline-asr.json'));
+fs.copyFileSync(path.join(home,'web/favicon.svg'),path.join(assets,'favicon.svg'));
 fs.copyFileSync(path.join(root,'LICENSE'),path.join(assets,'AnyLink-LICENSE.txt'));
 fs.copyFileSync(path.join(root,'examples/persona/dafeiyu.md'),path.join(assets,'persona-shared.md'));
 fs.copyFileSync(path.join(home,'persona.md'),path.join(assets,'persona-android.md'));
 fs.copyFileSync(path.join(home,'licenses/OpenClaw-MIT.txt'),path.join(assets,'OpenClaw-MIT.txt'));
-for(const name of ['model','live2dcubismcore.min.js','pixi.min.js','cubism4-colors.min.js','public-avatar.js'])fs.rmSync(path.join(assets,name),{recursive:true,force:true});
+for(const name of ['model','live2dcubismcore.min.js','pixi.min.js','cubism4-colors.min.js','avatar-loader.js','public-avatar.js'])fs.rmSync(path.join(assets,name),{recursive:true,force:true});
 const drawable=path.join(source,'apps/android/app/src/main/res/drawable');fs.mkdirSync(drawable,{recursive:true});
 fs.rmSync(path.join(drawable,'anylink_portrait.png'),{force:true});
 for(const ext of ['png','xml'])fs.rmSync(path.join(drawable,'anylink_avatar.'+ext),{force:true});
 if(privateCharacter){
-  for(const name of ['portrait.html','avatar.js'])fs.copyFileSync(path.join(home,'web',name),path.join(assets,name));
+  for(const name of ['portrait.html','avatar-loader.js','avatar.js'])fs.copyFileSync(path.join(home,'web',name),path.join(assets,name));
   const model=path.join(root,'data/mac/companion/model');
   const entryPath=path.join(model,'entry.model3.json');
   if(!fs.existsSync(entryPath))throw new Error('Prepare privately licensed character assets first.');
@@ -148,6 +153,10 @@ if(privateCharacter){
   for(const [from,name] of [['data/mac/companion/runtime/live2dcubismcore.min.js','live2dcubismcore.min.js'],['examples/mac-openclaw/companion/vendor/pixi.min.js','pixi.min.js'],['examples/mac-openclaw/companion/vendor/cubism4-colors.min.js','cubism4-colors.min.js']])fs.copyFileSync(path.join(root,from),path.join(assets,name));
   const avatarOut=path.join(drawable,'anylink_avatar.png');
   fs.copyFileSync(path.join(root,'data/mac/branding/avatar.png'),avatarOut);
+  // A private model failure must retain the owner's character, never the public robot.
+  // Generated PNGs stay in the ignored build tree and must not enter the public repository.
+  fs.copyFileSync(avatarOut,path.join(drawable,'anylink_portrait.png'));
+  fs.rmSync(path.join(drawable,'anylink_portrait.xml'),{force:true});
   // Trim the ~29% empty sky above the head in the 512x512 source portrait so the
   // floating bubble, fallback portrait, notification avatar, and app icon sit dead-center.
   try{
@@ -185,6 +194,9 @@ for(const name of ['ic_launcher.xml','ic_launcher_round.xml']){
   const folder=path.join(debug,'mipmap-anydpi-v26');fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(path.join(folder,name),'<?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/anylink_icon_bg"/><foreground android:drawable="@drawable/anylink_launcher_fg"/></adaptive-icon>\n');
 }
 const licenses=path.join(source,'apps/android/THIRD_PARTY_LICENSES/openclaw/licenses');
+fs.rmSync(path.join(licenses,'AnyLink-call-cues.md'),{force:true});
+for(const name of ['call-cues.md','make-sfx-MIT.txt'])fs.copyFileSync(path.join(home,'licenses',name),path.join(licenses,'AnyLink-'+name.replace(/\.md$/,'.txt')));
+for(const name of ['sherpa-onnx-Apache-2.0.txt','onnxruntime-MIT.txt','offline-asr-model.txt'])fs.copyFileSync(path.join(home,'licenses',name),path.join(licenses,'AnyLink-'+name));
 for(const name of ['pixi-js-LICENSE.txt','pixi-live2d-display-LICENSE.txt','AIRI-LICENSE.txt'])fs.copyFileSync(path.join(root,'examples/mac-openclaw/companion/vendor',name),path.join(licenses,'AnyLink-'+name));
 fs.copyFileSync(path.join(root,'examples/mac-openclaw/companion/ASSET-NOTICE.md'),path.join(licenses,'AnyLink-character-notice.txt'));
 // Reuse the same pinned OpenClaw installation's build-only dependencies. This
