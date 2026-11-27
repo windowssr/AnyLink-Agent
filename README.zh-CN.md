@@ -12,7 +12,7 @@
   <a href="README.md"><img src="https://img.shields.io/badge/lang-English-0ea5e9?style=flat-square" alt="English" /></a>
   <a href="protocol/README.zh-CN.md"><img src="https://img.shields.io/badge/Protocol-v3.2-22d3ee?style=flat-square" alt="Protocol v3.2" /></a>
   <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.9.2"><img src="https://img.shields.io/badge/Release-v0.9.2-0284c7?style=flat-square" alt="Release v0.9.2" /></a>
-  <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.8"><img src="https://img.shields.io/badge/Android-v0.10.0--preview.8-0ea5e9?style=flat-square" alt="Android v0.10.0-preview.8" /></a>
+  <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.12"><img src="https://img.shields.io/badge/Android-v0.10.0--preview.12-0ea5e9?style=flat-square" alt="Android v0.10.0-preview.12" /></a>
   <a href="sdk-python/README.md"><img src="https://img.shields.io/badge/Python-anylink--agent-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python SDK" /></a>
   <a href="sdk/README.zh-CN.md"><img src="https://img.shields.io/badge/TypeScript-@anylink--agent%2Fsdk-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript SDK" /></a>
   <a href="mcp/README.md"><img src="https://img.shields.io/badge/MCP-@anylink--agent%2Fmcp-10b981?style=flat-square" alt="MCP Server" /></a>
@@ -173,7 +173,8 @@ AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protoc
    - **双向跨设备操控**：与 Mac 完全对等，收到来自电脑的 `agent.invoke` 后直接调用手机无障碍工具（打开 App、看屏、点击、输入、滚动等）实际执行并实时汇报进度（可在「保活」页一键开关远程操控权限）；
    - **本地离线、系统与可选云端语音识别**：在「保活 → 本地离线识别」下载约 199 MiB 的中英模型，逐文件校验 SHA-256；本地转文字无需云端 ASR 密钥。自动模式优先使用已安装的本地模型，也可手动选择系统识别；识别后的文字仍按正常流程交给服务器处理。
    - **电话式轮流对话**：接通/挂断音效、静音、挂断、系统确认的听筒/外放切换、全屏人物以及随播报同步的口型和动作。点击人物可停止播报继续说话；外放下全双工开口打断仍不在已验证范围内。
-   - **Android v0.10.0-preview.8**：[公开 APK 与发布说明](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.8)。修复 WebView 网页零高度导致的人物空白，提供 SVG 控件、聊天文件预览和可保存的悬浮窗透明度。公开 APK 使用原创 SVG 形象；含授权 Live2D 模型/Core 的私有 APK 仅保留本地。云端服务、SDK 与 Mac 版本仍为 v0.9.2。
+   - **阿里云 Momo 播报与同步字幕**：服务器配置百炼 Key 后，优先使用茉兔 Momo（默认 1.12 倍语速），通过 PCM 分片边收边播；原微软神经语音和手机系统 TTS 继续兜底。普通聊天按原句提前播报，陪伴/通话字幕跟随实际播放，展开阅读可随时查看全文。配置见 [Android README](examples/android-native/README.md#云端-momo-配置仅服务器)。密钥仅保存在服务器，本地离线识别继续保留。
+   - **Android v0.10.0-preview.12**：[公开 APK 与发布说明](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.12)。新增 Momo 音频分片边收边播、随实际播放更新的字幕、同轮固定降级、通话通知延后及预检/连接复用首声优化，保留本地识别、文件预览和人物显示修复。**本次修改 Android App 及配套服务器语音网关**；服务端包版本号仍为 v0.9.2，SDK、MCP 和 Mac 客户端没有修改。公开 APK 使用原创 SVG 形象；含授权 Live2D 模型/Core 的私有 APK 仅保留本地。
    - **跨设备双向传文件**（200 MiB 流式读写、事前能力/容量协商、大文件确认弹窗与收件卡片）+ **手机 Agent 默认 100 步执行上限**（`50 / 100 / 200 / 不限`、循环内自动裁剪旧屏幕与一键「继续执行」）+ 离线 Outbox / SSE 断线续接。
 
 ### 跨设备双向文件互传、能力协商与上传上限配置

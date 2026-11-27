@@ -6,6 +6,14 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 
 ---
 
+## 本次发布范围与升级
+
+最新预览版：[v0.10.0-preview.12 · 公开 APK 与发布说明](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.12)。
+
+相对 preview.8，本次同时修改了 **Android App 和配套服务器语音网关**（`server/config.ts`、`server/speech.ts`、`server/qwen-speech.ts`），电脑端、SDK 和 MCP 没有修改。服务器包版本号仍为 0.9.2，协议编号保持 v3.2；版本号相同不代表本次服务端代码未变化。
+
+要使用 Momo 分片播放，需要更新配套服务器并配置百炼 Key；未配置时保留原微软语音，再由手机系统 TTS 兜底。旧服务器仍可通过原 JSON 音频响应与新版 App 通信，但没有新增的 PCM 流式能力。发布说明包含配置、兼容范围及本轮验证结果。
+
 ## 一、核心特性与前端架构（Android `0.10.0-preview.12`）
 
 - **透明人物舞台与 SVG 图标**：主界面显示半身，通话页将人物放大至小腿以上、不露脚，阅读模式缩小人物。WebView 明确使用 `MATCH_PARENT`，避免网页零高度；Live2D 就绪同时验证可见布局和真实 GPU 像素。私有版加载失败使用私有形象兜底，公开版使用原创矢量形象。界面操作图标来自 `web/icons/` 的 SVG 源文件，并生成原生 VectorDrawable；修改路径定义后运行 `node examples/android-native/scripts/generate-icons.mjs`。
@@ -15,7 +23,7 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 - **Momo 云端播报与原始语音兜底**：服务器配置百炼 Key 后，默认使用阿里云 `qwen3-tts-flash-realtime` 的茉兔 `Momo`，语速默认 1.12 倍。失败时先回退原来的微软 `XiaoyiNeural`，再回退手机系统 `TextToSpeech`；Kokoro 不参与播报。通话按短句提前合成，Momo 的 PCM 片段通过同一个 HTTPS 接口边传边由 `AudioTrack` 播放，最多预取一句；取消会关闭请求、清空预取和音频缓冲。同一轮一旦降级，不再跳回主音色，下一轮才重新尝试 Momo；已播放的流中断时提示重试，不换声从头重播。顶栏「保活 → 大肥鱼的声音」可试听并查看最近实际使用的声音。
 - **开口前准备**：连接与通话开始时预检设备及协议，成功结果在同一连接实例内缓存 60 秒；记忆和模型接口仍逐次进行服务端鉴权。聊天、后台控制与 TTS 共用 HTTPS 连接池，各自保留独立取消范围。流式音频的起播阈值为 50ms，并保留后续缓冲；诊断补充设备检查、记忆、模型首 token 和首句生成的阶段耗时。
 - **文字和声音同步**：普通聊天随模型流式输出提前请求前两句口播，直接使用原句，不再等完整回复后再调用模型重写。陪伴视图按实际播放开始逐句展示；展开阅读随时可看完整文字。通话字幕只显示当前播报句，口型由实际播放头驱动。长工具结果和通知仍由服务器按共享人设精炼，客户端不再维护另一套改写提示词。通话期间普通通知延后到挂断音效结束后播放。
-- **真实音频口型与句子动作**：Momo 流式 PCM、原微软 MP3 和系统 TTS WAV 共用播放状态、口型和字幕时钟；本地 TTS 等待初始化并合成音频文件。流式 PCM 在接收时计算 20ms RMS，其余格式预解码；按实际播放进度驱动嘴部，静音时闭嘴；字幕使用实际口播，句子开始播放时触发适量挥手、点头或指示动作，打断和挂断取消动作并收口。
+- **真实音频口型与句子动作**：Momo 流式 PCM、原微软 MP3 和系统 TTS WAV 共用播放状态、口型和字幕时钟；本地 TTS 等待初始化并合成音频文件。流式 PCM 直接计算 20ms RMS，其余格式预解码；按实际播放进度驱动嘴部，静音时闭嘴；字幕使用实际口播，句子开始播放时触发适量挥手、点头或指示动作，打断和挂断取消动作并收口。
 - **聊天内文件预览与持久记录**：接收文件仍保存到“下载/AnyLink”。聊天中显示图片、视频封面、PDF 首页和有长度上限的文本预览；图片可以放大。文件卡片、保存 URI 和接收状态独立存入 SQLite，重启可恢复，不混入模型上下文；未完成接收显示中断。系统打开与分享通过 content URI 授予临时只读权限。
 - **原生 Markdown 与交互卡片**：保留多轮聊天、代码块、列表、表格、跨设备任务确认和追问。
 - **极简登录验证**：
@@ -83,7 +91,7 @@ node examples/android-native/scripts/inspect-apk.mjs --private
 开启手机「USB 调试」连接电脑，使用项目内置 `adb` 安装（或直接把 APK 传到手机点击安装）：
 ```bash
 data/android-native/sdk/platform-tools/adb devices
-data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.10.0-preview.8.apk
+data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.10.0-preview.12.apk
 # 已使用私有 Live2D 版的本地自用设备，改为安装同版本 -private.apk
 ```
 
@@ -132,6 +140,6 @@ node examples/android-native/scripts/preview.mjs
 
 预览页覆盖陪伴/阅读、文件卡片、PDF 示例、语音输入状态和电话式控制。点击“播放语音与口型”使用固定中文样本和 Web Audio 实际音量，不启用麦克风、不发送任务。预览不能替代真机系统识别、听筒/耳机路由和后台生命周期验收。
 
-Android Agent/Compose/phone 测试和脚本检查覆盖首音频早于合成结束、播放头字幕、预取上限、取消、同轮降级固定及通知延后。可在「保活 → 大肥鱼的声音 → 复制播报诊断」查看最近 60 条事件，包含来源、请求 ID、实际供应商、耗时和降级原因，不记录正文、录音、令牌或 API Key。HONOR BRP-AN80 / Android 15 上已检查私有版 Live2D 显示、阅读视图、前后台切换、冷启动、本地转写和语音通话回复；用户确认听到了回复。同音字准确率仍需后续优化，长时间后台通话、蓝牙/有线耳机及外放全双工尚未完整验收。
+本轮通过 87 项 Android Agent/Compose/phone 测试、13 项脚本测试，配套服务通过 61 项数据库集成测试及 SDK/类型/协议检查。测试覆盖首音频早于合成结束、播放头字幕、预取上限、取消、同轮降级固定及通知延后。可在「保活 → 大肥鱼的声音 → 复制播报诊断」查看最近 60 条事件，包含来源、请求 ID、实际供应商、耗时和降级原因，不记录正文、录音、令牌或 API Key。HONOR BRP-AN80 / Android 15 上已检查私有版 Live2D 显示、阅读视图、前后台切换、冷启动、本地转写和语音通话回复；本轮真机再次核对了 Momo 分片播放、字幕同步和首声速度。一次观测从识别结果交给 Agent 到开口约 2.5 秒，首句生成到开始播放约 0.77 秒；这是单次实测，不包含说话结束判定和转写耗时，也不是通用延迟保证。同音字准确率仍需后续优化，长时间后台通话、蓝牙/有线耳机及外放全双工尚未完整验收。
 
 发布 APK 从已提交的干净源码构建，记录完整 `source` 和 `source_dirty: false`；公开 Release 提供公开 APK、`release-manifest.json` 和 `SHA256SUMS`。私有 APK、Live2D 模型素材与 Cubism Core 只保留本机；本地 ASR 模型从固定公开源另行下载，不随 APK 或源码分发。
