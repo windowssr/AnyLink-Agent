@@ -16,6 +16,8 @@ import javax.crypto.spec.GCMParameterSpec
 import kotlinx.serialization.json.*
 
 internal interface AgentLedger {
+  fun timeline(): JsonArray? = null
+  fun timeline(value: JsonArray) {}
   fun messages(): JsonArray
   fun messages(value: JsonArray)
   fun runs(): List<JsonObject>
@@ -51,6 +53,8 @@ internal class SqlAgentLedger(context: Context, connection: CloudConnection) : A
     val row = ContentValues().apply { put("kind", kind); put("id", id); put("value", value) }
     if (database.writableDatabase.insertWithOnConflict("records", null, row, SQLiteDatabase.CONFLICT_REPLACE) < 0) throw LinkFailure("LOCAL_STORE_FAILURE", "本机记录未持久保存，未继续执行")
   }
+  override fun timeline(): JsonArray? = get("session", "timeline")?.let { linkJson.parseToJsonElement(it).jsonArray }
+  override fun timeline(value: JsonArray) = set("session", "timeline", value.toString())
   override fun messages(): JsonArray = get("session", "messages")?.let { linkJson.parseToJsonElement(it).jsonArray } ?: JsonArray(emptyList())
   override fun messages(value: JsonArray) = set("session", "messages", value.toString())
   override fun runs(): List<JsonObject> = database.readableDatabase.query("records", arrayOf("value"), "kind=?", arrayOf("run"), null, null, "rowid DESC", "60").use { rows -> buildList { while (rows.moveToNext()) add(linkJson.parseToJsonElement(rows.getString(0)).jsonObject) } }

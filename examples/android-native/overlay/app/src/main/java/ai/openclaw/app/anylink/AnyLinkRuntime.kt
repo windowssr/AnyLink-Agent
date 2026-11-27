@@ -4,15 +4,10 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
-import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,13 +52,15 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val speaking = MutableStateFlow(false)
   val voiceNotice = MutableStateFlow("")
   val voiceLevel = MutableStateFlow(0f)
+  val playbackLevel = MutableStateFlow(0f)
   val partialTranscript = MutableStateFlow("")
   val voiceEngineMode = MutableStateFlow(prefs.getString("voice_engine_mode", VoiceRecognizerController.MODE_AUTO) ?: VoiceRecognizerController.MODE_AUTO)
   val cloudAsrEnabled = MutableStateFlow(false)
   val callActive = MutableStateFlow(false)
   val callState = MutableStateFlow("idle") // "listening" | "transcribing" | "thinking" | "speaking" | "muted"
   val callMuted = MutableStateFlow(false)
-  val callSpeakerOn = MutableStateFlow(true)
+  val callSpeakerOn = MutableStateFlow(false)
+  val callAudioRoute = MutableStateFlow("听筒")
   val callDurationSec = MutableStateFlow(0)
   val callUserCaption = MutableStateFlow("")
   val callAssistantCaption = MutableStateFlow("")
@@ -97,9 +94,18 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private var callTimerJob: Job? = null
   private var callTurnJob: Job? = null
   @Volatile private var callTurnRunning = false
-  private val systemTtsPending = AtomicInteger(0)
-  private var speech: TextToSpeech? = null
-  private var speechReady = false
+  private var voiceStartJob: Job? = null
+  private var voiceEpoch = 0
+  private var callEpoch = 0
+  private var callTurnEpoch = 0
+  private var callRetries = 0
+  private var callStartedAt = 0L
+  private var resumeListeningJob: Job? = null
+  private var lastGestureAt = 0L
+  private val localSpeech = SystemSpeechSynthesizer(app) { reportVoiceError(it) }
+  private val callAudio = CallAudioController(app, { speaker, label -> callSpeakerOn.value = speaker; callAudioRoute.value = label }, { voiceNotice.value = it }, {
+    endVoiceCall(); voiceNotice.value = "通话已暂停：音频被其他应用接管。"
+  })
   private var speechPlayer: SpeechPlayer? = null
   private val voiceEngine = VoiceRecognizerController(app, scope, { connection.value }, { cloudAsrEnabled.value })
   private var lastSpokenRun = ""
@@ -111,13 +117,37 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       app,
       scope,
       { connection.value },
-      { text, flush -> speakSystem(text, flush) },
+      { text -> localSpeech.synthesize(text) },
       { playing ->
         speaking.value = playing
         if (!playing) voiceLevel.value = 0f
       },
       { onAudioQueueIdle() },
+      onLevel = { playbackLevel.value = it },
+      onUtterance = { spoken ->
+        if (callActive.value) { callAssistantCaption.value = spoken; callState.value = "speaking" }
+        val pose = speechPose(spoken)
+        val now = android.os.SystemClock.elapsedRealtime()
+        val gesture = if (now - lastGestureAt > 2400) pose.gesture else "none"
+        if (gesture != "none") lastGestureAt = now
+        agent.value?.state?.update { it.copy(emotion = pose.emotion, gesture = gesture, sequence = UUID.randomUUID().toString()) }
+      },
+      inCall = { callActive.value },
+      onError = { reportVoiceError(it) },
+      beforePlayback = {
+        if (callActive.value) {
+          voiceEngine.cancel(); listening.value = false; voiceLevel.value = 0f
+          val ready = callAudio.requestPlaybackFocus()
+          if (!ready) { callState.value = "error"; callAssistantCaption.value = voiceNotice.value }
+          ready
+        } else true
+      },
     )
+  }
+
+  private fun reportVoiceError(message: String) {
+    voiceNotice.value = message
+    if (callActive.value) callAssistantCaption.value = message
   }
 
   // ---- connection / agent -------------------------------------------------
@@ -720,7 +750,15 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       }
     }
 
-    val (saved, actualSha) = transport.downloadArtifactToStorage(app, artifactId, displayName, preferredMime, expectedSha, maxAllowed)
+    val messageId = "received:$taskId"
+    agent.value?.appendFileMessage(text = "正在接收来自 $source 的文件", meta = "来自 $source", fileName = displayName,
+      fileSize = expectedSize.coerceAtLeast(0), fileMime = preferredMime, messageId = messageId, fileState = "receiving")
+    val (saved, actualSha) = try { transport.downloadArtifactToStorage(app, artifactId, displayName, preferredMime, expectedSha, maxAllowed) }
+    catch (e: Exception) {
+      agent.value?.appendFileMessage(text = "文件未接收完成", meta = "来自 $source", fileName = displayName,
+        fileSize = expectedSize.coerceAtLeast(0), fileMime = preferredMime, messageId = messageId, fileState = "failed", fileError = "接收中断，请确认网络后重新发送。")
+      throw e
+    }
     val text = if (note.isNotBlank()) "来自 $source 的文件《${saved.filename}》：$note" else "已收到来自 $source 的文件《${saved.filename}》"
     voiceNotice.value = "已保存文件：${saved.filename}（${saved.displayPath}）"
     agent.value?.appendFileMessage(
@@ -732,6 +770,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       fileMime = saved.contentType,
       fileSize = saved.sizeBytes,
       fileLocation = saved.displayPath,
+      messageId = messageId,
     )
     agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
     AnyLinkCompanionService.notifyProactive(
@@ -770,99 +809,41 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     voiceEngineMode.value = clean
   }
 
-  private fun ensureSpeech() {
-    if (speech != null) return
-    speech = TextToSpeech(app) { status ->
-      speechReady = status == TextToSpeech.SUCCESS
-      if (speechReady) {
-        speech?.language = Locale.SIMPLIFIED_CHINESE
-        // Prefer a clear Chinese female voice when falling back to local Android TTS.
-        runCatching {
-          val voices = speech?.voices.orEmpty()
-          val zhFemale = voices.firstOrNull { v ->
-            v.locale?.language == "zh" && !v.isNetworkConnectionRequired &&
-              Regex("female|xiaoxiao|xiaoyi|yue|ting|zh-cn-x-fis|zh-cn-x-zhe", RegexOption.IGNORE_CASE).containsMatchIn(v.name)
-          } ?: voices.firstOrNull { v -> v.locale?.language == "zh" && !v.isNetworkConnectionRequired }
-          if (zhFemale != null) speech?.voice = zhFemale
-        }
-        speech?.setSpeechRate(1.06f)
-        speech?.setPitch(1.18f)
-      }
-    }
-    speech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-      override fun onStart(utteranceId: String?) { speaking.value = true }
-      override fun onDone(utteranceId: String?) {
-        val left = systemTtsPending.decrementAndGet().coerceAtLeast(0)
-        if (left == 0) {
-          speaking.value = false
-          scope.launch { onAudioQueueIdle() }
-        }
-      }
-      @Deprecated("Required platform callback") override fun onError(utteranceId: String?) {
-        val left = systemTtsPending.decrementAndGet().coerceAtLeast(0)
-        if (left == 0) {
-          speaking.value = false
-          scope.launch { onAudioQueueIdle() }
-        }
-        voiceNotice.value = "播报失败，请查看文字结果。"
-      }
-    })
-  }
-  private fun speakSystem(text: String, flush: Boolean) {
-    ensureSpeech()
-    if (speechReady) {
-      if (flush) systemTtsPending.set(1) else systemTtsPending.incrementAndGet()
-      speech?.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "tts-${UUID.randomUUID()}")
-    } else {
-      scope.launch { onAudioQueueIdle() }
-    }
-  }
   fun micGranted() = androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
   /** Tap-to-speak voice input in the main chat composer (auto-falls back from system recognizer to cloud ASR). */
   fun startListening() {
     if (callActive.value) { bargeInCall(); return }
     if (listening.value) { finishListeningNow(); return }
-    if (speaking.value || agent.value?.state?.value?.busy == true) { interruptAll() }
-    if (connection.value == null) { voiceNotice.value = "先连接服务器再和我说话哦。"; return }
-    if (!micGranted()) { voiceNotice.value = "需要麦克风权限，点我打开应用授权。"; openApp(); return }
-    partialTranscript.value = ""
-    voiceNotice.value = "我在听呢，主人请说…"
-    listening.value = true
-    voiceEngine.start(
-      preferredMode = voiceEngineMode.value,
-      silenceEndMs = 1500L,
-      onState = { st ->
-        if (st == "transcribing") voiceNotice.value = "正在识别语音…"
-      },
-      onLevel = { lv -> voiceLevel.value = lv },
-      onPartial = { text ->
-        partialTranscript.value = text
-        voiceNotice.value = text
-      },
-      onFinal = { text ->
-        listening.value = false
-        voiceLevel.value = 0f
-        partialTranscript.value = ""
-        voiceNotice.value = text
-        send(text)
-      },
-      onError = { _, msg ->
-        listening.value = false
-        voiceLevel.value = 0f
-        partialTranscript.value = ""
-        voiceNotice.value = msg
-      },
-    )
+    if (connection.value == null) { voiceNotice.value = "先连接服务器再和我说话。"; return }
+    if (!micGranted()) { voiceNotice.value = "请授予麦克风权限。"; openApp(); return }
+    interruptAll()
+    val stamp = ++voiceEpoch
+    partialTranscript.value = ""; listening.value = true
+    voiceNotice.value = "正在准备语音识别…"
+    voiceStartJob = scope.launch {
+      connection.value?.let { withTimeoutOrNull(3500) { refreshAudioStatus(it) } }
+      if (stamp != voiceEpoch || callActive.value) return@launch
+      voiceEngine.start(
+        preferredMode = voiceEngineMode.value, silenceEndMs = 1500,
+        onState = { voiceNotice.value = when (it) { "listening" -> "我在听，说完会自动发送。"; "transcribing" -> "正在识别语音…"; else -> "正在准备麦克风…" } },
+        onLevel = { voiceLevel.value = it },
+        onPartial = { partialTranscript.value = it },
+        onFinal = { text -> listening.value = false; voiceLevel.value = 0f; partialTranscript.value = ""; voiceNotice.value = text; send(text) },
+        onError = { _, msg -> listening.value = false; voiceLevel.value = 0f; partialTranscript.value = ""; voiceNotice.value = msg },
+      )
+    }
   }
 
   fun finishListeningNow() {
     if (!listening.value) return
+    if (!voiceEngine.isActive) { cancelListening(); return }
     voiceNotice.value = "正在识别…"
     voiceEngine.finishNow()
   }
 
   fun cancelListening() {
+    voiceEpoch++; voiceStartJob?.cancel(); voiceStartJob = null
     voiceEngine.cancel()
     listening.value = false
     voiceLevel.value = 0f
@@ -870,203 +851,132 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     voiceNotice.value = ""
   }
 
-  // ---- full-duplex hands-free real-time voice call --------------------------
-
-  private fun configureCallAudio(active: Boolean, speaker: Boolean) {
-    runCatching {
-      val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-      if (active) {
-        am.mode = AudioManager.MODE_IN_COMMUNICATION
-        @Suppress("DEPRECATION")
-        am.isSpeakerphoneOn = speaker
-      } else {
-        @Suppress("DEPRECATION")
-        am.isSpeakerphoneOn = false
-        am.mode = AudioManager.MODE_NORMAL
-      }
-    }
-  }
+  // ---- turn-taking call session: capture -> ASR -> agent -> audio -> capture ----
 
   fun startVoiceCall() {
     if (callActive.value) return
-    if (connection.value == null) { voiceNotice.value = "先连接服务器才能和大肥鱼实时通话哦。"; return }
+    if (connection.value == null) { voiceNotice.value = "请先连接服务器。"; return }
     if (!micGranted()) { voiceNotice.value = "需要麦克风权限才能开始通话。"; return }
     interruptAll()
-    callActive.value = true
-    callMuted.value = false
-    callDurationSec.value = 0
-    callUserCaption.value = ""
-    callAssistantCaption.value = "主人好呀，实时通话接通啦，直接开口说就行～"
-    callState.value = "listening"
-    configureCallAudio(active = true, speaker = callSpeakerOn.value)
-    callTimerJob?.cancel()
+    if (!runCatching { callAudio.start(callSpeakerOn.value) }.onFailure { voiceNotice.value = "无法准备通话音频，请检查音频设备后重试。" }.getOrDefault(false)) { callAudio.stop(); return }
+    val stamp = ++callEpoch
+    callActive.value = true; callMuted.value = false; callState.value = "connecting"
+    callDurationSec.value = 0; callStartedAt = 0; callRetries = 0
+    callUserCaption.value = ""; callAssistantCaption.value = "正在准备通话…"
     callTimerJob = scope.launch {
-      while (isActive && callActive.value) {
-        delay(1000L)
-        if (callActive.value) callDurationSec.update { it + 1 }
+      connection.value?.let { withTimeoutOrNull(3500) { refreshAudioStatus(it) } }
+      if (!callActive.value || stamp != callEpoch) return@launch
+      startCallListening()
+      while (isActive && callActive.value && stamp == callEpoch) {
+        if (callStartedAt > 0) callDurationSec.value = ((android.os.SystemClock.elapsedRealtime() - callStartedAt) / 1000).toInt()
+        delay(1000)
       }
     }
-    startCallListening()
   }
-
   fun endVoiceCall() {
     if (!callActive.value) return
-    callActive.value = false
-    callState.value = "idle"
-    callMuted.value = false
-    callTurnRunning = false
+    callActive.value = false; callEpoch++; callTurnEpoch++
+    callState.value = "idle"; callMuted.value = false; callTurnRunning = false
     callTimerJob?.cancel(); callTimerJob = null
     callTurnJob?.cancel(); callTurnJob = null
-    voiceEngine.cancel()
-    listening.value = false
-    voiceLevel.value = 0f
-    partialTranscript.value = ""
-    interruptAll()
-    configureCallAudio(active = false, speaker = false)
+    resumeListeningJob?.cancel(); resumeListeningJob = null
+    interruptAll(); callAudio.stop()
     voiceNotice.value = "通话已结束，聊天记录已保留。"
   }
-
   fun toggleCallMute() {
     if (!callActive.value) return
-    val nextMuted = !callMuted.value
-    callMuted.value = nextMuted
-    if (nextMuted) {
-      voiceEngine.cancel()
-      listening.value = false
-      voiceLevel.value = 0f
-      if (!callTurnRunning && !speaking.value) callState.value = "muted"
-    } else {
-      checkCallResumeListening()
-    }
+    callMuted.value = !callMuted.value
+    if (callMuted.value) {
+      voiceEngine.cancel(); listening.value = false; voiceLevel.value = 0f
+      if (!callTurnRunning && speechPlayer?.isActive != true) callState.value = "muted"
+    } else { if (callState.value == "error") bargeInCall() else checkCallResumeListening() }
   }
+  fun toggleCallSpeaker() { if (callActive.value) callAudio.route(!callSpeakerOn.value) }
 
-  fun toggleCallSpeaker() {
-    val next = !callSpeakerOn.value
-    callSpeakerOn.value = next
-    if (callActive.value) configureCallAudio(active = true, speaker = next)
-  }
-
-  /** Instant barge-in during a live voice call: cuts off 大肥鱼's generation & audio and starts listening right away. */
+  /** Tapping the character interrupts playback or retries an unavailable capture without an extra control. */
   fun bargeInCall() {
     if (!callActive.value) return
-    callTurnJob?.cancel(); callTurnJob = null
-    callTurnRunning = false
-    agent.value?.stop()
-    speechPlayer?.interrupt()
-    speech?.stop()
-    systemTtsPending.set(0)
-    speaking.value = false
-    voiceLevel.value = 0f
-    callMuted.value = false
-    startCallListening()
+    callTurnEpoch++; callTurnJob?.cancel(); callTurnJob = null; callTurnRunning = false
+    agent.value?.stop(); interruptVoice(); callMuted.value = false; callRetries = 0
+    val stamp = callEpoch
+    resumeListeningJob = scope.launch {
+      connection.value?.let { withTimeoutOrNull(3500) { refreshAudioStatus(it) } }
+      if (stamp == callEpoch && callActive.value) startCallListening()
+    }
   }
-
   private fun startCallListening() {
-    if (!callActive.value || callMuted.value || callTurnRunning) return
-    voiceEngine.cancel()
-    listening.value = true
-    callState.value = "listening"
-    partialTranscript.value = ""
+    if (!callActive.value || callMuted.value || callTurnRunning || speechPlayer?.isActive == true) return
+    val stamp = callEpoch
+    voiceEngine.cancel(); listening.value = true; callState.value = "connecting"; partialTranscript.value = ""
     voiceEngine.start(
-      preferredMode = voiceEngineMode.value,
-      silenceEndMs = 1050L,
-      onState = { st ->
-        if (callActive.value && !callTurnRunning) callState.value = st
-      },
-      onLevel = { lv -> voiceLevel.value = lv },
-      onPartial = { text ->
-        partialTranscript.value = text
-        callUserCaption.value = text
-      },
+      preferredMode = voiceEngineMode.value, silenceEndMs = 1100,
+      onState = { st -> if (stamp == callEpoch && callActive.value && !callTurnRunning) {
+        callState.value = if (st == "starting") "connecting" else st
+        if (st == "listening") {
+          if (callStartedAt == 0L) { callStartedAt = android.os.SystemClock.elapsedRealtime(); callAssistantCaption.value = "直接开口，说完会自动回复。" }
+        }
+      } },
+      onLevel = { voiceLevel.value = it },
+      onPartial = { partialTranscript.value = it; callUserCaption.value = it },
       onFinal = { text ->
-        listening.value = false
-        voiceLevel.value = 0f
-        partialTranscript.value = ""
-        if (!callActive.value) return@start
-        callUserCaption.value = text
-        runCallTurn(text)
+        listening.value = false; voiceLevel.value = 0f; partialTranscript.value = ""
+        if (stamp == callEpoch && callActive.value) { callRetries = 0; callUserCaption.value = text; runCallTurn(text) }
       },
-      onError = { code, msg ->
-        listening.value = false
-        voiceLevel.value = 0f
-        partialTranscript.value = ""
-        if (!callActive.value) return@start
-        if (code == "NO_SPEECH") {
-          // Natural pause during a live call: keep the line open and resume listening seamlessly.
-          scope.launch {
-            delay(300L)
-            if (callActive.value && !callMuted.value && !callTurnRunning && !speaking.value) startCallListening()
+      onError = { code, message ->
+        listening.value = false; voiceLevel.value = 0f; partialTranscript.value = ""
+        if (stamp == callEpoch && callActive.value) {
+          val retry = code == "NO_SPEECH" || (code in setOf("TRANSPORT_ERROR", "ASR_TIMEOUT", "ASR_UNAVAILABLE", "HTTP_502") && callRetries++ < 2)
+          if (retry) {
+            callState.value = "reconnecting"
+            resumeListeningJob?.cancel()
+            resumeListeningJob = scope.launch { delay(if (code == "NO_SPEECH") 350 else 1000); if (stamp == callEpoch) startCallListening() }
+          } else {
+            // A service error is distinct from the owner's mute preference.
+            callState.value = "error"; voiceNotice.value = message; callAssistantCaption.value = message
           }
-        } else {
-          voiceNotice.value = msg
-          callAssistantCaption.value = msg
-          callMuted.value = true
-          callState.value = "muted"
         }
       },
     )
   }
-
   private fun runCallTurn(userText: String) {
     val activeAgent = agent.value ?: return
-    callTurnJob?.cancel()
-    callTurnRunning = true
-    callState.value = "thinking"
-    callAssistantCaption.value = ""
+    val stamp = ++callTurnEpoch
+    callTurnJob?.cancel(); callTurnRunning = true; callState.value = "thinking"
     callTurnJob = scope.launch {
-      var spokeAny = false
       try {
-        val reply = activeAgent.sendVoiceCallTurn(
-          text = userText,
-          onSentence = { sentence ->
-            if (!callActive.value) return@sendVoiceCallTurn
-            spokeAny = true
-            callState.value = "speaking"
-            callAssistantCaption.update { prev -> if (prev.isBlank()) sentence else "$prev$sentence" }
-            // Voice-call turns already speak concisely in-character, so stream each sentence directly to TTS with zero extra LLM hop!
+        activeAgent.sendVoiceCallTurn(userText,
+          onSentence = { sentence -> if (callActive.value && stamp == callTurnEpoch) {
             speechPlayer?.enqueue(sentence, summarize = false, interrupt = false, forceRewrite = false)
-          },
-          onToolStart = { label ->
-            if (callActive.value) {
-              callAssistantCaption.value = "正在${label}…"
-            }
-          },
+          } },
+          onToolStart = { label -> if (callActive.value && stamp == callTurnEpoch) callAssistantCaption.value = "正在${label}…" },
         )
-        if (reply.isNotBlank()) callAssistantCaption.value = reply
-      } catch (_: Exception) {
-        if (callActive.value) callAssistantCaption.value = "唔，刚刚信号抖了一下，主人再说一次吧～"
-      } finally {
-        callTurnRunning = false
-        if (callActive.value) {
-          if (!spokeAny) checkCallResumeListening() else checkCallResumeListening()
-        }
-      }
+      } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+      catch (_: Exception) { if (callActive.value && stamp == callTurnEpoch) callAssistantCaption.value = "这次回复没有完成，请再说一次。" }
+      finally { if (stamp == callTurnEpoch) { callTurnRunning = false; checkCallResumeListening() } }
     }
   }
-
   private fun onAudioQueueIdle() {
+    callAudio.releasePlaybackFocus()
+    playbackLevel.value = 0f
+    agent.value?.state?.update { it.copy(gesture = "none", sequence = UUID.randomUUID().toString()) }
     if (callActive.value) checkCallResumeListening()
   }
-
   private fun checkCallResumeListening() {
-    if (!callActive.value) return
-    if (callTurnRunning) return
-    if (speechPlayer?.isActive == true || systemTtsPending.get() > 0 || speaking.value) return
-    if (callMuted.value) {
-      callState.value = "muted"
-      return
-    }
-    scope.launch {
-      delay(260L)
-      if (callActive.value && !callMuted.value && !callTurnRunning && speechPlayer?.isActive != true && systemTtsPending.get() == 0 && !listening.value) {
-        startCallListening()
-      }
+    if (!callActive.value || callTurnRunning || speechPlayer?.isActive == true || speaking.value || callState.value == "error") return
+    if (callMuted.value) { callState.value = "muted"; return }
+    val stamp = callEpoch
+    resumeListeningJob?.cancel()
+    resumeListeningJob = scope.launch {
+      delay(280)
+      if (stamp == callEpoch && callActive.value && !callMuted.value && !callTurnRunning && speechPlayer?.isActive != true && !listening.value) startCallListening()
     }
   }
-
   fun interruptVoice() {
-    speechPlayer?.interrupt(); speech?.stop(); systemTtsPending.set(0); voiceEngine.cancel()
-    listening.value = false; speaking.value = false; voiceLevel.value = 0f; partialTranscript.value = ""
+    voiceEpoch++; voiceStartJob?.cancel(); voiceStartJob = null
+    resumeListeningJob?.cancel(); resumeListeningJob = null
+    speechPlayer?.interrupt(); localSpeech.cancel(); voiceEngine.cancel(); callAudio.releasePlaybackFocus()
+    listening.value = false; speaking.value = false; voiceLevel.value = 0f; playbackLevel.value = 0f; partialTranscript.value = ""
+    agent.value?.state?.update { it.copy(gesture = "none", sequence = UUID.randomUUID().toString()) }
   }
   fun interruptAll() { stop(); interruptVoice() }
 

@@ -6,15 +6,14 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 
 ---
 
-## 一、核心特性与前端架构（`v0.9.2` 深海玻璃陪伴版）
+## 一、核心特性与前端架构（Android `0.10.0-preview.1`）
 
-- **全屏无遮挡 Live2D 舞台 + 磨砂玻璃双视图 + 原生 Markdown 渲染**：
-  - 全屏深海浅蓝径向光晕与无裁剪 WebView 舞台：私有版构建自动把模型资产规范为纯 ASCII 路径（`dafeiyu.moc3`、`textures/texture_00.png` 等）避免 APK ZIP 编码问题，WebView 放行 `data:`/`blob:`、关闭移动端易引发黑屏的 MSAA、移除盖在 WebView 上的全屏遮挡层，并在「保活」页内置 **「大肥鱼形象引擎状态」** 诊断与一键重新加载按钮。
-  - 底部磨砂玻璃对话面板支持一键切换「**陪伴视图**」与「**展开阅读**」（弹起输入法自动紧凑），完整展示多轮对话气泡（支持长按选择复制、**原生 Compose Markdown 渲染**：标题、加粗/斜体/删除线、行内与多行围栏代码块、列表、引用、表格、可点链接）以及 **Protocol v3.2 高危审批 / 追问交互卡片**。
-- **双引擎语音输入 + 全屏 Live2D 实时通话 + 独立人设口播改写**：
-  - **语音输入**：输入栏常驻 `🎤` 按钮，支持实时声波条、边说边转文字预览与一键「说完了 / 取消」。内置双引擎（在「保活」页可切换「自动 / 云端识别 / 系统识别」）：优先使用系统在线/厂商 `SpeechRecognizer`，当无 GMS 或系统识别不可用时自动无缝回退到通用 `AudioRecord`（16 kHz PCM16 + 回声消除 AEC + 降噪 + 自适应静音检测 VAD）→ 云端 `POST /model/v1/audio/transcriptions`。
-  - **全屏实时通话**：点击顶栏 **「📞 通话」** 进入全屏 Live2D 实时通话界面——免手连续多轮对话、逐句流式抢先合成播报（`VoiceSentenceChunker` 边生成边说话）、Live2D 实时口型联动（`audioLevel`）、随时点击 **「打断」** 抢话、支持 **静音 / 扬声器与听筒切换 / 挂断**，通话中依然可操控手机或调起 Mac 跨设备任务，挂断后记录自动保留。
-  - **简洁核心人设口播**：普通聊天与跨设备回执播报强制传 `rewrite: "always"` + `style: "persona"`，若 `/model/v1/speech` 失败或未改写还会自动补一次轻量 `/model/v1/chat/completions` 人设提炼调用，只念 1–2 句核心口语，不念代码与 Markdown 符号。
+- **透明半身舞台与 SVG 图标**：主界面和通话页保留 Live2D 半身形象，按面板实际位置裁切，阅读模式缩小人物。加载失败使用原创透明半身矢量兜底，不再显示圆形头像。界面操作图标来自 `web/icons/` 的 SVG 源文件，并生成原生 VectorDrawable；修改路径定义后运行 `node examples/android-native/scripts/generate-icons.mjs`。
+- **系统识别与可选云端 ASR**：自动模式只选择实际可用的引擎；没有云端配置时保留手机系统识别。录音会话独立管理，取消后的回调、超时和 HTTP 响应不能进入下一轮。服务不可用时明确提示，不进入假接通状态。
+- **电话式语音界面**：静音、居中挂断、听筒/外放，点人物可停止播报并继续说话。使用 API 31+ 通信设备路由，界面跟随系统确认的输出；结束通话恢复音频模式。当前采用自动轮流听说，播放结束后恢复识别，不宣称已实现外放下的全双工开口打断。
+- **真实音频口型与句子动作**：云端音频和系统 TTS 兜底都经过同一播放器；本地 TTS 等待初始化并合成音频文件。按解码后的 20ms RMS 包络及实际播放进度驱动嘴部，静音时闭嘴；字幕使用实际口播，句子开始播放时触发适量挥手、点头或指示动作，打断和挂断取消动作并收口。
+- **聊天内文件预览与持久记录**：接收文件仍保存到“下载/AnyLink”。聊天中显示图片、视频封面、PDF 首页和有长度上限的文本预览；图片可以放大。文件卡片、保存 URI 和接收状态独立存入 SQLite，重启可恢复，不混入模型上下文；未完成接收显示中断。系统打开与分享通过 content URI 授予临时只读权限。
+- **原生 Markdown 与交互卡片**：保留多轮聊天、代码块、列表、表格、跨设备任务确认和追问。
 - **极简登录验证**：
   - 只需填写 **HTTPS 服务器地址** 与 **预设登录密码（或加入密钥）** 即可一键接入，自动签发并加密保存专属设备令牌（Android Keystore AES-GCM），密码绝不落盘。
   - 展开「高级选项」可自定义设备名称、唯一短别名 `slug`（如 `my-phone`）或导入旧版凭据 JSON。
@@ -22,7 +21,7 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
   - WebSocket 支持 `resume_after_seq` 游标续传、20 秒心跳 + 15 秒 Pong 死链检测、Full Jitter 指数退避、`task.receipt_ack` 回执确认；流式对话支持 `X-AnyLink-Detach-On-Disconnect: on` 断线续接；离线记忆自动写入 SQLite `memory_outbox` 并在重连后自动补发。
   - 连接成功后自动拉起常驻前台服务 `AnyLinkCompanionService`（不强依赖悬浮窗权限），开启悬浮窗权限后退后台显示轻量化原生大肥鱼悬浮球（点按说话、长按回 App、拖动换位、拖至底部 `×` 隐藏）。
 - **跨设备双向传文件（200 MiB O(1) 内存流式 + Protocol v3.2 能力/容量协商）**：
-  - 输入栏左侧点 `📎` 通过系统文件选择器选任意文件：上传前自动从 `/edge/v1/protocol` 与 `/edge/v1/directory` 预检云端与目标电脑的文件策略与上限，超限或对方关闭收文件时直接拦下提示，不浪费流量；通过后留空文字点「发文件」直接一键流式发往 Mac（`~/Downloads/AnyLink/`），输入附言则携带 `artifact_id` 交由电脑 Agent 处理。
+  - 输入栏左侧点 附件按钮 通过系统文件选择器选任意文件：上传前自动从 `/edge/v1/protocol` 与 `/edge/v1/directory` 预检云端与目标电脑的文件策略与上限，超限或对方关闭收文件时直接拦下提示，不浪费流量；通过后留空文字点「发文件」直接一键流式发往 Mac（`~/Downloads/AnyLink/`），输入附言则携带 `artifact_id` 交由电脑 Agent 处理。
   - 接收 Mac 发来的文件时先校验本机开关、单文件上限与 `StatFs` 剩余存储空间；超过大文件确认阈值（默认 50 MB）时先弹出紧急通知与聊天确认卡片，等主人确认后再流式写入手机「下载/AnyLink」（`MediaStore.Downloads`）并校验 SHA-256，生成带「打开文件 / 分享」按钮的文件卡片。
   - 顶栏「**保活**」内提供完整的「跨设备接收文件策略」开关与档位（允许收文件开关、单文件上限 `50 MB / 200 MB / 500 MB / 1 GB`、大文件弹窗阈值 `不弹窗 / 20 MB / 50 MB / 100 MB`），修改后实时同步至云端。
 - **对称双向跨设备操控 + 可配置执行步数上限 + 主动弹窗通知**：
@@ -80,7 +79,7 @@ node examples/android-native/scripts/inspect-apk.mjs --private
 开启手机「USB 调试」连接电脑，使用项目内置 `adb` 安装（或直接把 APK 传到手机点击安装）：
 ```bash
 data/android-native/sdk/platform-tools/adb devices
-data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.9.2-private.apk
+data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.10.0-preview.1-private.apk
 ```
 
 ---
@@ -94,3 +93,16 @@ data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/A
    - **电池优化**：强烈建议在国产 ROM（小米/华为/OPPO/vivo/荣耀等）里设为「无限制 / 允许后台高耗电」，避免锁屏或隐藏后被系统强杀。
    - **悬浮权限**（可选）：开启后切后台出现轻量化悬浮球。
    - **无障碍权限**（可选）：开启后可语音或文字让大肥鱼自动操作手机 App（Android 13+ 侧载包需先在「应用信息」右上角允许「受限设置」）。
+
+## 五、本机视觉与语音样本检查
+
+```bash
+node --import tsx examples/android-native/scripts/create-preview-audio.mjs
+node examples/android-native/scripts/preview.mjs
+# http://127.0.0.1:5181/ — 读取本地已授权 Live2D 素材
+# 加 --public 使用不含私有素材的原创半身形象，端口 5182
+```
+
+预览页覆盖陪伴/阅读、文件卡片、PDF 示例、语音输入状态和电话式控制。点击“播放语音与口型”使用固定中文样本和 Web Audio 实际音量，不启用麦克风、不发送任务。预览不能替代真机系统识别、听筒/耳机路由和后台生命周期验收。
+
+构建产物记录 `source_dirty`，开发 APK 与已经发布的 v0.9.2 分开命名。私有 APK、模型和 Cubism Core 仍只保留本机；公开 APK 使用原创形象。

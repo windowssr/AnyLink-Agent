@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -106,8 +107,8 @@ class AnyLinkCloudUiTest {
       file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    compose.onNodeWithText("展开阅读 ⌃").performClick()
-    compose.onNodeWithText("陪伴视图 ⌄").assertExists()
+    compose.onNodeWithText("展开阅读").performClick()
+    compose.onNodeWithText("陪伴视图").assertExists()
     compose.onNodeWithText("帮我把文件写到电脑桌面").assertExists()
     System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
       val file = java.io.File(directory, "android-reading-v09.png"); file.parentFile?.mkdirs()
@@ -209,11 +210,11 @@ class AnyLinkCloudUiTest {
         )
       }
     }
-    compose.onNodeWithText("📄 周报.pdf · 1.50 MB").assertExists()
+    compose.onNodeWithText("周报.pdf").assertExists()
     compose.onNodeWithText("已保存至：下载/AnyLink/周报.pdf").assertExists()
     compose.onNodeWithText("打开文件").assertExists()
     compose.onNodeWithText("分享").assertExists()
-    compose.onNodeWithText("📎 合同.pdf（512.0 KB）").assertExists()
+    compose.onNodeWithText("合同.pdf（512.0 KB）").assertExists()
     compose.onNodeWithText("发文件").assertExists()
 
     System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
@@ -221,7 +222,7 @@ class AnyLinkCloudUiTest {
       file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    compose.onNodeWithText("📎").performClick()
+    compose.onNodeWithContentDescription("选择附件").performClick()
     assertTrue(pickedClicked)
     compose.onNodeWithText("发文件").performClick()
     assertTrue(sentTriggered)
@@ -337,12 +338,12 @@ class AnyLinkCloudUiTest {
         )
       }
     }
-    compose.onNodeWithText("📞 通话").assertExists().performClick()
+    compose.onNodeWithText("通话").assertExists().performClick()
     assertTrue(callStarted)
     compose.onNodeWithText("打开电脑上的微信").assertExists()
     compose.onNodeWithText("说完了").assertExists().performClick()
     assertTrue(finishedTapped)
-    compose.onNodeWithText("⏹").assertExists().performClick()
+    compose.onNodeWithContentDescription("结束录音").assertExists().performClick()
     assertTrue(listenTapped)
   }
 
@@ -386,16 +387,46 @@ class AnyLinkCloudUiTest {
         )
       }
     }
-    compose.onNodeWithText("大肥鱼 · 实时通话").assertExists()
+    compose.onNodeWithText("语音通话").assertExists()
     compose.onNodeWithText("01:05").assertExists()
     compose.onNodeWithText("你：今天天气怎么样").assertExists()
     compose.onNodeWithText("静音").performClick()
     assertTrue(muteTapped)
-    compose.onNodeWithText("打断").performClick()
+    compose.onNodeWithContentDescription("打断播报").performClick()
     assertTrue(bargeInTapped)
-    compose.onNodeWithText("扬声器").performClick()
+    compose.onNodeWithText("外放").performClick()
     assertTrue(speakerTapped)
-    compose.onNodeWithText("挂断").performClick()
+    compose.onNodeWithContentDescription("挂断通话").performClick()
     assertTrue(callEnded)
+    System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
+      val file = java.io.File(directory, "android-call-v010.png"); file.parentFile?.mkdirs()
+      file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
   }
+  @Test fun `received file cards survive process recreation without entering model messages`() {
+    val app = RuntimeEnvironment.getApplication()
+    val conn = CloudConnection("https://example.invalid", "test-token", "file-restore-" + java.util.UUID.randomUUID())
+    val ledger = SqlAgentLedger(app, conn)
+    val agent = DeviceAgent(conn, CloudClient(conn), ledger, { jsonObject() })
+    agent.appendFileMessage(text = "收到文件", fileName = "notes.txt", fileUri = "content://media/external/downloads/42", fileMime = "text/plain", fileSize = 123, fileLocation = "下载/AnyLink/notes.txt", messageId = "received:one")
+    val restored = DeviceAgent(conn, CloudClient(conn), SqlAgentLedger(app, conn), { jsonObject() })
+    assertEquals("content://media/external/downloads/42", restored.state.value.chat.single().fileUri)
+    assertTrue(ledger.messages().isEmpty())
+    restored.appendFileMessage(text = "收到文件", fileName = "notes.txt", messageId = "received:one")
+    assertEquals(1, restored.state.value.chat.size)
+  }
+
+  @Test fun `text and image previews read local files with bounded output`() = kotlinx.coroutines.runBlocking {
+    val app = RuntimeEnvironment.getApplication()
+    val text = java.io.File(app.cacheDir, "preview-test.txt").apply { writeText("你好".repeat(5000)) }
+    val preview = loadFilePreview(app, ChatMessage("file-text", "event", "", fileName = text.name, fileUri = android.net.Uri.fromFile(text).toString(), fileMime = "text/plain")) as FilePreview.Text
+    assertTrue(preview.truncated); assertEquals(1600, preview.text.length)
+    val image = java.io.File(app.cacheDir, "preview-test.png")
+    val bitmap = android.graphics.Bitmap.createBitmap(1800, 1200, android.graphics.Bitmap.Config.ARGB_8888)
+    image.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+    val picture = loadFilePreview(app, ChatMessage("file-image", "event", "", fileName = image.name, fileUri = android.net.Uri.fromFile(image).toString(), fileMime = "image/png")) as FilePreview.Picture
+    assertTrue(picture.bitmap.width <= 560); assertTrue(picture.bitmap.height <= 560)
+    text.delete(); image.delete(); Unit
+  }
+
 }

@@ -5,6 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {root, home, source, lock, node, tools} from './layout.mjs';
 const run=(args,options={})=>execFileSync('git',args,{cwd:source,encoding:'utf8',...options});
 const privateCharacter=process.env.ANYLINK_CHARACTER_MODE==='private';
+execFileSync(process.execPath,[path.join(home,'scripts/generate-icons.mjs'),'--check'],{stdio:'inherit'});
 const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 if(!fs.existsSync(path.join(source,'.git'))){
   fs.mkdirSync(path.dirname(source),{recursive:true});
@@ -86,6 +87,7 @@ fs.copyFileSync(path.join(home,'persona.md'),path.join(assets,'persona-android.m
 fs.copyFileSync(path.join(home,'licenses/OpenClaw-MIT.txt'),path.join(assets,'OpenClaw-MIT.txt'));
 for(const name of ['model','live2dcubismcore.min.js','pixi.min.js','cubism4-colors.min.js','public-avatar.js'])fs.rmSync(path.join(assets,name),{recursive:true,force:true});
 const drawable=path.join(source,'apps/android/app/src/main/res/drawable');fs.mkdirSync(drawable,{recursive:true});
+fs.rmSync(path.join(drawable,'anylink_portrait.png'),{force:true});
 for(const ext of ['png','xml'])fs.rmSync(path.join(drawable,'anylink_avatar.'+ext),{force:true});
 if(privateCharacter){
   for(const name of ['portrait.html','avatar.js'])fs.copyFileSync(path.join(home,'web',name),path.join(assets,name));

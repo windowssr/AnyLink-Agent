@@ -543,7 +543,7 @@ class AnyLinkAgentTest {
         context = RuntimeEnvironment.getApplication(),
         scope = this,
         connection = { conn },
-        speakTts = { text, _ -> spoken += text },
+        synthesizeLocal = { text -> spoken += text; null },
         onSpeaking = {},
       )
       player.enqueue("## 执行报告\n1. 已创建 `/Users/demo/a.txt`\n```bash\necho hi\n```", summarize = true, interrupt = true, forceRewrite = true)
@@ -563,4 +563,28 @@ class AnyLinkAgentTest {
       assertEquals(listOf("哼，主人，代码和文件我都已经帮你整理好放进桌面啦！"), spoken)
     }
   }
+  @Test fun `interrupted speech fetch cannot play a retired sentence in the next turn`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      server.enqueue(response("""{"spoken_text":"旧回复","rewritten":false}""").setBodyDelay(2, java.util.concurrent.TimeUnit.SECONDS))
+      server.enqueue(response("""{"spoken_text":"新回复","rewritten":false}"""))
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val spoken = mutableListOf<String>()
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { text -> spoken += text; null }, {})
+      player.enqueue("旧回复", summarize = false, interrupt = true, forceRewrite = false)
+      val deadline = System.currentTimeMillis() + 5000
+      while (server.requestCount == 0 && System.currentTimeMillis() < deadline) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(20)
+      }
+      assertEquals(1, server.requestCount)
+      player.interrupt()
+      player.enqueue("新回复", summarize = false, interrupt = false, forceRewrite = false)
+      while (spoken.isEmpty() && System.currentTimeMillis() < deadline) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(20)
+      }
+      assertEquals(listOf("新回复"), spoken)
+      player.interrupt()
+    }
+  }
+
 }

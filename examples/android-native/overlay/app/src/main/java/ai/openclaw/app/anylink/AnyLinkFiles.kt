@@ -198,8 +198,17 @@ internal object AnyLinkFiles {
   fun saveReceivedFile(context: Context, bytes: ByteArray, filename: String, contentType: String): SavedFile =
     streamToSavedFile(context, ByteArrayInputStream(bytes), filename, contentType).first
 
+  private fun sharedUri(context: Context, raw: String): Uri {
+    val uri = Uri.parse(raw)
+    if (uri.scheme != "file") return uri
+    val file = File(requireNotNull(uri.path)).canonicalFile
+    val allowed = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "AnyLink").canonicalFile
+    require(file.path.startsWith(allowed.path + File.separator))
+    return androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", file)
+  }
+
   fun openFile(context: Context, uriString: String, mimeType: String): Boolean = runCatching {
-    val uri = Uri.parse(uriString)
+    val uri = sharedUri(context, uriString)
     val intent = Intent(Intent.ACTION_VIEW).apply {
       setDataAndType(uri, mimeType.ifBlank { "*/*" })
       addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -209,7 +218,7 @@ internal object AnyLinkFiles {
   }.getOrDefault(false)
 
   fun shareFile(context: Context, uriString: String, filename: String, mimeType: String): Boolean = runCatching {
-    val uri = Uri.parse(uriString)
+    val uri = sharedUri(context, uriString)
     val intent = Intent(Intent.ACTION_SEND).apply {
       type = mimeType.ifBlank { "*/*" }
       putExtra(Intent.EXTRA_STREAM, uri)

@@ -1,80 +1,57 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>大肥鱼 · AnyLink v0.9 深海玻璃界面预览</title>
-  <link rel="stylesheet" href="./preview.css">
-</head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AnyLink · Android 体验预览</title><link rel="stylesheet" href="./preview.css"></head>
 <body data-phase="idle">
-  <aside class="preview-note">Android 本地 Agent · Protocol v3.2 深海玻璃界面预览（实景 Live2D + 对话玻璃层）</aside>
-  <main class="phone" id="phone">
-    <div class="ocean-orbs" aria-hidden="true"><span></span><span></span></div>
-    <iframe id="portrait" src="./avatar/portrait.html" title="大肥鱼半身形象"></iframe>
-
-    <header class="glass-header">
-      <div class="brand-cluster">
-        <h1>大肥鱼</h1>
-        <div class="status-pill"><i class="dot"></i><span id="status-text">@my-phone · WS 实时在线</span></div>
-      </div>
-      <div class="header-actions">
-        <button class="glass-chip" id="results-button">任务<em>2</em></button>
-        <button class="glass-chip">保活</button>
-        <button class="glass-chip">连接</button>
-      </div>
-    </header>
-
-    <div class="stage-spacer" id="stage-spacer">
-      <div class="phase-pill"><span id="state-light"></span><span id="state-label">想聊什么，或交给我办点事？</span></div>
-    </div>
-
-    <section class="glass-sheet" id="glass-sheet">
-      <div class="sheet-bar">
-        <span class="drag-handle"></span>
-        <div class="sheet-bar-row">
-          <button class="mode-pill" id="mode-toggle">展开阅读 ⌃</button>
-          <span class="memory-hint">云端共享记忆 · Protocol v3.2</span>
-        </div>
-      </div>
-
-      <div class="chat-feed" id="chat-feed">
-        <div class="bubble user">帮我把桌面上的周报移到主目录文件夹里</div>
-        <div class="bubble assistant">
-          <div class="meta">大肥鱼 · 已调用：安排跨设备任务</div>
-          <p>哼，小事一桩嘛！我已经让 Mac 那边的我帮你挪好了，就在 <code>/Users/demo/大肥鱼想对宝宝说的话.txt</code>，内容一字没动哦。</p>
-        </div>
-        <div class="bubble approval">
-          <div class="meta">跨设备高危审批 · Mac (@home-mac)</div>
-          <p>准备清理 <code>~/Downloads</code> 中 30 天前的安装包（共 1.2 GB），确认移入废纸篓吗？</p>
-          <div class="approval-actions">
-            <button class="btn-approve">批准执行</button>
-            <button class="btn-reject">先不要</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="composer">
-        <input id="draft" placeholder="和我聊聊，或安排跨设备任务…" maxlength="500">
-        <button id="voice-button" class="voice-orb" aria-label="语音说话">说话</button>
-      </div>
-    </section>
-
-    <section id="results" hidden>
-      <button id="close-results" aria-label="收起结果">×</button>
-      <h2>跨设备任务与回执</h2>
-      <p><b>✓ 移动周报到主目录</b> · 已签收 ACK · <code>/Users/demo/周报.txt</code></p>
-      <p><b>⏳ 清理旧安装包</b> · 等待主人审批（Protocol v3.2）</p>
-    </section>
-  </main>
-
-  <nav class="states" aria-label="人物状态演示">
-    <button data-phase="idle">陪伴</button>
-    <button data-phase="listening">倾听</button>
-    <button data-phase="thinking">思考</button>
-    <button data-phase="working">做事</button>
-    <button data-phase="speaking">说话</button>
-    <button data-phase="attention">需要你</button>
-  </nav>
-  <script src="./preview.js"></script>
-</body>
-</html>
+<p class="preview-note">Android 界面演示 · 使用本地语音样本，不录音、不连接设备、不发送任务</p>
+<main class="phone" id="phone">
+ <iframe id="portrait" src="./avatar/portrait.html" title="大肥鱼半身形象"></iframe>
+ <header class="glass-header">
+  <div><h1>大肥鱼</h1><span class="connection"><i></i>陪伴与协作</span></div>
+  <div class="header-actions">
+   <button id="call-button" class="chip"><svg><use href="./icons/sprite.svg#phone"/></svg>通话</button>
+   <button id="results-button" class="icon-button" aria-label="任务记录"><svg><use href="./icons/sprite.svg#tasks"/></svg></button>
+   <button id="settings-button" class="icon-button" aria-label="语音设置"><svg><use href="./icons/sprite.svg#settings"/></svg></button>
+  </div>
+ </header>
+ <div class="stage-spacer"><span class="phase-pill" id="state-label">在这里，随时听你说</span></div>
+ <section class="glass-sheet" id="glass-sheet">
+  <div class="sheet-bar"><span class="drag-handle"></span><div class="sheet-bar-row"><button id="mode-toggle" class="mode-pill">展开阅读<svg><use href="./icons/sprite.svg#chevron"/></svg></button><span>对话与文件</span></div></div>
+  <div class="chat-feed" id="chat-feed">
+   <div class="bubble user">把今天的周报发到手机上，我看一下。</div>
+   <div class="bubble assistant"><div class="meta">大肥鱼</div><p>收到啦，主人。文件就在下面，点一下就能预览。</p></div>
+   <article class="file-card">
+    <div class="file-heading"><svg><use href="./icons/sprite.svg#file"/></svg><div><strong>项目周报.pdf</strong><small>来自 home-mac · 1.50 MB</small></div><svg class="file-check"><use href="./icons/sprite.svg#check"/></svg></div>
+    <button class="file-thumbnail" id="file-preview" aria-label="预览项目周报 PDF"><img src="./demo-report.svg" alt="项目周报 PDF 首页缩略图"><span>PDF 首页 · 点击预览</span></button>
+    <div class="file-footer"><small>已保存至 下载/AnyLink</small><button id="file-open">打开文件</button><button id="file-share" aria-label="分享文件"><svg><use href="./icons/sprite.svg#share"/></svg></button></div>
+   </article>
+  </div>
+  <div id="recording" class="recording" hidden><span class="record-dot"></span><span id="transcript">语音输入状态演示</span><button id="finish-recording">说完了</button><button id="cancel-recording" aria-label="取消录音"><svg><use href="./icons/sprite.svg#close"/></svg></button></div>
+  <form class="composer" id="composer">
+   <button type="button" class="icon-button" id="attachment-button" aria-label="选择附件"><svg><use href="./icons/sprite.svg#attachment"/></svg></button>
+   <input id="draft" placeholder="说点什么，或交给我办件事…" aria-label="消息内容" maxlength="500">
+   <button type="button" id="voice-button" class="voice-button" aria-label="语音输入"><svg><use href="./icons/sprite.svg#mic"/></svg></button>
+   <button type="submit" class="send-button" aria-label="发送消息"><svg><use href="./icons/sprite.svg#send"/></svg></button>
+  </form>
+ </section>
+ <section id="call-screen" class="call-screen" hidden aria-label="语音通话预览">
+  <header class="call-header"><h2>大肥鱼</h2><p>语音通话 · 布局预览</p><time id="call-timer">00:00</time></header>
+  <button id="call-stage" class="call-stage" aria-label="点人物打断播报"></button>
+  <div class="call-bottom">
+   <p class="call-status" id="call-status">正在听你说</p>
+   <p class="call-caption" id="call-caption">可以播放下方语音样本，检查动作和口型。</p>
+   <div class="call-actions">
+    <button id="mute-button" class="call-action"><span><svg><use href="./icons/sprite.svg#mic"/></svg></span><small>静音</small></button>
+    <button id="hangup-button" class="call-action hangup"><span><svg><use href="./icons/sprite.svg#phone-off"/></svg></span><small>挂断</small></button>
+    <button id="route-button" class="call-action"><span><svg><use href="./icons/sprite.svg#earpiece"/></svg></span><small>听筒</small></button>
+   </div>
+  </div>
+ </section>
+ <aside id="notice" class="notice" role="status" hidden></aside>
+ <dialog id="file-dialog"><header><strong>项目周报.pdf</strong><button id="close-file" class="icon-button" aria-label="关闭文件预览"><svg><use href="./icons/sprite.svg#close"/></svg></button></header><img src="./demo-report.svg" alt="项目周报 PDF 首页"><p>此处为演示文件。原生 App 从本地文件生成预览。</p></dialog>
+</main>
+<nav class="preview-controls" aria-label="界面状态检查">
+ <button id="play-sample"><svg><use href="./icons/sprite.svg#play"/></svg>播放语音与口型</button>
+ <button data-phase="idle">陪伴</button><button data-phase="listening">倾听</button><button data-phase="thinking">思考</button><button data-phase="attention">需要确认</button>
+</nav>
+<audio id="speech-sample" controls preload="auto" src="./preview-speech.mp3" aria-label="语音演示样本"></audio>
+<p id="sample-status" class="preview-note">口型按实际播放音量驱动；声音停止时闭嘴。</p>
+<script src="./preview.js"></script></body></html>

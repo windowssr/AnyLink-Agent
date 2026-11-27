@@ -25,12 +25,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -43,9 +41,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -104,6 +99,7 @@ internal fun AnyLinkPortrait(
   safeTopPx: Int = 0,
   safeBottomPx: Int = 0,
   mini: Boolean = false,
+  call: Boolean = false,
   reloadTrigger: Int = 0,
   onStatusChange: (String) -> Unit = {},
   modifier: Modifier = Modifier,
@@ -129,6 +125,7 @@ internal fun AnyLinkPortrait(
       put("safeTop", safeTopPx)
       put("safeBottom", safeBottomPx)
       put("mini", mini)
+      put("call", call)
     }.toString()
   val currentPayload by rememberUpdatedState(payload)
 
@@ -173,12 +170,7 @@ internal fun AnyLinkPortrait(
     animationSpec = infiniteRepeatable(tween(2600, easing = FastOutSlowInEasing), RepeatMode.Reverse),
     label = "bob",
   )
-  val pulseScale by infinite.animateFloat(
-    initialValue = 0.985f,
-    targetValue = 1.022f,
-    animationSpec = infiniteRepeatable(tween(if (phase == AnyLinkPhase.Speaking) 440 else 2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-    label = "pulse",
-  )
+
 
   Box(modifier, contentAlignment = Alignment.TopCenter) {
     // Full-bleed hardware-accelerated WebView: never clip with RoundedCornerShape, start at alpha(0f),
@@ -284,28 +276,21 @@ internal fun AnyLinkPortrait(
       visible = !ready || webFailed,
       enter = fadeIn(tween(220)),
       exit = fadeOut(tween(380)),
-      modifier = Modifier.padding(top = if (mini) 86.dp else 104.dp),
+      modifier = Modifier.padding(top = if (mini) 86.dp else 116.dp),
     ) {
-      val ringBrush = Brush.radialGradient(
-        colors = listOf(Color(0x668ED8F8), Color(0x22468CAF), Color.Transparent),
-      )
       Box(
         modifier = Modifier
-          .size(if (mini) 84.dp else 212.dp)
+          .size(if (mini) 100.dp else 256.dp, if (mini) 140.dp else 340.dp)
           .graphicsLayer {
             translationY = if (animationsEnabled) bobDp * density else 0f
-            val s = if (animationsEnabled) pulseScale else 1f
-            scaleX = s; scaleY = s
-          }
-          .background(ringBrush, CircleShape)
-          .padding(if (mini) 8.dp else 16.dp),
-        contentAlignment = Alignment.Center,
+          },
+        contentAlignment = Alignment.TopCenter,
       ) {
         Image(
-          painter = painterResource(R.drawable.anylink_avatar),
+          painter = painterResource(R.drawable.anylink_portrait),
           contentDescription = "大肥鱼形象",
-          contentScale = ContentScale.Crop,
-          modifier = Modifier.fillMaxSize().clip(CircleShape),
+          contentScale = ContentScale.Fit,
+          modifier = Modifier.fillMaxSize(),
         )
       }
     }

@@ -4,7 +4,7 @@
   const phases = new Set(['idle', 'listening', 'thinking', 'working', 'speaking', 'attention']);
   const emotions = new Set(['neutral', 'happy', 'curious', 'comfort', 'apologetic', 'excited', 'shy']);
   let app, model, ready = false, paused = false, expressionKey = '', gestureSequence, actionEpoch = 0;
-  let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false, safeTop: 0, safeBottom: 0, mini: false};
+  let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false, safeTop: 0, safeBottom: 0, mini: false, call: false};
   let touch = 0, lastFrame = performance.now(), baseWidth = 0, baseHeight = 0;
   const pose = {x: 0, y: 0, tilt: 0, pitch: 0, mouth: 0, body: 0};
 
@@ -33,7 +33,9 @@
     if (!model || !app) return;
     const {w, h} = viewportSize();
     if (w < 16 || h < 16) return;
-    app.renderer.resize(w, h);
+    if (app.renderer.width !== w || app.renderer.height !== h) app.renderer.resize(w, h);
+    // Cubism renders outside Pixi stencil masks; clip the canvas rectangle itself, leaving WebView unoccluded.
+    app.view.style.clipPath = `inset(0 0 ${Math.max(0, state.safeBottom)}px 0)`;
     if (!baseWidth || !baseHeight) {
       model.scale.set(1);
       baseWidth = Math.max(1, model.width);
@@ -45,13 +47,13 @@
     //   centered cleanly in the upper 54% of the screen, unobstructed above the glass chat sheet.
     // - Reading / keyboard mode (mini): gently scale down and lift slightly so her face peeks above the sheet.
     const safeTop = Math.max(24, Math.min(state.safeTop || 42, h * 0.14));
-    const targetScale = state.mini
+    const targetScale = state.call ? (w * 1.7) / mw : state.mini
       ? Math.min((w * 0.86) / mw, (h * 0.72) / mh)
       : Math.min((w * 1.32) / mw, Math.max((w * 0.96) / mw, (h * 0.96) / mh));
     model.scale.set(targetScale);
     // Lift framing slightly so her head & eyes sit in the optical center above the glass sheet
     // (compensating for the model canvas's built-in transparent top headroom).
-    const yPos = state.mini ? safeTop - h * 0.065 : safeTop - h * 0.015;
+    const yPos = state.mini ? safeTop - h * 0.10 : safeTop - h * 0.10;
     model.position.set(w / 2, yPos);
   }
 
@@ -115,7 +117,7 @@
     const key = state.emotion + ':' + state.phase;
     if (key !== expressionKey) {
       expressionKey = key; model.internalModel.motionManager.expressionManager?.resetExpression();
-      const expression = {happy: 'blush', shy: 'blush', excited: 'smile', apologetic: 'concerned'}[state.emotion] || (state.phase === 'attention' ? 'concerned' : undefined);
+      const expression = {happy: 'blush', shy: 'blush', excited: 'smile', apologetic: 'concerned', comfort: 'concerned'}[state.emotion] || (state.phase === 'attention' ? 'concerned' : undefined);
       if (expression) model.expression(expression);
     }
     if (state.sequence != null && state.sequence !== gestureSequence) { gestureSequence = state.sequence; gesture(state.gesture); }
@@ -125,6 +127,8 @@
   window.anylinkMobileAvatar = {
     update(value) {
       if (!value || !phases.has(value.phase)) return;
+      const wasSpeaking = state.phase === 'speaking';
+      const oldFraming = [state.safeTop, state.safeBottom, state.mini, state.call].join(':');
       const dpr = window.devicePixelRatio || 1;
       state = {
         phase: value.phase,
@@ -136,12 +140,19 @@
         safeTop: (Number(value.safeTop) || 0) / dpr,
         safeBottom: (Number(value.safeBottom) || 0) / dpr,
         mini: value.mini === true,
+        call: value.call === true,
       };
-      fit();
+      if (wasSpeaking && state.phase !== 'speaking') {
+        actionEpoch++; touch = 0;
+        model?.internalModel?.motionManager?.stopAllMotions?.();
+        if (ready) model.motion('Idle', 0, 1).catch(() => {});
+      }
+      if (oldFraming !== [state.safeTop, state.safeBottom, state.mini, state.call].join(':')) fit();
       paused = value.paused === true;
       apply();
     },
     nod() { touch = performance.now(); },
+
   };
 
   async function waitForVisibleFrame(maxAttempts = 16) {
@@ -210,7 +221,7 @@
       new ResizeObserver(() => fit()).observe(document.body);
     }
     const internal = model.internalModel, core = internal.coreModel;
-    const available = new Set(['ParamAngleY', 'ParamAngleZ', 'ParamBodyAngleZ', 'ParamMouthOpenY'].filter(id => core.getParameterIndex(id) < core.getParameterCount()));
+    const available = new Set(['ParamAngleY', 'ParamAngleZ', 'ParamBodyAngleZ', 'ParamMouthOpenY'].filter(id => core.getParameterIndex(id) >= 0 && core.getParameterIndex(id) < core.getParameterCount()));
     const set = (id, value) => { if (available.has(id)) core.setParameterValueById(id, value); };
     internal.on('beforeModelUpdate', () => {
       const now = performance.now(), dt = Math.min(100, Math.max(0, now - lastFrame)); lastFrame = now;
@@ -221,7 +232,7 @@
       set('ParamAngleY', ease('pitch', quiet ? 0 : nod + (busy ? -2 : 0), 130));
       set('ParamAngleZ', ease('tilt', quiet ? 0 : listening ? 2.4 : state.emotion === 'curious' ? 3 : Math.sin(now / 5500) * 0.65, 420));
       set('ParamBodyAngleZ', ease('body', quiet ? 0 : Math.sin(now / 4300) * 0.35, 400));
-      const mouth = state.phase === 'speaking' ? (state.level || (0.18 + Math.abs(Math.sin(now / 110)) * 0.38)) : 0;
+      const mouth = state.phase === 'speaking' ? state.level : 0;
       set('ParamMouthOpenY', ease('mouth', mouth, 65));
     });
     app.view.addEventListener('pointerup', () => { touch = performance.now(); });

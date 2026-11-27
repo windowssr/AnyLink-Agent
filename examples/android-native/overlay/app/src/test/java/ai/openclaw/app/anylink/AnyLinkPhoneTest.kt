@@ -274,4 +274,35 @@ class AnyLinkPhoneTest {
       assertEquals(listOf("主人好呀！", "我随时听你吩咐哦。"), sentences)
     }
   }
+  @Test fun `voice preflight refuses unavailable cloud and preserves system recognition`() {
+    assertEquals("system", chooseVoiceEngine("auto", system = true, cloud = false))
+    assertNull(chooseVoiceEngine("auto", system = false, cloud = false))
+    assertNull(chooseVoiceEngine("cloud", system = true, cloud = false))
+    assertEquals("cloud", chooseVoiceEngine("auto", system = false, cloud = true))
+    assertEquals("system", chooseVoiceEngine("system", system = true, cloud = true))
+  }
+
+  @Test fun `lip envelope closes for silent audio and outside playback bounds`() {
+    assertEquals(0f, SpeechEnvelope.normalizedRms(0.0, 320))
+    val voiced = SpeechEnvelope.normalizedRms(12.8, 320)
+    assertTrue(voiced > 0.5f)
+    val envelope = SpeechEnvelope(listOf(0f, voiced, 0f))
+    assertEquals(0f, envelope.levelAt(-1)); assertEquals(voiced, envelope.levelAt(25))
+    assertEquals(0f, envelope.levelAt(45)); assertEquals(0f, envelope.levelAt(5000))
+  }
+
+  @Test fun `local TTS WAV yields a playback clock with silent and voiced frames`() = runBlocking {
+    val app = org.robolectric.RuntimeEnvironment.getApplication()
+    val pcm = ByteArray(1600 * 2)
+    for (i in 320 until 960) { val value = if (i % 2 == 0) 8000 else -8000; pcm[i * 2] = value.toByte(); pcm[i * 2 + 1] = (value shr 8).toByte() }
+    val file = java.io.File.createTempFile("tts-clock-", ".wav", app.cacheDir)
+    try {
+      file.writeBytes(WavEncoder.encodePcm16Mono(pcm))
+      val envelope = SpeechEnvelope.decode(file)
+      assertEquals(5, envelope.levels.size)
+      assertEquals(0f, envelope.levelAt(0)); assertTrue(envelope.levelAt(30) > 0.5f)
+      assertEquals(0f, envelope.levelAt(90)); assertEquals(0f, envelope.levelAt(120))
+    } finally { file.delete() }
+  }
+
 }

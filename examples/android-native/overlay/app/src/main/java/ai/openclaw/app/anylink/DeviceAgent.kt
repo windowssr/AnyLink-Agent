@@ -10,7 +10,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.json.*
+import kotlinx.serialization.Serializable
 
+@Serializable
 internal data class ChatMessage(
   val id: String,
   val role: String, // "user" | "assistant" | "event" | "interaction"
@@ -27,6 +29,8 @@ internal data class ChatMessage(
   val fileMime: String = "",
   val fileSize: Long = 0L,
   val fileLocation: String = "",
+  val fileState: String = "ready",
+  val fileError: String = "",
 )
 
 internal const val DEFAULT_AGENT_MAX_STEPS = 100
@@ -189,13 +193,20 @@ internal class DeviceAgent(
   private val personaProvider: PersonaProvider = PersonaProvider { "" to "" },
   private val maxStepsProvider: () -> Int = { DEFAULT_AGENT_MAX_STEPS },
 ) {
-  val state = MutableStateFlow(LocalAgentState(runs = ledger.runs(), chat = chatFromHistory(ledger.messages())))
+  val state = MutableStateFlow(LocalAgentState(runs = ledger.runs(), chat = ledger.timeline()?.let { runCatching { linkJson.decodeFromJsonElement<List<ChatMessage>>(it).map { msg ->
+      msg.copy(streaming = false,
+        fileState = if (msg.fileState == "receiving") "failed" else msg.fileState,
+        fileError = if (msg.fileState == "receiving") "上次接收已中断，请重新发送。" else msg.fileError,
+        resolved = msg.resolved || msg.role == "interaction")
+    } }.getOrNull() } ?: chatFromHistory(ledger.messages())))
   private val lock = Mutex()
+  @Synchronized private fun persistChat() { ledger.timeline(linkJson.encodeToJsonElement(state.value.chat).jsonArray) }
   fun stop() { cloud.cancel() }
-  fun newConversation() { if (!state.value.busy) { ledger.messages(JsonArray(emptyList())); state.update { it.copy(answer = "", notice = "", step = 0, canContinue = false, chat = emptyList()) } } }
+  fun newConversation() { if (!state.value.busy) { ledger.messages(JsonArray(emptyList())); ledger.timeline(JsonArray(emptyList())); state.update { it.copy(answer = "", notice = "", step = 0, canContinue = false, chat = emptyList()) } } }
   fun appendEvent(role: String = "event", text: String, meta: String = "") {
     if (text.isBlank()) return
     state.update { cur -> cur.copy(chat = (cur.chat + ChatMessage(id = "evt-${UUID.randomUUID()}", role = role, text = text, meta = meta)).takeLast(100)) }
+    persistChat()
   }
 
   fun appendFileMessage(
@@ -207,12 +218,15 @@ internal class DeviceAgent(
     fileMime: String = "application/octet-stream",
     fileSize: Long = 0L,
     fileLocation: String = "",
+    messageId: String = "file-${UUID.randomUUID()}",
+    fileState: String = "ready",
+    fileError: String = "",
   ) {
     if (fileName.isBlank()) return
     state.update { cur ->
       cur.copy(
-        chat = (cur.chat + ChatMessage(
-          id = "file-${UUID.randomUUID()}",
+        chat = (cur.chat.filterNot { it.id == messageId } + ChatMessage(
+          id = messageId,
           role = role,
           text = text,
           meta = meta,
@@ -221,9 +235,12 @@ internal class DeviceAgent(
           fileMime = fileMime,
           fileSize = fileSize,
           fileLocation = fileLocation,
+          fileState = fileState,
+          fileError = fileError,
         )).takeLast(100),
       )
     }
+    persistChat()
   }
 
   fun appendInteraction(taskId: String, interactionType: String, prompt: String, choices: List<String> = emptyList(), riskLevel: String = "", meta: String = "") {
@@ -243,6 +260,7 @@ internal class DeviceAgent(
       )
       cur.copy(chat = (filtered + msg).takeLast(100))
     }
+    persistChat()
   }
 
   fun markInteractionResolved(taskId: String, summary: String = "") {
@@ -253,6 +271,7 @@ internal class DeviceAgent(
         } else it
       })
     }
+    persistChat()
   }
 
   /** Flush any offline-buffered memory episodes to the Cloud Memory Brain. */
@@ -336,6 +355,7 @@ internal class DeviceAgent(
         if (idx >= 0) list[idx] = msg else list += msg
         cur.copy(answer = content, chat = list.takeLast(100))
       }
+      if (!streaming) persistChat()
     }
     val configuredSteps = maxStepsProvider()
     val stepLimit = if (configuredSteps <= 0) UNLIMITED_AGENT_STEPS_CAP else configuredSteps.coerceIn(1, UNLIMITED_AGENT_STEPS_CAP)
@@ -346,6 +366,7 @@ internal class DeviceAgent(
       )
     }
     try {
+      persistChat()
       save()
       val history = trimHistoryForBudget(ledger.messages())
       verify()
@@ -465,7 +486,8 @@ internal class DeviceAgent(
       }
       return ""
     } finally {
-      state.update { it.copy(busy = false, phase = if (it.notice.isEmpty()) "idle" else "attention", tool = "", step = 0) }; lock.unlock()
+      state.update { it.copy(busy = false, phase = if (it.notice.isEmpty()) "idle" else "attention", tool = "", step = 0) }
+      try { persistChat() } finally { lock.unlock() }
     }
   }
 

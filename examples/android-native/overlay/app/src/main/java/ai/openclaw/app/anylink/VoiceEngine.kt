@@ -156,10 +156,14 @@ internal class VoiceVadDetector(
   }
 }
 
-/** Dual-engine Android voice input controller:
- * 1) Online/OEM-friendly SpeechRecognizer (without forcing broken offline packs), AND
- * 2) Universal AudioRecord (16 kHz PCM16 + AEC + NS + adaptive VAD) -> /model/v1/audio/transcriptions.
- * Automatically falls back from System -> Cloud on Chinese ROMs lacking GMS SpeechRecognizer. */
+/** Capability selection is shared by preflight and capture; an unavailable cloud is never a fallback. */
+internal fun chooseVoiceEngine(preferred: String, system: Boolean, cloud: Boolean): String? = when (preferred) {
+  "cloud" -> if (cloud) "cloud" else null
+  "system" -> if (system) "system" else null
+  else -> if (cloud) "cloud" else if (system) "system" else null
+}
+
+/** One immutable callback set per capture. Retired recognizers and HTTP responses cannot finish a newer turn. */
 internal class VoiceRecognizerController(
   private val context: Context,
   private val scope: CoroutineScope,
@@ -172,330 +176,193 @@ internal class VoiceRecognizerController(
     const val MODE_SYSTEM = "system"
     private const val SAMPLE_RATE = 16000
   }
-
+  private class Session(
+    val mode: String, val silenceMs: Long,
+    val state: (String) -> Unit, val level: (Float) -> Unit,
+    val partial: (String) -> Unit, val final: (String) -> Unit, val error: (String, String) -> Unit,
+  ) {
+    @Volatile var stopped = false
+    @Volatile var finish = false
+    @Volatile var recorder: AudioRecord? = null
+    var recognizer: SpeechRecognizer? = null
+    var job: Job? = null
+    var request: okhttp3.Call? = null
+    var watchdog: Runnable? = null
+    var latest = ""
+  }
   private val main = Handler(Looper.getMainLooper())
-  private val http = OkHttpClient.Builder()
-    .followRedirects(false)
-    .followSslRedirects(false)
-    .connectTimeout(15, TimeUnit.SECONDS)
-    .readTimeout(35, TimeUnit.SECONDS)
-    .callTimeout(40, TimeUnit.SECONDS)
-    .build()
+  private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
+    .connectTimeout(12, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(35, TimeUnit.SECONDS).build()
+  @Volatile private var current: Session? = null
+  val isActive: Boolean get() = current != null
+  private fun owns(s: Session) = current === s && !s.stopped
+  fun available(preferred: String): Boolean = chooseVoiceEngine(preferred,
+    runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false), isCloudAsrAvailable()) != null
 
-  private var recognizer: SpeechRecognizer? = null
-  private var recordJob: Job? = null
-  @Volatile private var cloudStopRequested = false
-  @Volatile private var active = false
-  private var activeMode = MODE_SYSTEM
-  private var currentOnPartial: ((String) -> Unit)? = null
-  private var currentOnFinal: ((String) -> Unit)? = null
-  private var currentOnLevel: ((Float) -> Unit)? = null
-  private var currentOnError: ((String, String) -> Unit)? = null
-  private var currentOnState: ((String) -> Unit)? = null
-  private var currentSilenceMs: Long = 1300L
-  private var latestPartial = ""
-
-  fun start(
-    preferredMode: String = MODE_AUTO,
-    silenceEndMs: Long = 1300L,
-    onState: (String) -> Unit,
-    onLevel: (Float) -> Unit,
-    onPartial: (String) -> Unit,
-    onFinal: (String) -> Unit,
-    onError: (String, String) -> Unit,
+  fun start(preferredMode: String = MODE_AUTO, silenceEndMs: Long = 1300L,
+    onState: (String) -> Unit, onLevel: (Float) -> Unit, onPartial: (String) -> Unit,
+    onFinal: (String) -> Unit, onError: (String, String) -> Unit,
   ) {
     cancel()
-    active = true
-    latestPartial = ""
-    currentSilenceMs = silenceEndMs
-    currentOnState = onState
-    currentOnLevel = onLevel
-    currentOnPartial = onPartial
-    currentOnFinal = onFinal
-    currentOnError = onError
-
-    val systemAvailable = runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false)
-    val cloudAvailable = isCloudAsrAvailable()
-    val chosen = when (preferredMode) {
-      MODE_CLOUD -> MODE_CLOUD
-      MODE_SYSTEM -> MODE_SYSTEM
-      else -> when {
-        cloudAvailable && !systemAvailable -> MODE_CLOUD
-        systemAvailable -> MODE_SYSTEM
-        else -> MODE_CLOUD
-      }
-    }
-    if (chosen == MODE_CLOUD) {
-      startCloudRecording(silenceEndMs)
-    } else {
-      startSystemRecognizer(allowCloudFallback = preferredMode == MODE_AUTO)
-    }
-  }
-
-  /** Immediately stop capturing and finalize/transcribe whatever the user already said. */
-  fun finishNow() {
-    if (!active) return
-    if (activeMode == MODE_CLOUD) {
-      cloudStopRequested = true
-    } else {
-      main.post {
-        runCatching { recognizer?.stopListening() }
-        // If system recognizer doesn't return onResults promptly, deliver any captured partial.
-        val snap = latestPartial.trim()
-        if (snap.isNotBlank()) {
-          main.postDelayed({
-            if (active && latestPartial.trim() == snap) {
-              val cb = currentOnFinal
-              cancel()
-              cb?.invoke(snap)
-            }
-          }, 900)
-        }
-      }
-    }
-  }
-
-  fun cancel() {
-    active = false
-    cloudStopRequested = false
-    recordJob?.cancel()
-    recordJob = null
-    main.post {
-      runCatching { recognizer?.cancel() }
-      runCatching { recognizer?.destroy() }
-      recognizer = null
-    }
-    currentOnLevel?.invoke(0f)
-  }
-
-  private fun startSystemRecognizer(allowCloudFallback: Boolean) {
-    activeMode = MODE_SYSTEM
-    if (!runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false)) {
-      if (allowCloudFallback) {
-        startCloudRecording(currentSilenceMs)
-      } else {
-        active = false
-        currentOnError?.invoke("NO_SYSTEM_ASR", "系统未安装语音识别服务，请切换为「云端识别」或在系统设置中启用语音输入服务。")
-      }
+    val mode = chooseVoiceEngine(preferredMode,
+      runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false), isCloudAsrAvailable())
+    if (mode == null) {
+      onError("ASR_NOT_AVAILABLE", if (preferredMode == MODE_CLOUD) "服务器尚未启用语音识别，可在语音设置切换系统识别。" else "手机没有可用的系统识别服务，服务器也尚未启用语音识别。请先配置识别服务。")
       return
     }
+    val s = Session(mode, silenceEndMs, onState, onLevel, onPartial, onFinal, onError)
+    current = s
+    onState("starting")
+    if (mode == MODE_CLOUD) startCloud(s) else startSystem(s, preferredMode == MODE_AUTO)
+  }
+  fun cancel() {
+    val s = current ?: return
+    current = null; s.stopped = true
+    s.request?.cancel()
+    runCatching { s.recorder?.stop() }
+    s.job?.cancel()
+    destroySystem(s)
+    s.level(0f)
+  }
+  private fun destroySystem(s: Session) {
+    s.watchdog?.let(main::removeCallbacks); s.watchdog = null
+    val recognizer = s.recognizer; s.recognizer = null
+    // Capture the retired instance, never access a new session's recognizer from a posted cleanup.
+    main.post { runCatching { recognizer?.cancel() }; runCatching { recognizer?.destroy() } }
+  }
+  private fun finish(s: Session, text: String = "", code: String = "NO_SPEECH", message: String = "没有听清，请再说一次。") {
+    if (!owns(s)) return
+    current = null; s.stopped = true
+    destroySystem(s); s.level(0f)
+    if (text.isNotBlank()) s.final(text.trim()) else s.error(code, message)
+  }
+  private fun watchdog(s: Session, timeout: Long, action: () -> Unit) {
+    s.watchdog?.let(main::removeCallbacks)
+    s.watchdog = Runnable { if (owns(s)) action() }.also { main.postDelayed(it, timeout) }
+  }
+  fun finishNow() {
+    val s = current ?: return
+    if (s.mode == MODE_CLOUD) s.finish = true else {
+      runCatching { s.recognizer?.stopListening() }
+      watchdog(s, 2000) { finish(s, s.latest) }
+    }
+  }
+  private fun startSystem(s: Session, fallback: Boolean) {
     main.post {
-      if (!active) return@post
-      runCatching { recognizer?.destroy() }
-      val sr = runCatching { SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
-      if (sr == null) {
-        if (allowCloudFallback) startCloudRecording(currentSilenceMs)
-        else { active = false; currentOnError?.invoke("NO_SYSTEM_ASR", "无法初始化系统语音识别服务") }
-        return@post
+      if (!owns(s)) return@post
+      fun fail(code: String, message: String) {
+        if (!owns(s)) return
+        if (fallback && isCloudAsrAvailable()) {
+          destroySystem(s)
+          // A new capture has its own mode and callback ownership, including finishNow().
+          start(MODE_CLOUD, s.silenceMs, s.state, s.level, s.partial, s.final, s.error)
+        } else finish(s, code = code, message = message)
       }
-      recognizer = sr
+      val sr = runCatching { SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
+      if (sr == null) { fail("NO_SYSTEM_ASR", "无法启动手机系统语音识别。"); return@post }
+      s.recognizer = sr
+      watchdog(s, 8000) { fail("ASR_START_TIMEOUT", "系统语音识别没有响应，请检查系统语音服务。") }
       sr.setRecognitionListener(object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) { currentOnState?.invoke("listening") }
+        override fun onReadyForSpeech(params: Bundle?) {
+          if (!owns(s)) return
+          s.state("listening")
+          watchdog(s, 32000) { runCatching { sr.stopListening() }; watchdog(s, 2000) { finish(s, s.latest) } }
+        }
         override fun onBeginningOfSpeech() = Unit
-        override fun onRmsChanged(rmsdB: Float) {
-          val norm = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
-          currentOnLevel?.invoke(norm)
-        }
+        override fun onRmsChanged(rmsdB: Float) { if (owns(s)) s.level(((rmsdB + 2f) / 12f).coerceIn(0f, 1f)) }
         override fun onBufferReceived(buffer: ByteArray?) = Unit
-        override fun onEndOfSpeech() { currentOnState?.invoke("transcribing") }
-        override fun onPartialResults(partialResults: Bundle?) {
-          val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-          if (text.isNotBlank()) {
-            latestPartial = text
-            currentOnPartial?.invoke(text)
-          }
+        override fun onEndOfSpeech() { if (owns(s)) { s.state("transcribing"); watchdog(s, 6000) { finish(s, s.latest, "ASR_TIMEOUT", "识别超时，请重试。") } } }
+        override fun onPartialResults(results: Bundle?) {
+          if (!owns(s)) return
+          val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+          if (text.isNotBlank()) { s.latest = text; s.partial(text) }
         }
-        override fun onResults(results: Bundle?) {
-          if (!active) return
-          val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().ifBlank { latestPartial }.trim()
-          val onFinal = currentOnFinal
-          val onError = currentOnError
-          cancel()
-          if (text.isNotBlank()) onFinal?.invoke(text) else onError?.invoke("NO_SPEECH", "没有听到说话内容，请再试一次。")
-        }
+        override fun onResults(results: Bundle?) = finish(s,
+          results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().ifBlank { s.latest })
         override fun onError(error: Int) {
-          if (!active) return
-          // If system recognizer already captured partial text before timing out, use it!
-          val snap = latestPartial.trim()
-          if (snap.isNotBlank() && (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_NO_MATCH)) {
-            val cb = currentOnFinal
-            cancel()
-            cb?.invoke(snap)
-            return
+          if (!owns(s)) return
+          when (error) {
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT, SpeechRecognizer.ERROR_NO_MATCH -> finish(s, s.latest)
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> finish(s, code = "MIC_PERMISSION", message = "请授予麦克风权限后重试。")
+            SpeechRecognizer.ERROR_AUDIO -> finish(s, code = "MIC_UNAVAILABLE", message = "麦克风无法录音，请检查是否被其他应用占用。")
+            else -> fail("ASR_ERROR_$error", "系统识别暂时不可用，请检查语音服务或切换识别引擎。")
           }
-          // Engine unavailable / GMS missing / client failure -> automatically fall back to universal AudioRecord + Cloud ASR!
-          val engineBroken = error in setOf(
-            SpeechRecognizer.ERROR_CLIENT,
-            SpeechRecognizer.ERROR_SERVER,
-            SpeechRecognizer.ERROR_NETWORK,
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
-            12, // ERROR_LANGUAGE_NOT_SUPPORTED
-            13, // ERROR_LANGUAGE_UNAVAILABLE
-          )
-          if (allowCloudFallback && engineBroken) {
-            runCatching { recognizer?.destroy() }; recognizer = null
-            startCloudRecording(currentSilenceMs)
-            return
-          }
-          val msg = when (error) {
-            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没听清哦，请靠近麦克风再说一遍。"
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "请先授予麦克风权限。"
-            SpeechRecognizer.ERROR_AUDIO -> "麦克风被其他应用占用，请稍后再试。"
-            else -> "系统语音识别异常（错误码 $error），可在「保活」设置中切换云端语音识别。"
-          }
-          val code = if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) "NO_SPEECH" else "ASR_ERROR_$error"
-          val cb = currentOnError
-          cancel()
-          cb?.invoke(code, msg)
         }
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
       })
       val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, currentSilenceMs)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, currentSilenceMs)
-        // Do NOT force EXTRA_PREFER_OFFLINE = true: Chinese ROMs rarely bundle Google offline zh-CN packs.
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, s.silenceMs)
       }
-      runCatching { sr.startListening(intent) }.onFailure {
-        if (allowCloudFallback) startCloudRecording(currentSilenceMs)
-        else { active = false; currentOnError?.invoke("ASR_START_FAILED", "无法启动系统语音识别") }
-      }
+      runCatching { sr.startListening(intent) }.onFailure { fail("ASR_START_FAILED", "无法启动系统语音识别。") }
     }
   }
-
   @SuppressLint("MissingPermission")
-  private fun startCloudRecording(silenceEndMs: Long) {
-    activeMode = MODE_CLOUD
-    cloudStopRequested = false
-    recordJob?.cancel()
-    recordJob = scope.launch(Dispatchers.IO) {
-      val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-      if (minBuf <= 0) {
-        withContext(Dispatchers.Main) {
-          val cb = currentOnError; cancel(); cb?.invoke("MIC_UNAVAILABLE", "无法初始化手机麦克风录音")
-        }
-        return@launch
-      }
-      val rec = runCatching {
-        AudioRecord(
-          MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-          SAMPLE_RATE,
-          AudioFormat.CHANNEL_IN_MONO,
-          AudioFormat.ENCODING_PCM_16BIT,
-          maxOf(minBuf * 2, 6400),
-        )
-      }.getOrNull()
-      if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
-        runCatching { rec?.release() }
-        withContext(Dispatchers.Main) {
-          val cb = currentOnError; cancel(); cb?.invoke("MIC_UNAVAILABLE", "麦克风初始化失败，请检查录音权限")
-        }
-        return@launch
-      }
-      val aec = runCatching { if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } else null }.getOrNull()
-      val ns = runCatching { if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } else null }.getOrNull()
-      val pcmOut = ByteArrayOutputStream(SAMPLE_RATE * 2 * 6)
-      val vad = VoiceVadDetector(silenceEndMs = silenceEndMs)
-      val buf = ShortArray(640) // 40 ms @ 16 kHz
-      val startedMs = System.currentTimeMillis()
-      vad.reset(startedMs)
-      withContext(Dispatchers.Main) { currentOnState?.invoke("listening") }
+  private fun startCloud(s: Session) {
+    s.job = scope.launch(Dispatchers.IO) {
       try {
-        rec.startRecording()
-        while (isActive && active && !cloudStopRequested) {
-          val read = rec.read(buf, 0, buf.size)
-          if (read <= 0) continue
-          val rms = WavEncoder.pcm16Rms(buf, read)
-          val normLevel = (rms * 5.5f).coerceIn(0f, 1f)
-          val now = System.currentTimeMillis()
-          // Append little-endian PCM16 bytes
-          val bytes = ByteArray(read * 2)
-          for (i in 0 until read) {
-            val s = buf[i].toInt()
-            bytes[i * 2] = (s and 0xFF).toByte()
-            bytes[i * 2 + 1] = ((s ushr 8) and 0xFF).toByte()
+        val min = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        check(min > 0)
+        val rec = listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.MIC).firstNotNullOfOrNull { source ->
+          runCatching { AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min * 2, 6400)) }.getOrNull()?.let {
+            if (it.state == AudioRecord.STATE_INITIALIZED) it else { it.release(); null }
           }
-          pcmOut.write(bytes)
-          withContext(Dispatchers.Main) { currentOnLevel?.invoke(normLevel) }
-          val decision = vad.feed(rms, now)
-          if (decision == VoiceVadDetector.Decision.SPEECH_ENDED) break
-          if (!vad.hasSpeech && now - startedMs > 12_000L) break
-          if (pcmOut.size() >= SAMPLE_RATE * 2 * 30) break // 30s safety cap
+        } ?: throw IllegalStateException("Microphone unavailable")
+        s.recorder = rec
+        val aec = runCatching { if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } else null }.getOrNull()
+        val ns = runCatching { if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } else null }.getOrNull()
+        val pcm = ByteArrayOutputStream(SAMPLE_RATE * 2 * 6)
+        val buf = ShortArray(640)
+        val vad = VoiceVadDetector(silenceEndMs = s.silenceMs)
+        val started = android.os.SystemClock.elapsedRealtime(); vad.reset(started)
+        try {
+          if (!owns(s)) return@launch
+          rec.startRecording()
+          withContext(Dispatchers.Main) { if (owns(s)) s.state("listening") }
+          while (isActive && owns(s) && !s.finish) {
+            val n = rec.read(buf, 0, buf.size)
+            if (n < 0) throw IllegalStateException("Recording failed")
+            if (n == 0) continue
+            val rms = WavEncoder.pcm16Rms(buf, n)
+            val bytes = ByteArray(n * 2)
+            for (i in 0 until n) { bytes[i * 2] = buf[i].toByte(); bytes[i * 2 + 1] = (buf[i].toInt() shr 8).toByte() }
+            pcm.write(bytes)
+            withContext(Dispatchers.Main) { if (owns(s)) s.level((rms * 5.5f).coerceIn(0f, 1f)) }
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (vad.feed(rms, now) == VoiceVadDetector.Decision.SPEECH_ENDED || (!vad.hasSpeech && now - started > 12000) || pcm.size() >= SAMPLE_RATE * 2 * 30) break
+          }
+        } finally {
+          s.recorder = null
+          runCatching { rec.stop() }; aec?.release(); ns?.release(); rec.release()
         }
-      } finally {
-        runCatching { rec.stop() }
-        runCatching { aec?.release() }
-        runCatching { ns?.release() }
-        runCatching { rec.release() }
-      }
-      if (!active) return@launch
-      val pcmBytes = pcmOut.toByteArray()
-      if ((!vad.hasSpeech && !cloudStopRequested) || pcmBytes.size < SAMPLE_RATE) {
-        withContext(Dispatchers.Main) {
-          val cb = currentOnError; cancel(); cb?.invoke("NO_SPEECH", "没有检测到说话声音，请靠近麦克风再试。")
+        if (!owns(s)) return@launch
+        if ((!vad.hasSpeech && !s.finish) || pcm.size() < SAMPLE_RATE) {
+          withContext(Dispatchers.Main) { finish(s) }; return@launch
         }
-        return@launch
-      }
-      withContext(Dispatchers.Main) {
-        currentOnLevel?.invoke(0f)
-        currentOnState?.invoke("transcribing")
-      }
-      val conn = connection()
-      if (conn == null) {
-        withContext(Dispatchers.Main) {
-          val cb = currentOnError; cancel(); cb?.invoke("NOT_CONNECTED", "请先连接 AnyLink 服务器后再使用云端语音识别。")
-        }
-        return@launch
-      }
-      val wav = WavEncoder.encodePcm16Mono(pcmBytes, SAMPLE_RATE)
-      val b64 = Base64.encodeToString(wav, Base64.NO_WRAP)
-      val payload = jsonObject(
-        "audio_base64" to str(b64),
-        "format" to str("wav"),
-        "language" to str("zh"),
-      ).toString().toRequestBody("application/json".toMediaType())
-      val result = runCatching {
-        http.newCall(
-          Request.Builder()
-            .url(conn.server + "/model/v1/audio/transcriptions")
-            .header("Authorization", "Bearer ${conn.token}")
-            .post(payload)
-            .build(),
-        ).execute().use { res ->
-          val raw = res.body.string()
-          val parsed = runCatching { linkJson.parseToJsonElement(raw).jsonObject }.getOrNull()
-          if (res.isSuccessful && parsed != null) {
-            "OK" to parsed.text("text").trim()
-          } else {
-            val errObj = parsed?.get("error") as? JsonObject
-            val code = errObj?.text("code").orEmpty().ifBlank { "HTTP_${res.code}" }
-            val msg = errObj?.text("message").orEmpty().ifBlank { "云端语音识别失败（$code）" }
-            code to msg
+        withContext(Dispatchers.Main) { if (owns(s)) { s.level(0f); s.state("transcribing") } }
+        val conn = connection() ?: throw IllegalStateException("Not connected")
+        val body = jsonObject("audio_base64" to str(Base64.encodeToString(WavEncoder.encodePcm16Mono(pcm.toByteArray()), Base64.NO_WRAP)),
+          "format" to str("wav"), "language" to str("zh")).toString().toRequestBody("application/json".toMediaType())
+        val request = http.newCall(Request.Builder().url(conn.server + "/model/v1/audio/transcriptions")
+          .header("Authorization", "Bearer ${conn.token}").post(body).build())
+        s.request = request
+        if (!owns(s)) { request.cancel(); return@launch }
+        val result = request.execute().use { res ->
+          val obj = runCatching { linkJson.parseToJsonElement(res.body.string()).jsonObject }.getOrNull()
+          if (res.isSuccessful && obj != null) Triple(obj.text("text"), "NO_SPEECH", "没有识别到说话内容。") else {
+            val error = obj?.get("error") as? JsonObject
+            Triple("", error?.text("code").orEmpty().ifBlank { "HTTP_${res.code}" },
+              if (res.code == 503) "服务器尚未启用语音识别，请配置 ASR 服务或切换系统识别。" else "语音识别服务暂时不可用，请重试。")
           }
         }
-      }.getOrElse { "TRANSPORT_ERROR" to "语音上传失败，请检查网络连接。" }
-
-      withContext(Dispatchers.Main) {
-        if (!active) return@withContext
-        val onFinal = currentOnFinal
-        val onError = currentOnError
-        cancel()
-        if (result.first == "OK") {
-          if (result.second.isNotBlank()) onFinal?.invoke(result.second)
-          else onError?.invoke("NO_SPEECH", "没听清刚才说的话，请再说一次。")
-        } else if (result.first == "ASR_NOT_CONFIGURED") {
-          onError?.invoke(
-            "ASR_NOT_CONFIGURED",
-            "手机未安装系统语音识别，且云端暂未配置语音转文字密钥（在服务器配置 ANYLINK_ASR_API_KEY 即可支持所有国产手机语音输入与实时通话）。",
-          )
-        } else {
-          onError?.invoke(result.first, result.second)
-        }
+        withContext(Dispatchers.Main) { finish(s, result.first, result.second, result.third) }
+      } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+      catch (e: Exception) {
+        withContext(Dispatchers.Main) { finish(s, code = if (e is java.io.IOException) "TRANSPORT_ERROR" else "MIC_UNAVAILABLE",
+          message = if (e is java.io.IOException) "语音上传失败，请检查网络后重试。" else "麦克风无法录音，请检查权限及音频占用。") }
       }
     }
   }

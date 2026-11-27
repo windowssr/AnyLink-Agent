@@ -19,8 +19,8 @@ const app=path.join(source,'apps/android'),version=JSON.parse(fs.readFileSync(pa
 const revision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
 const privateCharacter=process.env.ANYLINK_CHARACTER_MODE==='private';
 if(JSON.parse(fs.readFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/character-mode.json'))).private_character!==privateCharacter)throw new Error('Prepared character mode differs from requested distribution; prepare again');
-fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,agent_context:agent,private_character:privateCharacter,architecture:'device-agent',gateway_required:false},null,2)+'\n');
-const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=3002','-PANYLINK_AGENT_ID='+agent];
+fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,source_dirty:execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).trim().length>0,agent_context:agent,private_character:privateCharacter,architecture:'device-agent',gateway_required:false},null,2)+'\n');
+const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE=3003','-PANYLINK_AGENT_ID='+agent];
 if(process.argv.includes('--dependencies'))args.push('help');
 else if(live)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkLiveTest');
 else if(testing)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkAgentTest','--tests','ai.openclaw.app.anylink.AnyLinkCloudUiTest','--tests','ai.openclaw.app.anylink.AnyLinkPhoneTest');
@@ -36,7 +36,7 @@ await new Promise((resolve,reject)=>{
 if(!testing&&!process.argv.includes('--dependencies')){
   const dir=path.join(app,'app/build/outputs/apk/thirdParty/debug');
   const metadata=JSON.parse(fs.readFileSync(path.join(dir,'output-metadata.json'),'utf8'));
-  if(metadata.elements.length!==1||metadata.elements[0].versionName!==version+'-debug'||metadata.elements[0].versionCode!==3002)throw new Error('APK output metadata does not match the selected debug version');
+  if(metadata.elements.length!==1||metadata.elements[0].versionName!==version+'-debug'||metadata.elements[0].versionCode!==3003)throw new Error('APK output metadata does not match the selected debug version');
   const name=metadata.elements[0].outputFile;
   if(!name)throw new Error('No built APK was produced');
   const target=path.join(output,'AnyLink-Android-'+version+(privateCharacter?'-private':'')+'.apk');fs.copyFileSync(path.join(dir,name),target);

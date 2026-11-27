@@ -10,6 +10,9 @@ import java.util.ArrayDeque
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -60,9 +63,14 @@ internal class SpeechPlayer(
   private val context: Context,
   private val scope: CoroutineScope,
   private val connection: () -> CloudConnection?,
-  private val speakTts: (String, Boolean) -> Unit,
+  private val synthesizeLocal: suspend (String) -> File?,
   private val onSpeaking: (Boolean) -> Unit,
   private val onIdle: () -> Unit = {},
+  private val onLevel: (Float) -> Unit = {},
+  private val onUtterance: (String) -> Unit = {},
+  private val inCall: () -> Boolean = { false },
+  private val onError: (String) -> Unit = {},
+  private val beforePlayback: () -> Boolean = { true },
 ) {
   private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(45000, java.util.concurrent.TimeUnit.MILLISECONDS).build()
   private val json = Json { ignoreUnknownKeys = true }
@@ -71,31 +79,48 @@ internal class SpeechPlayer(
   private var player: MediaPlayer? = null
   private var busy = false
   private var epoch = 0
+  private var fetchJob: Job? = null
   private var currentFile: File? = null
+  private var levelTick: Runnable? = null
   val isActive: Boolean get() = busy || pending.isNotEmpty()
 
   fun enqueue(text: String, summarize: Boolean, interrupt: Boolean, forceRewrite: Boolean = true) {
-    if (interrupt) { pending.clear(); epoch++; stopPlayer() }
+    if (interrupt) interrupt()
+    if (text.isBlank()) return
     pending.addLast(Pending(text, summarize, interrupt, forceRewrite))
     pump()
   }
-
-  fun interrupt() { pending.clear(); epoch++; stopPlayer() }
-
+  fun interrupt() {
+    epoch++; pending.clear(); fetchJob?.cancel(); fetchJob = null
+    http.dispatcher.cancelAll()
+    stopPlayer(); busy = false
+  }
   private fun pump() {
     if (busy) return
-    val next = pending.pollFirst() ?: run {
-      onIdle()
-      return
-    }
+    val next = pending.pollFirst() ?: run { onIdle(); return }
     busy = true
     val stamp = epoch
-    scope.launch {
-      val result = fetch(next)
-      withContext(Dispatchers.Main) {
-        if (stamp != epoch) { busy = false; pump(); return@withContext }
-        play(next, result)
-      }
+    fetchJob = scope.launch {
+      var file: File? = null
+      try {
+        val (spoken, audio) = fetch(next)
+        ensureActive()
+        val words = spoken ?: SpeechSanitizer.clean(next.text)
+        file = if (audio != null) withContext(Dispatchers.IO) {
+          File(context.cacheDir, "speech-${UUID.randomUUID()}.mp3").also { file = it; it.writeBytes(android.util.Base64.decode(audio, android.util.Base64.DEFAULT)) }
+        } else synthesizeLocal(words)
+        ensureActive()
+        if (stamp != epoch) return@launch
+        val ready = file
+        if (ready == null) { busy = false; pump(); return@launch }
+        val envelope = try { SpeechEnvelope.decode(ready) } catch (e: CancellationException) { throw e } catch (_: Exception) { SpeechEnvelope(emptyList()) }
+        ensureActive()
+        if (stamp != epoch) return@launch
+        play(ready, words, envelope, stamp)
+        file = null // Ownership passes to the active player.
+      } catch (e: CancellationException) { throw e }
+      catch (_: Exception) { if (stamp == epoch) { onError("语音暂时无法播放，请查看文字回复。"); busy = false; pump() } }
+      finally { file?.delete() }
     }
   }
 
@@ -186,46 +211,45 @@ internal class SpeechPlayer(
     return@withContext spokenFromServer to null
   }
 
-  private fun play(next: Pending, result: Pair<String?, String?>) {
-    val (spoken, audio) = result
-    if (audio == null) {
-      // Server TTS unavailable or request failed: system TTS with spoken_text or
-      // the locally sanitized text. TTS queues itself; advance immediately.
-      val fallback = spoken ?: SpeechSanitizer.clean(next.text).ifBlank { next.text }.take(3500)
-      speakTts(fallback, next.interrupt)
-      busy = false; pump(); return
-    }
+  private fun play(file: File, spoken: String, envelope: SpeechEnvelope, stamp: Int) {
+    currentFile = file
+    val mp = MediaPlayer(); player = mp
     try {
-      val bytes = android.util.Base64.decode(audio, android.util.Base64.DEFAULT)
-      val file = File(context.cacheDir, "speech-${UUID.randomUUID()}.mp3").apply { writeBytes(bytes) }
-      currentFile = file
-      val mp = MediaPlayer()
-      player = mp
-      mp.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+      val usage = if (inCall()) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA
+      mp.setAudioAttributes(AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
       mp.setDataSource(file.absolutePath)
       mp.setOnPreparedListener {
-        onSpeaking(true)
-        mp.start()
+        if (stamp != epoch || player !== mp) return@setOnPreparedListener
+        if (!beforePlayback()) { finish(mp, stamp); return@setOnPreparedListener }
+        runCatching {
+          mp.start(); onSpeaking(true); onUtterance(spoken)
+          val tick = object : Runnable {
+            override fun run() {
+              if (stamp != epoch || player !== mp) return
+              onLevel(envelope.levelAt(runCatching { mp.currentPosition }.getOrDefault(-1)))
+              main.postDelayed(this, 20)
+            }
+          }
+          levelTick = tick; main.post(tick)
+        }.onFailure { finish(mp, stamp) }
       }
-      mp.setOnCompletionListener { finish() }
-      mp.setOnErrorListener { _, _, _ -> finish(); true }
+      mp.setOnCompletionListener { finish(mp, stamp) }
+      mp.setOnErrorListener { _, _, _ ->
+        if (stamp == epoch) onError("语音播放中断，请查看文字回复。")
+        finish(mp, stamp); true
+      }
       mp.prepareAsync()
-    } catch (_: Exception) { finish() }
+    } catch (_: Exception) { finish(mp, stamp) }
   }
-
-  private fun finish() {
-    runCatching { player?.stop() }
-    player?.release(); player = null
-    currentFile?.delete(); currentFile = null
-    onSpeaking(false)
-    busy = false; pump()
+  private fun finish(mp: MediaPlayer, stamp: Int) {
+    if (stamp != epoch || player !== mp) return
+    stopPlayer(); busy = false; pump()
   }
-
   private fun stopPlayer() {
-    runCatching { player?.stop() }
-    player?.release(); player = null
+    levelTick?.let(main::removeCallbacks); levelTick = null
+    val old = player; player = null
+    runCatching { old?.stop() }; old?.release()
     currentFile?.delete(); currentFile = null
-    onSpeaking(false)
-    busy = false
+    onLevel(0f); onSpeaking(false)
   }
 }
