@@ -1,8 +1,10 @@
 package ai.openclaw.app.anylink
 
 import android.content.Intent
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -121,5 +123,38 @@ class AnyLinkCloudUiTest {
     compose.onNodeWithText("搜索覆盖有限，未遍历全部文件。").assertExists()
     compose.onNodeWithText("周报已整理并汇总 3 条进展。").assertExists()
     compose.onNodeWithText("Mac 端无法直接发送微信消息").assertExists()
+  }
+
+  @Test fun `proactive messages post IMPORTANCE_HIGH heads-up notification and floating bubble centers avatar`() {
+    val app = RuntimeEnvironment.getApplication()
+    org.robolectric.Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+    val posted = AnyLinkCompanionService.notifyProactive(
+      app,
+      title = "大肥鱼：跨设备任务办妥啦",
+      body = "飞书消息已经帮你发好啦！",
+      tag = "task:test-notify-1",
+    )
+    assertTrue(posted)
+    val nm = app.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+    val channel = nm.getNotificationChannel(AnyLinkCompanionService.MESSAGE_CHANNEL)
+    assertNotNull(channel)
+    assertEquals(android.app.NotificationManager.IMPORTANCE_HIGH, channel.importance)
+    val active = org.robolectric.Shadows.shadowOf(nm).allNotifications
+    assertTrue(active.any { it.extras.getString(android.app.Notification.EXTRA_TITLE) == "大肥鱼：跨设备任务办妥啦" && it.extras.getString(android.app.Notification.EXTRA_TEXT) == "飞书消息已经帮你发好啦！" })
+
+    compose.setContent {
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
+        androidx.compose.foundation.layout.Box(
+          androidx.compose.ui.Modifier.size(96.dp, 124.dp),
+        ) {
+          OverlayBubbleCard(ringColor = androidx.compose.ui.graphics.Color(0xFF468CAF), caption = "在线")
+        }
+      }
+    }
+    compose.onNodeWithText("在线").assertExists()
+    System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
+      val file = java.io.File(directory, "floating-bubble-v09.png"); file.parentFile?.mkdirs()
+      file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
   }
 }

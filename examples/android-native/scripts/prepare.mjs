@@ -103,7 +103,17 @@ if(privateCharacter){
         execFileSync('sips',['-Z','1024',file],{stdio:'pipe'});}catch{/* keep original texture */}
   }
   for(const [from,name] of [['data/mac/companion/runtime/live2dcubismcore.min.js','live2dcubismcore.min.js'],['examples/mac-openclaw/companion/vendor/pixi.min.js','pixi.min.js'],['examples/mac-openclaw/companion/vendor/cubism4-colors.min.js','cubism4-colors.min.js']])fs.copyFileSync(path.join(root,from),path.join(assets,name));
-  fs.copyFileSync(path.join(root,'data/mac/branding/avatar.png'),path.join(drawable,'anylink_avatar.png'));
+  const avatarOut=path.join(drawable,'anylink_avatar.png');
+  fs.copyFileSync(path.join(root,'data/mac/branding/avatar.png'),avatarOut);
+  // Trim the ~29% empty sky above the head in the 512x512 source portrait so the
+  // floating bubble, fallback portrait, notification avatar, and app icon sit dead-center.
+  try{
+    const dims=execFileSync('sips',['-g','pixelWidth','-g','pixelHeight',avatarOut],{encoding:'utf8'});
+    if(/pixelWidth:\s*512\b/.test(dims)&&/pixelHeight:\s*512\b/.test(dims)){
+      execFileSync('sips',['--cropOffset','120','66','-c','380','380',avatarOut],{stdio:'pipe'});
+      execFileSync('sips',['-z','512','512',avatarOut],{stdio:'pipe'});
+    }
+  }catch{/* keep copied avatar on non-macOS hosts */}
 }else{
   fs.copyFileSync(path.join(home,'web/public-portrait.html'),path.join(assets,'portrait.html'));
   fs.copyFileSync(path.join(home,'web/public-avatar.js'),path.join(assets,'public-avatar.js'));
@@ -125,8 +135,11 @@ for(const name of fs.readdirSync(path.join(source,'apps/android/app/src/main/res
   if(name==='values')continue;
   publish(`apps/android/app/src/debug/res/${name}/anylink_brand.xml`,Buffer.from(brandXml));
 }
+fs.writeFileSync(path.join(drawable,'anylink_launcher_fg.xml'),'<?xml version="1.0" encoding="utf-8"?><inset xmlns:android="http://schemas.android.com/apk/res/android" android:drawable="@drawable/anylink_avatar" android:inset="17%"/>\n');
+const debugValues=path.join(debug,'values');fs.mkdirSync(debugValues,{recursive:true});
+fs.writeFileSync(path.join(debugValues,'anylink_colors.xml'),'<?xml version="1.0" encoding="utf-8"?><resources><color name="anylink_icon_bg">#EAF5FF</color></resources>\n');
 for(const name of ['ic_launcher.xml','ic_launcher_round.xml']){
-  const folder=path.join(debug,'mipmap-anydpi-v26');fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(path.join(folder,name),'<?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@android:color/white"/><foreground android:drawable="@drawable/anylink_avatar"/></adaptive-icon>\n');
+  const folder=path.join(debug,'mipmap-anydpi-v26');fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(path.join(folder,name),'<?xml version="1.0" encoding="utf-8"?><adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/anylink_icon_bg"/><foreground android:drawable="@drawable/anylink_launcher_fg"/></adaptive-icon>\n');
 }
 const licenses=path.join(source,'apps/android/THIRD_PARTY_LICENSES/openclaw/licenses');
 for(const name of ['pixi-js-LICENSE.txt','pixi-live2d-display-LICENSE.txt','AIRI-LICENSE.txt'])fs.copyFileSync(path.join(root,'examples/mac-openclaw/companion/vendor',name),path.join(licenses,'AnyLink-'+name));

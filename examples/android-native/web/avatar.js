@@ -34,7 +34,9 @@
       ? Math.min((w * 0.86) / mw, (h * 0.72) / mh)
       : Math.min((w * 1.32) / mw, Math.max((w * 0.96) / mw, (h * 0.96) / mh));
     model.scale.set(targetScale);
-    const yPos = state.mini ? safeTop - h * 0.045 : safeTop + h * 0.015;
+    // Lift framing slightly so her head & eyes sit in the optical center above the glass sheet
+    // (compensating for the model canvas's built-in transparent top headroom).
+    const yPos = state.mini ? safeTop - h * 0.065 : safeTop - h * 0.015;
     model.position.set(w / 2, yPos);
   }
 

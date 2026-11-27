@@ -264,34 +264,39 @@ internal object CompanionOverlay {
       wsOnline -> "在线"
       else -> phase.caption.take(8)
     }
-    MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF2B6CB0), background = Color.Transparent)) {
-      Column(
-        Modifier.fillMaxSize().padding(4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
-      ) {
-        Box(
-          Modifier.size(72.dp)
-            .clip(CircleShape)
-            .background(Color(0xE6EAF6FD))
-            .border(3.dp, ringColor, CircleShape)
-            .padding(3.dp),
-          contentAlignment = Alignment.Center,
-        ) {
-          Image(
-            painter = painterResource(R.drawable.anylink_avatar),
-            contentDescription = "大肥鱼悬浮球",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().clip(CircleShape),
-          )
-        }
-        Surface(color = Color(0xEB0F2940), shape = RoundedCornerShape(10.dp)) {
-          Text(
-            caption, color = Color.White, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-          )
-        }
-      }
+    MaterialTheme(colorScheme = DeepSeaColorScheme) {
+      OverlayBubbleCard(ringColor = ringColor, caption = caption)
+    }
+  }
+}
+
+@Composable
+internal fun OverlayBubbleCard(ringColor: Color, caption: String) {
+  Column(
+    Modifier.fillMaxSize().padding(4.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+  ) {
+    Box(
+      Modifier.size(72.dp)
+        .clip(CircleShape)
+        .background(Color(0xE6EAF6FD))
+        .border(3.dp, ringColor, CircleShape)
+        .padding(3.dp),
+      contentAlignment = Alignment.Center,
+    ) {
+      Image(
+        painter = painterResource(R.drawable.anylink_avatar),
+        contentDescription = "大肥鱼悬浮球",
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxSize().clip(CircleShape),
+      )
+    }
+    Surface(color = Color(0xEB0F2940), shape = RoundedCornerShape(10.dp)) {
+      Text(
+        caption, color = Color.White, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+      )
     }
   }
 }

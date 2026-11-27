@@ -145,7 +145,11 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       val last = active.state.value.runs.firstOrNull()
       if (last?.text("state") == "completed" && last.text("id") != lastSpokenRun && last.text("answer").isNotBlank()) {
         lastSpokenRun = last.text("id")
-        speechPlayer?.enqueue(last.text("answer").take(3500), summarize = true, interrupt = true, forceRewrite = false)
+        val answer = last.text("answer")
+        if (!activityVisible.value) {
+          AnyLinkCompanionService.notifyProactive(app, "大肥鱼回复你啦", answer, tag = "reply:${last.text("id")}")
+        }
+        speechPlayer?.enqueue(answer.take(3500), summarize = true, interrupt = true, forceRewrite = false)
       }
     }
   }
@@ -251,6 +255,13 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         agent.value?.state?.update { it.copy(emotion = "curious", gesture = "point", sequence = UUID.randomUUID().toString()) }
         val spokenHint = if (isApproval) "主人，另一边准备做个重要操作，等你点头批准呢，快看看屏幕确认吧！" else "唔，主人，另一边有件事想先问问你的意见，点一下聊天卡片就能回复哦。"
         voiceNotice.value = prompt.take(120)
+        AnyLinkCompanionService.notifyProactive(
+          app,
+          title = if (isApproval) "大肥鱼等你批准操作" else "大肥鱼有件事想问你",
+          body = prompt,
+          tag = "interact:$taskId",
+          urgent = isApproval,
+        )
         speechPlayer?.enqueue(spokenHint, summarize = false, interrupt = false, forceRewrite = false)
         scope.launch { refreshTasks() }
       }
@@ -327,6 +338,14 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       },
     )
     agent.value?.state?.update { it.copy(emotion = if (state == "succeeded") "happy" else "apologetic", gesture = "wave", sequence = UUID.randomUUID().toString()) }
+    val notifTitle = when (state) {
+      "succeeded" -> "大肥鱼：跨设备任务办妥啦"
+      "declined" -> "大肥鱼：另一边暂时办不到"
+      "expired" -> "大肥鱼：任务等待超时啦"
+      "unknown" -> "大肥鱼：任务结果待确认"
+      else -> "大肥鱼：跨设备任务没完成"
+    }
+    AnyLinkCompanionService.notifyProactive(app, notifTitle, displayText, tag = "task:$id")
     speechPlayer?.enqueue(speechInput.take(3500), summarize = true, interrupt = false, forceRewrite = forcePersonaRewrite)
   }
 
@@ -346,6 +365,12 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     voiceNotice.value = "来自 $source：$text"
     agent.value?.appendEvent(role = "event", text = text, meta = "来自 $source")
     agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
+    AnyLinkCompanionService.notifyProactive(
+      app,
+      title = if (source.isNotBlank()) "大肥鱼 · 来自 $source" else "大肥鱼给你发来消息",
+      body = text,
+      tag = "say:${System.currentTimeMillis()}",
+    )
     speechPlayer?.enqueue(text, summarize = false, interrupt = false, forceRewrite = false)
   }
 

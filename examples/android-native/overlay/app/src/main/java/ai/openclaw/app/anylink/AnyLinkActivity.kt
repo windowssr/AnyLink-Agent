@@ -358,11 +358,20 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
         AssistChip(onClick = { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }, label = { Text(if (notifications) "通知权限 ✓" else "通知权限：去开启") })
         AssistChip(onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } }, label = { Text("电池优化：设为无限制") })
       }
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AssistChip(
+          onClick = {
+            val ok = AnyLinkCompanionService.notifyProactive(context, "大肥鱼给你发来消息", "主人！通知弹窗正常生效啦，以后跨设备办完事或主动找你都会这样提醒你哦～", tag = "test-notify")
+            runtime.voiceNotice.value = if (ok) "已发送测试弹窗通知，请查看顶部横幅。" else "还没有通知权限哦，请先点上方「通知权限」开启。"
+          },
+          label = { Text("测试弹窗通知") },
+        )
+      }
       Row(verticalAlignment = Alignment.CenterVertically) {
         Text("退到后台时显示悬浮球", Modifier.weight(1f), color = DeepInk)
         Switch(checked = floatEnabled, onCheckedChange = { runtime.setOverlayEnabled(it); floatEnabled = it })
       }
-      Text("提示：部分国产 ROM 会默认限制后台应用，建议在「电池优化」中设为「无限制」以保持全天实时在线。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
+      Text("提示：大肥鱼主动消息会通过高优先级渠道「大肥鱼主动消息」弹出顶部横幅；若国产 ROM 默认折叠横幅，请在通知设置中开启「横幅通知」，并在「电池优化」中设为「无限制」。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
       Spacer(Modifier.height(16.dp))
     }
   }

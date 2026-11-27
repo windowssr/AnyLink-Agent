@@ -236,7 +236,7 @@ internal fun AnyLinkPortrait(
         modifier = Modifier
           .fillMaxSize()
           .background(Brush.verticalGradient(listOf(Color(0xFFF6FCFF), Color(0xFFDDF1FC), Color(0xFFBFE3F6))))
-          .padding(top = if (mini) 58.dp else 96.dp),
+          .padding(top = if (mini) 86.dp else 104.dp),
         contentAlignment = Alignment.TopCenter,
       ) {
         val ringBrush = Brush.radialGradient(
@@ -244,7 +244,7 @@ internal fun AnyLinkPortrait(
         )
         Box(
           modifier = Modifier
-            .size(if (mini) 92.dp else 212.dp)
+            .size(if (mini) 84.dp else 212.dp)
             .graphicsLayer {
               translationY = if (animationsEnabled) bobDp * density else 0f
               val s = if (animationsEnabled) pulseScale else 1f
