@@ -22,7 +22,17 @@ final class MacControlCoordinator: NSObject {
         return value["enabled"] as? Bool == true
     }
 
-    private var helper: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Peekaboo.app") }
+    private var helper: URL {
+        let runtime = root.appendingPathComponent("data/mac/control/runtime.json")
+        if let data = try? Data(contentsOf: runtime),
+           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let appPath = value["app"] as? String,
+           !appPath.isEmpty,
+           FileManager.default.fileExists(atPath: appPath) {
+            return URL(fileURLWithPath: appPath)
+        }
+        return Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Peekaboo.app")
+    }
 
     private func setEnabled(_ enabled: Bool) {
         do {
@@ -76,7 +86,9 @@ final class MacControlCoordinator: NSObject {
         defaults.arguments = ["write", "boo.peekaboo.mac", "NSAppSleepDisabled", "-bool", "YES"]
         try? defaults.run()
         defaults.waitUntilExit()
-        let running = NSWorkspace.shared.runningApplications.contains { $0.bundleURL?.standardizedFileURL == helper.standardizedFileURL }
+        let running = NSWorkspace.shared.runningApplications.contains {
+            $0.bundleURL?.standardizedFileURL == helper.standardizedFileURL || $0.bundleIdentifier == "boo.peekaboo.mac"
+        }
         guard !running else { return }
         let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = false; configuration.hides = true
         NSWorkspace.shared.openApplication(at: helper, configuration: configuration) { [weak self] _, error in

@@ -24,16 +24,17 @@ function socketSignature(){
   try{const st=fs.statSync(bridgeSocket);return `${st.ino}:${st.mtimeMs}`;}catch{return null;}
 }
 
-/** Locate the installed signed Peekaboo helper app (preferring ~/Applications/AnyLink.app). */
+/** Locate the installed signed Peekaboo helper app, preferring the standalone Apple-signed runtime copy so ad-hoc AnyLink.app rebuilds never invalidate macOS TCC grants. */
 export function resolveControlHostApp(root=projectRoot){
-  const candidates=[
-    path.join(os.homedir(),'Applications/AnyLink.app/Contents/Helpers/Peekaboo.app'),
-    '/Applications/AnyLink.app/Contents/Helpers/Peekaboo.app',
-  ];
+  const candidates=[];
   try{
     const rt=JSON.parse(fs.readFileSync(path.join(root,'data/mac/control/runtime.json'),'utf8'));
     if(typeof rt.app==='string'&&rt.app)candidates.push(rt.app);
   }catch{}
+  candidates.push(
+    path.join(os.homedir(),'Applications/AnyLink.app/Contents/Helpers/Peekaboo.app'),
+    '/Applications/AnyLink.app/Contents/Helpers/Peekaboo.app',
+  );
   return candidates.find(p=>fs.existsSync(p))??null;
 }
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {controlStatus,bridgeSocket,ensureControlHost} from './client.mjs';
+import {controlStatus,bridgeSocket,ensureControlHost,resolveControlHostApp} from './client.mjs';
 
 async function fixture(fn){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-control-status-'));
@@ -35,4 +35,12 @@ test('ensureControlHost is a safe no-op when computer control is disabled',()=>f
   fs.writeFileSync(path.join(root,'data/mac/control/control.json'),'{"enabled":false}');
   const res=await ensureControlHost(root,{forceWake:true});
   assert.deepEqual(res,{attempted:false,running:false});
+}));
+test('resolveControlHostApp prefers standalone runtime Peekaboo.app over bundled helper',()=>fixture(async root=>{
+  const standalone=path.join(root,'data/mac/control/vendor/Peekaboo.app');
+  fs.mkdirSync(standalone,{recursive:true});
+  fs.writeFileSync(path.join(root,'data/mac/control/runtime.json'),JSON.stringify({app:standalone}));
+  assert.equal(resolveControlHostApp(root),standalone);
+  fs.rmSync(standalone,{recursive:true,force:true});
+  assert.notEqual(resolveControlHostApp(root),standalone);
 }));
