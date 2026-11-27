@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AnyLinkClient } from '../../../sdk/src/client.mjs';
-import { AnyLinkWorker, TaskFailure } from '../../../sdk/src/worker.mjs';
+import { AnyLinkWorker, TaskDeclined, TaskFailure } from '../../../sdk/src/worker.mjs';
 import { searchFiles, PeerFailure } from './search.mjs';
 import { createAgentAskHandler } from './agent-ask.mjs';
 
@@ -86,25 +86,67 @@ function uniqueFileInDir(dir, rawName) {
   return target;
 }
 
-/** Handles incoming cross-device `file.deliver` tasks on Mac: streams artifact directly to disk, verifies SHA-256,
- * and saves cleanly to ~/Downloads/AnyLink (or an authorized destination_dir) with O(1) RAM. */
+const DEFAULT_MAC_MAX_RECEIVE_BYTES = 500 * 1024 * 1024;
+const MAC_STORAGE_HEADROOM_BYTES = 100 * 1024 * 1024;
+const formatMacBytes = b => b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GiB` : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MiB` : `${(b / 1024).toFixed(1)} KiB`;
+
+function macAvailableBytes(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const st = fs.statfsSync(dir);
+    return Number(st.bavail) * Number(st.bsize);
+  } catch {
+    return null;
+  }
+}
+
+export function buildMacFilePolicy(policy, defaultDir = path.join(os.homedir(), 'Downloads', 'AnyLink')) {
+  const custom = policy?.file_policy && typeof policy.file_policy === 'object' ? policy.file_policy : {};
+  const accepts = custom.accepts_files !== false;
+  const maxBytes = typeof custom.max_file_bytes === 'number' && custom.max_file_bytes >= 0 ? custom.max_file_bytes : DEFAULT_MAC_MAX_RECEIVE_BYTES;
+  const avail = macAvailableBytes(defaultDir);
+  return {
+    accepts_files: accepts,
+    max_file_bytes: maxBytes,
+    ...(typeof custom.confirm_over_bytes === 'number' && custom.confirm_over_bytes >= 0 ? { confirm_over_bytes: custom.confirm_over_bytes } : {}),
+    ...(avail !== null ? { available_bytes: Math.max(0, Math.floor(avail - MAC_STORAGE_HEADROOM_BYTES)) } : {}),
+  };
+}
+
+/** Handles incoming cross-device `file.deliver` tasks on Mac: validates receiver file_policy & disk space,
+ * streams artifact directly to disk, verifies SHA-256, and saves cleanly to ~/Downloads/AnyLink with O(1) RAM. */
 export function createFileDeliverHandler({ client, defaultDir = path.join(os.homedir(), 'Downloads', 'AnyLink'), policy } = {}) {
   return {
-    description: 'Receive a file uploaded via /edge/v1/artifacts (up to 200 MiB streaming) and save it to Mac ~/Downloads/AnyLink',
+    description: 'Receive a file uploaded via /edge/v1/artifacts (streaming) and save it to Mac ~/Downloads/AnyLink',
     async execute(input, { signal } = {}) {
       const artifactId = String(input?.artifact_id ?? '').trim();
       if (!artifactId) throw new TaskFailure('BAD_TOOL_INPUT', 'file.deliver 需要 artifact_id');
+      const curPolicy = typeof policy === 'function' ? policy() : policy;
+      const fp = buildMacFilePolicy(curPolicy, defaultDir);
+      if (!fp.accepts_files) {
+        throw new TaskDeclined('TARGET_FILE_RECEIVE_DISABLED', 'Mac 端当前已关闭接收文件功能', { learnBoundary: false });
+      }
       let targetDir = defaultDir;
       if (typeof input?.destination_dir === 'string' && input.destination_dir.trim()) {
         const rawDir = input.destination_dir.trim();
         const expanded = rawDir === '~' ? os.homedir() : rawDir.startsWith('~/') ? path.join(os.homedir(), rawDir.slice(2)) : path.resolve(rawDir);
-        const curPolicy = typeof policy === 'function' ? policy() : policy;
         const allowed = curPolicy?.full_access === true || (curPolicy?.roots ?? []).some(r => expanded === r.path || expanded.startsWith(r.path + path.sep));
         if (allowed) targetDir = expanded;
       }
       fs.mkdirSync(targetDir, { recursive: true });
+      const meta = (input?.size_bytes === undefined || !input?.filename) && typeof client.artifactMeta === 'function'
+        ? await client.artifactMeta(artifactId, { signal }).catch(() => null)
+        : null;
+      const expectedSize = typeof input?.size_bytes === 'number' ? input.size_bytes : (typeof meta?.size_bytes === 'number' ? meta.size_bytes : null);
+      if (expectedSize !== null && fp.max_file_bytes !== undefined && expectedSize > fp.max_file_bytes) {
+        throw new TaskDeclined('TARGET_FILE_TOO_LARGE', `文件大小 ${formatMacBytes(expectedSize)} 超过 Mac 端单文件接收上限 ${formatMacBytes(fp.max_file_bytes)}`, { learnBoundary: false });
+      }
+      const avail = macAvailableBytes(targetDir);
+      if (expectedSize !== null && avail !== null && expectedSize + MAC_STORAGE_HEADROOM_BYTES > avail) {
+        throw new TaskFailure('INSUFFICIENT_STORAGE', `Mac 磁盘剩余空间不足（剩余 ${formatMacBytes(avail)}，文件 ${formatMacBytes(expectedSize)}）`);
+      }
       if (typeof client.downloadArtifactToFile === 'function') {
-        const metaName = input?.filename || (await client.artifactMeta?.(artifactId, { signal }).catch(() => null))?.filename || 'attachment.bin';
+        const metaName = input?.filename || meta?.filename || 'attachment.bin';
         const finalPath = uniqueFileInDir(targetDir, metaName);
         const dl = await client.downloadArtifactToFile(artifactId, finalPath, { expectedSha256: input?.sha256, signal });
         const finalName = path.basename(dl.path);
@@ -138,7 +180,7 @@ export function createFileDeliverHandler({ client, defaultDir = path.join(os.hom
   };
 }
 
-// Protocol v3.2: mac-openclaw handles `agent.invoke`, legacy `agent.ask`, AND `file.deliver` over WebSocket!
+// Protocol v3.2: mac-openclaw handles `agent.invoke`, legacy `agent.ask`, AND `file.deliver` over WebSocket, advertising file_policy!
 export function createMacAskWorker({ connection, journalPath, gatewayToken, gatewayUrl, fetchImpl, policyFile }) {
   const client = new AnyLinkClient({ baseUrl: connection.server, token: connection.token, timeoutMs: 30000 });
   const handler = createAgentAskHandler({ client, gatewayToken, gatewayUrl, fetchImpl });
@@ -150,6 +192,7 @@ export function createMacAskWorker({ connection, journalPath, gatewayToken, gate
     client,
     journalPath,
     handlers: { 'agent.ask': handler, 'file.deliver': fileDeliver },
+    filePolicy: () => buildMacFilePolicy(readPolicy()),
     onInvoke: (task, ctx) => handler.execute(task.input, { ...ctx, task }),
   });
 }

@@ -28,6 +28,16 @@ export async function authenticateEdge(db: Db, req: FastifyRequest) {
   return identity;
 }
 
+export const filePolicySchema = z.object({
+  accepts_files: z.boolean(),
+  max_file_bytes: z.number().int().min(0).max(10 * 1024 * 1024 * 1024).optional(),
+  confirm_over_bytes: z.number().int().min(0).max(10 * 1024 * 1024 * 1024).optional(),
+  available_bytes: z.number().int().min(0).optional(),
+  allowed_mime_prefixes: z.array(z.string().trim().min(1).max(80)).max(32).optional(),
+}).strict();
+
+export type FilePolicy = z.infer<typeof filePolicySchema>;
+
 export const connectSchema = z.object({
   device: z.object({
     install_id: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
@@ -40,6 +50,7 @@ export const connectSchema = z.object({
     name: z.string().trim().min(1).max(80),
     kind: z.string().min(1).max(40).default('agent'),
     summary: z.string().max(400).default(''),
+    file_policy: filePolicySchema.optional(),
   }).strict(),
 }).strict();
 
@@ -47,7 +58,8 @@ export const agentProfileSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   summary: z.string().max(400).optional(),
   kind: z.string().min(1).max(40).optional(),
-}).strict().refine(v => v.name !== undefined || v.summary !== undefined || v.kind !== undefined, 'Provide at least one profile field');
+  file_policy: filePolicySchema.nullable().optional(),
+}).strict().refine(v => v.name !== undefined || v.summary !== undefined || v.kind !== undefined || v.file_policy !== undefined, 'Provide at least one profile field');
 
 export function registerConnectRoute(app: FastifyInstance, db: Db, config: Config, attempts: Map<string, { count: number; until: number }>) {
   const matches = (provided: string, expected?: string) => Boolean(expected) && timingSafeEqual(Buffer.from(hash(provided)), Buffer.from(hash(expected!)));
@@ -74,9 +86,9 @@ export function registerConnectRoute(app: FastifyInstance, db: Db, config: Confi
         ON CONFLICT(install_id) DO UPDATE SET name=EXCLUDED.name,platform=EXCLUDED.platform,slug=EXCLUDED.slug RETURNING *`,
       [randomUUID(), OWNER_ID, body.device.name, body.device.platform, body.device.install_id, slug])).rows[0];
       if (device.revoked_at) throw new ApiError(403, 'DEVICE_REVOKED', 'This device has been revoked by the owner');
-      const agent = (await c.query(`INSERT INTO agents(id,owner_id,device_id,key,name,kind,summary) VALUES($1,$2,$3,$4,$5,$6,$7)
-        ON CONFLICT(device_id,key) DO UPDATE SET name=EXCLUDED.name,kind=EXCLUDED.kind,summary=CASE WHEN EXCLUDED.summary<>'' THEN EXCLUDED.summary ELSE agents.summary END RETURNING *`,
-      [randomUUID(), OWNER_ID, device.id, body.agent.key, body.agent.name, body.agent.kind, body.agent.summary])).rows[0];
+      const agent = (await c.query(`INSERT INTO agents(id,owner_id,device_id,key,name,kind,summary,file_policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+        ON CONFLICT(device_id,key) DO UPDATE SET name=EXCLUDED.name,kind=EXCLUDED.kind,summary=CASE WHEN EXCLUDED.summary<>'' THEN EXCLUDED.summary ELSE agents.summary END,file_policy=COALESCE(EXCLUDED.file_policy,agents.file_policy) RETURNING *`,
+      [randomUUID(), OWNER_ID, device.id, body.agent.key, body.agent.name, body.agent.kind, body.agent.summary, body.agent.file_policy ? JSON.stringify(body.agent.file_policy) : null])).rows[0];
       if (agent.revoked_at) throw new ApiError(403, 'AGENT_REVOKED', 'This agent key has been revoked');
       await c.query('UPDATE edge_credentials SET revoked_at=now() WHERE agent_id=$1 AND revoked_at IS NULL', [agent.id]);
       const credentialId = randomUUID(), edgeToken = 'ak_' + randomBytes(32).toString('base64url');
@@ -96,9 +108,16 @@ export function registerConnectRoute(app: FastifyInstance, db: Db, config: Confi
   app.patch('/edge/v1/agent/profile', async req => {
     const me = req.edgeIdentity!;
     const body = agentProfileSchema.parse(req.body);
+    const hasFilePolicy = Object.prototype.hasOwnProperty.call(body, 'file_policy');
     const row = (await db.query(
-      'UPDATE agents SET name=COALESCE($2,name),summary=COALESCE($3,summary),kind=COALESCE($4,kind) WHERE id=$1 RETURNING id,device_id,key,name,kind,summary,capabilities',
-      [me.agent_id, body.name ?? null, body.summary ?? null, body.kind ?? null],
+      `UPDATE agents
+       SET name=COALESCE($2,name),
+           summary=COALESCE($3,summary),
+           kind=COALESCE($4,kind),
+           file_policy=CASE WHEN $5::boolean THEN $6::jsonb ELSE file_policy END
+       WHERE id=$1
+       RETURNING id,device_id,key,name,kind,summary,capabilities,file_policy`,
+      [me.agent_id, body.name ?? null, body.summary ?? null, body.kind ?? null, hasFilePolicy, body.file_policy ? JSON.stringify(body.file_policy) : null],
     )).rows[0];
     return row;
   });
@@ -146,7 +165,7 @@ export function registerCredentialRoutes(app: FastifyInstance, db: Db, isWsOnlin
   });
 
   app.get('/v1/agents', async () => {
-    const rows = (await db.query(`SELECT a.id,a.device_id,a.key,a.name,a.kind,a.summary,a.capabilities,a.last_seen_at,a.revoked_at,a.created_at,d.name AS device_name,d.platform AS device_platform,(a.last_seen_at IS NOT NULL AND a.last_seen_at>now()-interval '60 seconds') AS http_online
+    const rows = (await db.query(`SELECT a.id,a.device_id,a.key,a.name,a.kind,a.summary,a.capabilities,a.file_policy,a.last_seen_at,a.revoked_at,a.created_at,d.name AS device_name,d.platform AS device_platform,(a.last_seen_at IS NOT NULL AND a.last_seen_at>now()-interval '60 seconds') AS http_online
       FROM agents a JOIN devices d ON d.id=a.device_id WHERE d.owner_id=$1 ORDER BY d.name,d.id,a.key`, [OWNER_ID])).rows;
     return {
       items: rows.map(r => {

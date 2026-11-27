@@ -279,13 +279,94 @@ export default {
             const headers = { 'Idempotency-Key': hash(`${ctx.runId ?? ctx.sessionKey ?? 'local'}:${callId}:${spec.name}`) };
             try {
               if (spec.name === 'anylink_artifact_upload' || spec.name === 'anylink_file_send') {
+                const formatMb = b => b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GiB` : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MiB` : `${(b / 1024).toFixed(1)} KiB`;
                 const localPath = expandHome(params.path);
                 if (!existsSync(localPath)) return failure('FILE_NOT_FOUND', `本地文件不存在：${localPath}`);
                 const st = statSync(localPath);
                 if (!st.isFile()) return failure('NOT_A_FILE', `路径不是普通文件：${localPath}`);
-                if (st.size > MAX_ARTIFACT_BYTES) return failure('ARTIFACT_TOO_LARGE', `文件大小 ${(st.size / 1024 / 1024).toFixed(2)} MiB 超过 200 MiB 限制`);
                 const filename = sanitizeFilename(params.filename || path.basename(localPath));
                 const contentType = params.content_type || inferMime(filename);
+
+                // Pre-flight 1: negotiate dynamic server artifact limit from /edge/v1/protocol (fallback 200 MiB).
+                const protoInfo = await request(conn, '/edge/v1/protocol').catch(() => null);
+                const serverMaxBytes = Number(protoInfo?.limits?.artifact_max_bytes ?? MAX_ARTIFACT_BYTES);
+                if (st.size > serverMaxBytes) {
+                  return failure('ARTIFACT_TOO_LARGE', `文件大小 ${formatMb(st.size)} 超过云端单文件上限 ${formatMb(serverMaxBytes)}，未上传`);
+                }
+
+                // Pre-flight 2 (for file_send): resolve target & inspect its file_policy BEFORE uploading a single byte!
+                let target = params.target_agent_id ? { agent_id: params.target_agent_id }
+                  : params.target_device_slug ? { device_slug: params.target_device_slug }
+                  : params.target_device_id ? { device_id: params.target_device_id }
+                  : params.target_device_name ? { device_name: params.target_device_name }
+                  : params.target_agent_key ? { agent_key: params.target_agent_key }
+                  : undefined;
+                let requiresTargetConfirmation = false;
+                if (spec.name === 'anylink_file_send') {
+                  const dir = await request(conn, '/edge/v1/directory').catch(() => null);
+                  const dirItems = dir?.items ?? [];
+                  let matchedDevice = null;
+                  let candidates = [];
+                  if (!target) {
+                    const peers = dirItems.filter(i => i.device?.id && i.device.id !== conn.device_id);
+                    const androidOnline = peers.filter(i => i.device.platform === 'android' && (i.agents ?? []).some(a => a.ws_online || a.online));
+                    const androidAny = peers.filter(i => i.device.platform === 'android');
+                    const chosen = androidOnline.length === 1 ? androidOnline[0]
+                      : androidAny.length === 1 ? androidAny[0]
+                      : peers.length === 1 ? peers[0] : null;
+                    if (!chosen) return failure('TARGET_DEVICE_REQUIRED', '未指定目标设备且无法唯一确定接收手机，请先调用 anylink_link_directory 并传入 target_device_slug 或 target_device_id。');
+                    matchedDevice = chosen.device;
+                    candidates = chosen.agents ?? [];
+                    const preferredAgent = candidates.find(a => a.ws_online || a.online) ?? candidates[0];
+                    target = preferredAgent ? { agent_id: preferredAgent.id } : { device_id: chosen.device.id };
+                    if (preferredAgent) candidates = [preferredAgent];
+                  } else if (dirItems.length) {
+                    if (target.agent_id) {
+                      for (const entry of dirItems) {
+                        const a = (entry.agents ?? []).find(x => x.id === target.agent_id);
+                        if (a) { matchedDevice = entry.device; candidates = [a]; break; }
+                      }
+                    } else if (target.device_slug) {
+                      const entry = dirItems.find(i => i.device?.slug?.toLowerCase() === String(target.device_slug).toLowerCase());
+                      if (entry) { matchedDevice = entry.device; candidates = entry.agents ?? []; }
+                    } else if (target.device_id) {
+                      const entry = dirItems.find(i => i.device?.id === target.device_id);
+                      if (entry) { matchedDevice = entry.device; candidates = entry.agents ?? []; }
+                    } else if (target.device_name) {
+                      const entry = dirItems.find(i => i.device?.name?.toLowerCase() === String(target.device_name).toLowerCase());
+                      if (entry) { matchedDevice = entry.device; candidates = entry.agents ?? []; }
+                    }
+                  }
+                  const targetLabel = matchedDevice?.name || target?.device_slug || target?.device_name || '目标设备';
+                  const declared = candidates.filter(a => a.file_policy && typeof a.file_policy === 'object');
+                  if (declared.length > 0) {
+                    const accepting = candidates.filter(a => !a.file_policy || a.file_policy.accepts_files !== false);
+                    if (accepting.length === 0) {
+                      return failure('TARGET_FILE_RECEIVE_DISABLED', `目标设备「${targetLabel}」不支持或已关闭接收文件功能，未上传。`);
+                    }
+                    const declaredAcc = accepting.filter(a => a.file_policy && typeof a.file_policy === 'object');
+                    if (declaredAcc.length === accepting.length) {
+                      const maxCaps = declaredAcc.map(a => a.file_policy.max_file_bytes).filter(v => typeof v === 'number');
+                      if (maxCaps.length === accepting.length && st.size > Math.max(...maxCaps)) {
+                        return failure('TARGET_FILE_TOO_LARGE', `文件《${filename}》（${formatMb(st.size)}）超过目标设备「${targetLabel}」允许接收的单文件上限 ${formatMb(Math.max(...maxCaps))}，未上传。`);
+                      }
+                      const avails = declaredAcc.map(a => a.file_policy.available_bytes).filter(v => typeof v === 'number');
+                      if (avails.length === accepting.length && st.size > Math.max(...avails)) {
+                        return failure('TARGET_INSUFFICIENT_STORAGE', `目标设备「${targetLabel}」剩余存储空间不足（剩余 ${formatMb(Math.max(...avails))}，文件 ${formatMb(st.size)}），未上传。`);
+                      }
+                      const mimeOk = declaredAcc.some(a => !a.file_policy.allowed_mime_prefixes?.length || a.file_policy.allowed_mime_prefixes.some(p => contentType.toLowerCase().startsWith(p.toLowerCase())));
+                      if (!mimeOk) {
+                        return failure('TARGET_FILE_TYPE_NOT_ALLOWED', `目标设备「${targetLabel}」不接受此文件类型（${contentType}），未上传。`);
+                      }
+                    }
+                    const primary = accepting.find(a => a.ws_online || a.online) ?? accepting[0];
+                    const confirmOver = primary?.file_policy?.confirm_over_bytes;
+                    if (typeof confirmOver === 'number' && confirmOver > 0 && st.size > confirmOver) {
+                      requiresTargetConfirmation = true;
+                    }
+                  }
+                }
+
                 const uploadResp = await fetch(conn.server + '/edge/v1/artifacts', {
                   method: 'POST',
                   signal: AbortSignal.timeout(600000),
@@ -308,24 +389,6 @@ export default {
                 }
                 if (spec.name === 'anylink_artifact_upload') return result(uploaded);
 
-                let target = params.target_agent_id ? { agent_id: params.target_agent_id }
-                  : params.target_device_slug ? { device_slug: params.target_device_slug }
-                  : params.target_device_id ? { device_id: params.target_device_id }
-                  : params.target_device_name ? { device_name: params.target_device_name }
-                  : params.target_agent_key ? { agent_key: params.target_agent_key }
-                  : undefined;
-                if (!target) {
-                  const dir = await request(conn, '/edge/v1/directory');
-                  const peers = (dir.items ?? []).filter(i => i.device?.id && i.device.id !== conn.device_id);
-                  const androidOnline = peers.filter(i => i.device.platform === 'android' && (i.agents ?? []).some(a => a.ws_online || a.online));
-                  const androidAny = peers.filter(i => i.device.platform === 'android');
-                  const chosen = androidOnline.length === 1 ? androidOnline[0]
-                    : androidAny.length === 1 ? androidAny[0]
-                    : peers.length === 1 ? peers[0] : null;
-                  if (!chosen) return failure('TARGET_DEVICE_REQUIRED', '未指定目标设备且无法唯一确定接收手机，请先调用 anylink_link_directory 并传入 target_device_slug 或 target_device_id。');
-                  const preferredAgent = (chosen.agents ?? []).find(a => a.ws_online || a.online) ?? (chosen.agents ?? [])[0];
-                  target = preferredAgent ? { agent_id: preferredAgent.id } : { device_id: chosen.device.id };
-                }
                 const note = params.note ? String(params.note).slice(0, 500) : undefined;
                 const task = await request(conn, '/edge/v1/tasks', 'POST', {
                   target,
@@ -350,6 +413,7 @@ export default {
                   size_bytes: uploaded.size_bytes,
                   sha256: uploaded.sha256,
                   target,
+                  ...(requiresTargetConfirmation ? { requires_target_confirmation: true, notice: '该文件超过目标设备的大文件确认阈值，对方将先弹出确认提示再下载。' } : {}),
                 });
               }
               if (spec.name === 'anylink_artifact_download') {

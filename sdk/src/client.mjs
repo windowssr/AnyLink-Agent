@@ -585,7 +585,137 @@ export class AnyLinkClient {
   }
 
   // Capability-free cross-device tasks (Protocol v3.2)
-  registerCapabilities(capabilities, options) { return this.#request('POST', 'edge/v1/link/capabilities', { capabilities }, options); }
+  registerCapabilities(capabilities, options = {}) {
+    const { filePolicy, ...rest } = options ?? {};
+    return this.#request('POST', 'edge/v1/link/capabilities', { capabilities, ...(filePolicy !== undefined ? { file_policy: filePolicy } : {}) }, rest);
+  }
+
+  /** Pre-flight check before uploading a file: inspects server limits (/edge/v1/protocol) and target file_policy (/edge/v1/directory). */
+  async checkFileTransferTarget(target, { sizeBytes, contentType, directory, protocol } = {}, options = {}) {
+    const formatSize = b => b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GiB` : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MiB` : b >= 1024 ? `${(b / 1024).toFixed(1)} KiB` : `${b} B`;
+    const [proto, dir] = await Promise.all([
+      protocol ? Promise.resolve(protocol) : this.protocol(options).catch(() => null),
+      directory ? Promise.resolve(directory) : this.directory(options).catch(() => null),
+    ]);
+    const serverMaxBytes = Number(proto?.limits?.artifact_max_bytes ?? 200 * 1024 * 1024);
+    if (Number.isFinite(sizeBytes) && sizeBytes > serverMaxBytes) {
+      return {
+        ok: false,
+        code: 'ARTIFACT_TOO_LARGE',
+        message: `文件大小 ${formatSize(sizeBytes)} 超过云端单文件上限 ${formatSize(serverMaxBytes)}`,
+        serverMaxBytes,
+        effectiveMaxBytes: serverMaxBytes,
+      };
+    }
+
+    const items = dir?.items ?? [];
+    let matchedDevice = null;
+    let candidates = [];
+    if (target?.agent_id) {
+      for (const entry of items) {
+        const hit = (entry.agents ?? []).find(a => a.id === target.agent_id);
+        if (hit) { matchedDevice = entry.device; candidates = [hit]; break; }
+      }
+    } else if (target?.device_slug) {
+      const hit = items.find(i => i.device?.slug?.toLowerCase() === String(target.device_slug).toLowerCase());
+      if (hit) { matchedDevice = hit.device; candidates = hit.agents ?? []; }
+    } else if (target?.device_id) {
+      const hit = items.find(i => i.device?.id === target.device_id);
+      if (hit) { matchedDevice = hit.device; candidates = hit.agents ?? []; }
+    } else if (target?.device_name) {
+      const hit = items.find(i => i.device?.name?.toLowerCase() === String(target.device_name).toLowerCase());
+      if (hit) { matchedDevice = hit.device; candidates = hit.agents ?? []; }
+    } else if (target?.agent_key) {
+      for (const entry of items) {
+        for (const a of (entry.agents ?? [])) {
+          if (a.key === target.agent_key) { matchedDevice ??= entry.device; candidates.push(a); }
+        }
+      }
+    }
+
+    const targetLabel = matchedDevice?.name || target?.device_slug || target?.device_name || '目标设备';
+    const declared = candidates.filter(a => a.file_policy && typeof a.file_policy === 'object');
+    if (declared.length > 0) {
+      const accepting = candidates.filter(a => !a.file_policy || a.file_policy.accepts_files !== false);
+      if (accepting.length === 0) {
+        return {
+          ok: false,
+          code: 'TARGET_FILE_RECEIVE_DISABLED',
+          message: `目标设备「${targetLabel}」不支持或已关闭接收文件功能`,
+          serverMaxBytes,
+          effectiveMaxBytes: 0,
+          targetDevice: matchedDevice,
+        };
+      }
+      const declaredAccepting = accepting.filter(a => a.file_policy && typeof a.file_policy === 'object');
+      const targetAgent = accepting.find(a => a.ws_online || a.online) ?? accepting[0];
+      const maxCaps = declaredAccepting.map(a => a.file_policy.max_file_bytes).filter(v => typeof v === 'number');
+      const targetMaxBytes = maxCaps.length === accepting.length ? Math.max(...maxCaps) : undefined;
+      const effectiveMaxBytes = targetMaxBytes !== undefined ? Math.min(serverMaxBytes, targetMaxBytes) : serverMaxBytes;
+      if (Number.isFinite(sizeBytes) && targetMaxBytes !== undefined && sizeBytes > targetMaxBytes) {
+        return {
+          ok: false,
+          code: 'TARGET_FILE_TOO_LARGE',
+          message: `文件大小 ${formatSize(sizeBytes)} 超过目标设备「${targetLabel}」的单文件接收上限 ${formatSize(targetMaxBytes)}`,
+          serverMaxBytes,
+          targetMaxBytes,
+          effectiveMaxBytes,
+          targetAgent,
+          targetDevice: matchedDevice,
+        };
+      }
+      const avails = declaredAccepting.map(a => a.file_policy.available_bytes).filter(v => typeof v === 'number');
+      if (Number.isFinite(sizeBytes) && avails.length === accepting.length && sizeBytes > Math.max(...avails)) {
+        const maxAvail = Math.max(...avails);
+        return {
+          ok: false,
+          code: 'TARGET_INSUFFICIENT_STORAGE',
+          message: `目标设备「${targetLabel}」剩余存储空间不足（剩余 ${formatSize(maxAvail)}，文件 ${formatSize(sizeBytes)}）`,
+          serverMaxBytes,
+          targetMaxBytes,
+          effectiveMaxBytes,
+          targetAgent,
+          targetDevice: matchedDevice,
+        };
+      }
+      if (contentType && declaredAccepting.length === accepting.length) {
+        const normalizedMime = String(contentType).split(';')[0].trim().toLowerCase();
+        const mimeOk = declaredAccepting.some(a => !a.file_policy.allowed_mime_prefixes?.length || a.file_policy.allowed_mime_prefixes.some(p => normalizedMime.startsWith(p.toLowerCase())));
+        if (!mimeOk) {
+          return {
+            ok: false,
+            code: 'TARGET_FILE_TYPE_NOT_ALLOWED',
+            message: `目标设备「${targetLabel}」不接受此文件类型（${normalizedMime}）`,
+            serverMaxBytes,
+            targetMaxBytes,
+            effectiveMaxBytes,
+            targetAgent,
+            targetDevice: matchedDevice,
+          };
+        }
+      }
+      const confirmOverBytes = typeof targetAgent?.file_policy?.confirm_over_bytes === 'number' ? targetAgent.file_policy.confirm_over_bytes : undefined;
+      return {
+        ok: true,
+        serverMaxBytes,
+        targetMaxBytes,
+        effectiveMaxBytes,
+        confirmOverBytes,
+        requiresConfirmation: Boolean(Number.isFinite(sizeBytes) && confirmOverBytes && confirmOverBytes > 0 && sizeBytes > confirmOverBytes),
+        targetAgent,
+        targetDevice: matchedDevice,
+      };
+    }
+
+    return {
+      ok: true,
+      serverMaxBytes,
+      effectiveMaxBytes: serverMaxBytes,
+      requiresConfirmation: false,
+      targetAgent: candidates[0] ?? null,
+      targetDevice: matchedDevice,
+    };
+  }
   invoke({
     target, instruction, input, capability, ttlSeconds, leaseSeconds,
     executionTimeoutSeconds, priority, requireOnline, idempotent, maxRetries,

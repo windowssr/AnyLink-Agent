@@ -2741,6 +2741,42 @@
                 "default": "",
                 "type": "string",
                 "maxLength": 400
+              },
+              "file_policy": {
+                "type": "object",
+                "properties": {
+                  "accepts_files": {
+                    "type": "boolean"
+                  },
+                  "max_file_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10737418240
+                  },
+                  "confirm_over_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10737418240
+                  },
+                  "available_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "allowed_mime_prefixes": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  }
+                },
+                "required": [
+                  "accepts_files"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -2774,8 +2810,87 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 40
+          },
+          "file_policy": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "accepts_files": {
+                    "type": "boolean"
+                  },
+                  "max_file_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10737418240
+                  },
+                  "confirm_over_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10737418240
+                  },
+                  "available_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "allowed_mime_prefixes": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  }
+                },
+                "required": [
+                  "accepts_files"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
+        "additionalProperties": false
+      },
+      "FilePolicy": {
+        "type": "object",
+        "properties": {
+          "accepts_files": {
+            "type": "boolean"
+          },
+          "max_file_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10737418240
+          },
+          "confirm_over_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10737418240
+          },
+          "available_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "allowed_mime_prefixes": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          }
+        },
+        "required": [
+          "accepts_files"
+        ],
         "additionalProperties": false
       },
       "InstallId": {
@@ -2816,6 +2931,42 @@
               ],
               "additionalProperties": false
             }
+          },
+          "file_policy": {
+            "type": "object",
+            "properties": {
+              "accepts_files": {
+                "type": "boolean"
+              },
+              "max_file_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10737418240
+              },
+              "confirm_over_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10737418240
+              },
+              "available_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "allowed_mime_prefixes": {
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              }
+            },
+            "required": [
+              "accepts_files"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

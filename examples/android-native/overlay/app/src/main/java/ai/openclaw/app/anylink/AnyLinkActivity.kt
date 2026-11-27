@@ -92,14 +92,18 @@ internal val DeepSeaColorScheme = lightColorScheme(
   outline = Color(0xFF8CB4CC),
 )
 
+/** Explicit non-boundary or boundary decline thrown by worker file handlers (e.g. file too large or owner rejected). */
+internal class FileDeclined(val code: String, message: String, val learnBoundary: Boolean = false) : Exception(message)
+
 /** Protocol v3.2 worker loop: instant WS wakeup, periodic fencing lease heartbeats, abort on 409 LEASE_FENCED,
- * explicit `declined` boundary reporting, and crash-safe execution journal. */
+ * explicit `declined` boundary reporting, file_policy negotiation, and crash-safe execution journal. */
 internal suspend fun linkWorkerLoop(
   transport: LinkTransport,
   ledger: AgentLedger,
   info: () -> JsonObject,
   say: suspend (String, String) -> Unit,
-  receiveFile: (suspend (String, JsonObject, String) -> Pair<SavedFile, String>)? = null,
+  receiveFile: (suspend (String, String, String, JsonObject, String) -> Pair<SavedFile, String>)? = null,
+  filePolicy: (() -> JsonObject)? = null,
   wakeup: Channel<Unit>? = null,
   isWsOnline: () -> Boolean = { false },
 ) {
@@ -148,7 +152,11 @@ internal suspend fun linkWorkerLoop(
     try {
       if (!capabilitiesRegistered) {
         runCatching {
-          transport.request("POST", "/edge/v1/link/capabilities", capabilities, "caps:${UUID.randomUUID()}")
+          val capPayload = buildJsonObject {
+            put("capabilities", capabilities["capabilities"]!!)
+            filePolicy?.invoke()?.let { put("file_policy", it) }
+          }
+          transport.request("POST", "/edge/v1/link/capabilities", capPayload, "caps:${UUID.randomUUID()}")
           capabilitiesRegistered = true
         }
       }
@@ -187,11 +195,20 @@ internal suspend fun linkWorkerLoop(
                 }
               }
               try {
-                executeWorkerTask(task, transport, info, say, receiveFile, ::deviceName)
+                executeWorkerTask(task, leaseToken, transport, info, say, receiveFile, ::deviceName)
               } finally {
                 hbJob.cancel()
               }
             }
+          } catch (declined: FileDeclined) {
+            jsonObject(
+              "state" to str("declined"),
+              "error" to jsonObject(
+                "code" to str(declined.code),
+                "message" to str(declined.message.orEmpty().take(500)),
+                "learn_boundary" to JsonPrimitive(declined.learnBoundary),
+              ),
+            )
           } catch (failure: LinkFailure) {
             if (failure.unknown) {
               jsonObject("state" to str("unknown"), "error" to jsonObject("code" to str(failure.code), "message" to str(failure.message.orEmpty().take(500))))
@@ -217,12 +234,14 @@ internal suspend fun linkWorkerLoop(
 
 private suspend fun executeWorkerTask(
   task: JsonObject,
+  leaseToken: String,
   transport: LinkTransport,
   info: () -> JsonObject,
   say: suspend (String, String) -> Unit,
-  receiveFile: (suspend (String, JsonObject, String) -> Pair<SavedFile, String>)?,
+  receiveFile: (suspend (String, String, String, JsonObject, String) -> Pair<SavedFile, String>)?,
   deviceName: suspend (String) -> String,
 ): JsonObject {
+  val taskId = task.text("id")
   val input = task["input"]?.jsonObject ?: JsonObject(emptyMap())
   val capability = task.text("capability")
   suspend fun handleArtifactDelivery(): JsonObject {
@@ -231,7 +250,7 @@ private suspend fun executeWorkerTask(
     val receiver = receiveFile ?: throw LinkFailure("FILE_RECEIVER_UNAVAILABLE", "当前环境无法保存附件")
     val source = task["source_device_id"]?.jsonPrimitive?.contentOrNull
     val sourceName = if (source.isNullOrBlank()) "其他设备" else deviceName(source)
-    val (saved, actualSha) = receiver(artifactId, input, sourceName)
+    val (saved, actualSha) = receiver(taskId, leaseToken, artifactId, input, sourceName)
     return jsonObject(
       "state" to str("succeeded"),
       "output" to jsonObject(
@@ -381,6 +400,10 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
   }
   var floatEnabled by remember { mutableStateOf(runtime.overlayEnabled()) }
   val maxSteps by runtime.maxSteps.collectAsState()
+  val acceptsFiles by runtime.acceptsFiles.collectAsState()
+  val maxReceiveBytes by runtime.maxReceiveFileBytes.collectAsState()
+  val confirmOverBytes by runtime.confirmFileOverBytes.collectAsState()
+  val freeBytes = remember { AnyLinkFiles.availableStorageBytes(context) }
   ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color(0xFFF6FBFE), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
       Text("后台保活、悬浮窗与控屏", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = DeepInk)
@@ -419,6 +442,43 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
         }
       }
       Text("控屏多步任务会自动裁剪旧屏幕，避免上下文爆掉；选「不限」时放开至 500 步防死循环兜底，且随时可点「停止」。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
+      HorizontalDivider(color = Color(0xFFDCEEF8))
+      Text("跨设备接收文件策略（Protocol v3.2 协商）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("允许接收其他设备发来的文件", Modifier.weight(1f), color = DeepInk)
+        Switch(checked = acceptsFiles, onCheckedChange = { runtime.setAcceptsFiles(it) })
+      }
+      if (acceptsFiles) {
+        Text("单文件最大接收上限", style = MaterialTheme.typography.labelMedium, color = SeaSlate)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          val maxOptions = listOf(
+            50L * 1024L * 1024L to "50 MB",
+            200L * 1024L * 1024L to "200 MB（默认）",
+            500L * 1024L * 1024L to "500 MB",
+            1024L * 1024L * 1024L to "1 GB",
+          )
+          items(maxOptions) { (bytes, label) ->
+            FilterChip(selected = maxReceiveBytes == bytes, onClick = { runtime.setMaxReceiveFileBytes(bytes) }, label = { Text(label, fontSize = 12.sp) })
+          }
+        }
+        Text("大文件下载前弹窗确认阈值", style = MaterialTheme.typography.labelMedium, color = SeaSlate)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          val confirmOptions = listOf(
+            0L to "不弹窗",
+            20L * 1024L * 1024L to "20 MB",
+            50L * 1024L * 1024L to "50 MB（默认）",
+            100L * 1024L * 1024L to "100 MB",
+          )
+          items(confirmOptions) { (bytes, label) ->
+            FilterChip(selected = confirmOverBytes == bytes, onClick = { runtime.setConfirmFileOverBytes(bytes) }, label = { Text(label, fontSize = 12.sp) })
+          }
+        }
+        if (freeBytes >= 0L) {
+          Text("手机当前可用存储空间：${AnyLinkFiles.formatSize(freeBytes)}；策略会自动同步到云端，对方发送前即会校验，避免白白上传。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
+        }
+      } else {
+        Text("关闭后，其他设备尝试向本机发文件时会在上传前即收到明确提示并拦截。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
+      }
       Text("提示：大肥鱼主动消息会通过高优先级渠道「大肥鱼主动消息」弹出顶部横幅；若国产 ROM 默认折叠横幅，请在通知设置中开启「横幅通知」，并在「电池优化」中设为「无限制」。", style = MaterialTheme.typography.bodySmall, color = SoftMist)
       Spacer(Modifier.height(16.dp))
     }

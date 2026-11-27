@@ -40,6 +40,9 @@ internal data class SavedFile(
 /** Android SAF picker + zero-RAM streaming MediaStore.Downloads helpers (zero runtime storage permissions on API 31+). */
 internal object AnyLinkFiles {
   const val MAX_BYTES: Long = 200L * 1024L * 1024L
+  const val HARD_MAX_BYTES: Long = 1024L * 1024L * 1024L
+  const val DEFAULT_CONFIRM_OVER_BYTES: Long = 50L * 1024L * 1024L
+  const val STORAGE_HEADROOM_BYTES: Long = 50L * 1024L * 1024L
 
   fun sanitizeFilename(raw: String?): String {
     val base = (raw ?: "attachment.bin").replace('\\', '/').substringAfterLast('/')
@@ -48,12 +51,18 @@ internal object AnyLinkFiles {
   }
 
   fun formatSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> String.format(Locale.US, "%.2f GB", bytes.toDouble() / (1024.0 * 1024.0 * 1024.0))
     bytes >= 1024L * 1024L -> String.format(Locale.US, "%.2f MB", bytes.toDouble() / (1024.0 * 1024.0))
     bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes.toDouble() / 1024.0)
     else -> "$bytes B"
   }
 
-  fun readPickedFile(context: Context, uri: Uri): PickedFile {
+  fun availableStorageBytes(context: Context): Long = runCatching {
+    val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+    android.os.StatFs(dir.absolutePath).availableBytes
+  }.getOrDefault(-1L)
+
+  fun readPickedFile(context: Context, uri: Uri, maxBytes: Long = HARD_MAX_BYTES): PickedFile {
     var name: String? = null
     var size = -1L
     runCatching {
@@ -66,7 +75,7 @@ internal object AnyLinkFiles {
         }
       }
     }
-    if (size > MAX_BYTES) throw LinkFailure("ARTIFACT_TOO_LARGE", "文件大小超过 200 MiB 限制（当前 ${formatSize(size)}）")
+    if (size > maxBytes) throw LinkFailure("ARTIFACT_TOO_LARGE", "文件大小超过上限 ${formatSize(maxBytes)}（当前 ${formatSize(size)}）")
     val mime = context.contentResolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
     val cleanName = sanitizeFilename(name ?: uri.lastPathSegment ?: "attachment.bin")
     return PickedFile(uri = uri, filename = cleanName, mimeType = mime, sizeBytes = size.coerceAtLeast(0L))
@@ -124,7 +133,7 @@ internal object AnyLinkFiles {
                 val n = input.read(buf)
                 if (n <= 0) break
                 total += n
-                if (total > maxBytes) throw LinkFailure("ARTIFACT_TOO_LARGE", "下载的附件超过 200 MiB 上限")
+                if (total > maxBytes) throw LinkFailure("TARGET_FILE_TOO_LARGE", "下载的附件超过单文件接收上限 ${formatSize(maxBytes)}")
                 digest.update(buf, 0, n)
                 sink.write(buf, 0, n)
               }
@@ -165,7 +174,7 @@ internal object AnyLinkFiles {
           val n = input.read(buf)
           if (n <= 0) break
           total += n
-          if (total > maxBytes) throw LinkFailure("ARTIFACT_TOO_LARGE", "下载的附件超过 200 MiB 上限")
+          if (total > maxBytes) throw LinkFailure("TARGET_FILE_TOO_LARGE", "下载的附件超过单文件接收上限 ${formatSize(maxBytes)}")
           digest.update(buf, 0, n)
           sink.write(buf, 0, n)
         }

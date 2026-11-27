@@ -14,13 +14,15 @@ export class TaskFailure extends Error {
 }
 
 /** Throw TaskDeclined when this edge agent cannot perform the requested task in its local environment.
- * The server's Cloud Memory Brain will automatically record this boundary so other devices learn it. */
+ * By default the server's Cloud Memory Brain learns this boundary; pass `{ learnBoundary: false }` for
+ * transient / per-file rejections (e.g. a single file exceeding receiver max_file_bytes or owner rejection). */
 export class TaskDeclined extends Error {
-  constructor(code, message) {
+  constructor(code, message, { learnBoundary = true } = {}) {
     super(message);
     this.name = 'TaskDeclined';
     this.code = code;
     this.taskDeclined = true;
+    this.learnBoundary = learnBoundary;
   }
 }
 
@@ -109,13 +111,14 @@ const FENCE_ERROR_CODES = new Set(['TASK_NOT_ACTIVE', 'LEASE_FENCED', 'TASK_TERM
 /** Edge task worker supporting Protocol v3.2 WebSocket push, fencing lease heartbeats, concurrent slots,
  * interactive suspend/reply (askInput / requestApproval), explicit TaskDeclined, and crash-safe journaling. */
 export class AnyLinkWorker {
-  #client; #handlers; #onInvoke; #journal; #binding;
+  #client; #handlers; #onInvoke; #journal; #binding; #filePolicy;
 
-  constructor({ client, handlers = {}, onInvoke, journalPath, journal }) {
+  constructor({ client, handlers = {}, onInvoke, journalPath, journal, filePolicy }) {
     this.#client = client;
     this.#handlers = handlers;
     this.#onInvoke = onInvoke;
     this.#journal = journal ?? new FileJournal(journalPath);
+    this.#filePolicy = filePolicy;
   }
 
   async #bound() {
@@ -135,8 +138,12 @@ export class AnyLinkWorker {
   async advertise(options) {
     await this.#bound();
     const entries = Object.entries(this.#handlers);
-    if (!entries.length) return { capabilities: [] };
-    return this.#client.registerCapabilities(entries.map(([name, h]) => ({ name, description: h.description ?? '' })), options);
+    const resolvedPolicy = typeof this.#filePolicy === 'function' ? this.#filePolicy() : this.#filePolicy;
+    if (!entries.length && resolvedPolicy === undefined) return { capabilities: [] };
+    return this.#client.registerCapabilities(
+      entries.map(([name, h]) => ({ name, description: h.description ?? '' })),
+      { ...options, ...(resolvedPolicy !== undefined ? { filePolicy: resolvedPolicy } : {}) },
+    );
   }
 
   async #executeClaimed(task, { signal, socket } = {}) {
@@ -269,7 +276,7 @@ export class AnyLinkWorker {
         if (error instanceof TaskDeclined || error?.taskDeclined === true) {
           result = {
             state: 'declined',
-            error: { code: error.code ?? 'TASK_DECLINED', message: String(error.message ?? error).slice(0, 500), learn_boundary: true },
+            error: { code: error.code ?? 'TASK_DECLINED', message: String(error.message ?? error).slice(0, 500), ...(error.learnBoundary === false ? { learn_boundary: false } : { learn_boundary: true }) },
           };
         } else if (error instanceof TaskFailure || error?.taskFailure === true) {
           result = {

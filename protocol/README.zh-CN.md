@@ -21,8 +21,8 @@ AnyLink 是面向**个人 Agent 网络（Personal Agent Network）**的引擎无
 身份层级：`主人 (Owner) → 设备 (Device) → Agent`。
 
 1. **接入（`POST /edge/v1/connect`）**：携带 `Authorization: Bearer <ANYLINK_JOIN_KEY>`（或预设 `ANYLINK_LOGIN_PASSWORD`），提交 `device: { install_id, name, platform, slug? }` 与 `agent: { key, name, kind?, summary? }`。`slug` 为唯一短别名（如 `home-mac`、`gpu-box`，省略时自动生成唯一短别名），用于消除同名设备歧义。返回 `201`、`device_slug`、一次性 `ak_` 令牌与 `protocol: { name: "anylink", version: "3.2" }`。同一 `(install_id, agent.key)` 重连保留原 ID 并轮换令牌。
-2. **协议协商（`GET /edge/v1/protocol`，兼容别名 `GET /edge/v1/link/protocol`）**：返回 `version: "3.2"`、能力特性清单、传输端点与路由模式（含 `device_slug`）。
-3. **节点与设备简介（`PATCH /edge/v1/agent/profile`、`PATCH /edge/v1/device/profile`）**：可选更新 Agent 简介或设备名称 / 唯一短别名 `slug`（纯标识信息，不作为任务准入门槛）。
+2. **协议协商（`GET /edge/v1/protocol`，兼容别名 `GET /edge/v1/link/protocol`）**：返回 `version: "3.2"`、能力特性清单（含 `file_policy`）、传输端点、路由模式（含 `device_slug`）与云端实时 `limits`（`artifact_max_bytes`、`artifact_quota_bytes`、`artifact_default_ttl_seconds`）。
+3. **节点简介与文件接收策略（`PATCH /edge/v1/agent/profile`、`POST /edge/v1/link/capabilities`、`PATCH /edge/v1/device/profile`）**：更新 Agent 简介、设备名称 / 唯一短别名 `slug` 或结构化 **`file_policy`**（`{ accepts_files, max_file_bytes?, confirm_over_bytes?, available_bytes?, allowed_mime_prefixes? }`）。`GET /edge/v1/directory` 公开各节点 `file_policy`，发送方与服务端在派发 `file.deliver` 前可事前拦截不接收文件（`409 TARGET_FILE_RECEIVE_DISABLED`）、单文件超限（`413 TARGET_FILE_TOO_LARGE`）、空间不足（`507 TARGET_INSUFFICIENT_STORAGE`）与类型不符（`415 TARGET_FILE_TYPE_NOT_ALLOWED`）；单次大文件拒收可通过 `learn_boundary: false` 避免误写全局能力边界记忆。
 
 ## 2. 云端记忆大脑
 

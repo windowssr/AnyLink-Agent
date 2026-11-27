@@ -301,13 +301,16 @@ test('anylink_file_send uploads local file and dispatches file.deliver to Androi
       assert.equal(dl.details.sha256, sha);
     }, {
       onRequest: entry => {
+        if (entry.method === 'GET' && entry.path === '/edge/v1/protocol') {
+          return Response.json({ protocol: 'anylink', version: '3.2', limits: { artifact_max_bytes: 200 * 1024 * 1024 } });
+        }
         if (entry.method === 'POST' && entry.path === '/edge/v1/artifacts') {
           uploadedBody = entry.body;
           uploadedHeaders = entry.headers;
           return Response.json({ id: '11111111-1111-4111-8111-111111111111', filename: decodeURIComponent(entry.headers['X-AnyLink-Filename']), content_type: entry.headers['X-AnyLink-Content-Type'], size_bytes: payload.length, sha256: sha }, { status: 201 });
         }
         if (entry.method === 'GET' && entry.path === '/edge/v1/directory') {
-          return Response.json({ items: [{ device: { id: '33333333-3333-4333-8333-333333333333', name: 'Android', platform: 'android' }, agents: [{ id: '22222222-2222-4222-8222-222222222222', ws_online: true, online: true }] }] });
+          return Response.json({ items: [{ device: { id: '33333333-3333-4333-8333-333333333333', name: 'Android', platform: 'android' }, agents: [{ id: '22222222-2222-4222-8222-222222222222', ws_online: true, online: true, file_policy: { accepts_files: true, max_file_bytes: 200 * 1024 * 1024, confirm_over_bytes: 50 * 1024 * 1024 } }] }] });
         }
         if (entry.method === 'POST' && entry.path === '/edge/v1/tasks') {
           taskBody = entry.body;
@@ -315,6 +318,47 @@ test('anylink_file_send uploads local file and dispatches file.deliver to Androi
         }
         if (entry.method === 'GET' && entry.path === '/edge/v1/artifacts/11111111-1111-4111-8111-111111111111') {
           return new Response(payload, { status: 200, headers: { 'Content-Type': 'text/plain', 'X-AnyLink-Filename': encodeURIComponent('hello.txt'), 'X-AnyLink-SHA256': sha } });
+        }
+        return undefined;
+      },
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('anylink_file_send blocks before uploading when target disables files or file exceeds target max_file_bytes',async()=>{
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'anylink-plugin-preflight-'));
+  const src = path.join(dir, 'big.bin');
+  writeFileSync(src, Buffer.alloc(4096, 9));
+  let uploadedCount = 0;
+  let mode = 'disabled';
+  try {
+    await fixture(async({tools})=>{
+      const macTools = tools(macContext);
+      const r1 = await macTools.anylink_file_send.execute('pf-1', { path: src });
+      assert.equal(r1.isError, true);
+      assert.equal(r1.details.error.code, 'TARGET_FILE_RECEIVE_DISABLED');
+      assert.equal(uploadedCount, 0, 'must NOT upload bytes when target disables file receiving');
+
+      mode = 'too-large';
+      const r2 = await macTools.anylink_file_send.execute('pf-2', { path: src });
+      assert.equal(r2.isError, true);
+      assert.equal(r2.details.error.code, 'TARGET_FILE_TOO_LARGE');
+      assert.equal(uploadedCount, 0, 'must NOT upload bytes when file exceeds target max_file_bytes');
+    }, {
+      onRequest: entry => {
+        if (entry.method === 'GET' && entry.path === '/edge/v1/protocol') {
+          return Response.json({ protocol: 'anylink', version: '3.2', limits: { artifact_max_bytes: 200 * 1024 * 1024 } });
+        }
+        if (entry.method === 'GET' && entry.path === '/edge/v1/directory') {
+          const policy = mode === 'disabled' ? { accepts_files: false } : { accepts_files: true, max_file_bytes: 1024 };
+          return Response.json({ items: [{ device: { id: '33333333-3333-4333-8333-333333333333', name: 'Android', platform: 'android' }, agents: [{ id: '22222222-2222-4222-8222-222222222222', ws_online: true, online: true, file_policy: policy }] }] });
+        }
+        if (entry.method === 'POST' && entry.path === '/edge/v1/artifacts') {
+          uploadedCount++;
+          return Response.json({ id: 'should-not-upload' }, { status: 201 });
         }
         return undefined;
       },

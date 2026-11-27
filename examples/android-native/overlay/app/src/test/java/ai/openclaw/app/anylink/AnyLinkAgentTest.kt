@@ -403,4 +403,37 @@ class AnyLinkAgentTest {
     CompanionOverlay.hide()
     assertTrue("Overlay show/hide completed cleanly without crashing", shown || !shown)
   }
+
+  @Test fun `worker advertises file_policy and reports FileDeclined with learn_boundary false`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      server.enqueue(response("""{"ok":true}"""))
+      server.enqueue(response("""{"task":{"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","capability":"file.deliver","input":{"artifact_id":"11111111-1111-4111-8111-111111111111","filename":"movie.mp4","size_bytes":500000000}}}"""))
+      server.enqueue(response("""{"ok":true}"""))
+      server.enqueue(response("""{"task":null}"""))
+      val ledger = MemoryLedger()
+      val job = launch {
+        runCatching {
+          linkWorkerLoop(
+            transport = CloudClient(CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)),
+            ledger = ledger,
+            info = { jsonObject("model" to str("m")) },
+            say = { _, _ -> },
+            receiveFile = { _, _, _, _, _ -> throw FileDeclined("TARGET_FILE_TOO_LARGE", "超过手机上限", learnBoundary = false) },
+            filePolicy = { jsonObject("accepts_files" to JsonPrimitive(true), "max_file_bytes" to JsonPrimitive(209715200L), "confirm_over_bytes" to JsonPrimitive(52428800L)) },
+          )
+        }
+      }
+      delay(700); job.cancel()
+      val requests = (1..server.requestCount).map { server.takeRequest() }
+      val caps = requests.first { it.path == "/edge/v1/link/capabilities" }.body.readUtf8()
+      assertTrue("capabilities payload must advertise file_policy", caps.contains("\"file_policy\""))
+      assertTrue(caps.contains("\"confirm_over_bytes\":52428800"))
+      val result = requests.single { it.path == "/edge/v1/tasks/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/result" }.body.readUtf8()
+      val parsed = linkJson.parseToJsonElement(result).jsonObject
+      assertEquals("declined", parsed.text("state"))
+      assertEquals("TARGET_FILE_TOO_LARGE", parsed["error"]!!.jsonObject.text("code"))
+      assertEquals(false, parsed["error"]!!.jsonObject["learn_boundary"]!!.jsonPrimitive.boolean)
+    }
+  }
 }

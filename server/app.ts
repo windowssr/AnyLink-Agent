@@ -162,7 +162,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
 
   app.get('/v1/devices', async () => {
     const devices = (await db.query('SELECT *,false AS executor_connected FROM devices WHERE owner_id=$1 ORDER BY created_at', [OWNER_ID])).rows;
-    const agents = (await db.query(`SELECT a.id,a.device_id,a.key,a.name,a.kind,a.summary,a.capabilities,a.last_seen_at,a.revoked_at,c.id AS credential_id,c.created_at AS bound_at,c.last_used_at,(a.last_seen_at IS NOT NULL AND a.last_seen_at>now()-interval '60 seconds') AS http_online
+    const agents = (await db.query(`SELECT a.id,a.device_id,a.key,a.name,a.kind,a.summary,a.capabilities,a.file_policy,a.last_seen_at,a.revoked_at,c.id AS credential_id,c.created_at AS bound_at,c.last_used_at,(a.last_seen_at IS NOT NULL AND a.last_seen_at>now()-interval '60 seconds') AS http_online
       FROM agents a JOIN devices d ON d.id=a.device_id LEFT JOIN edge_credentials c ON c.agent_id=a.id AND c.revoked_at IS NULL WHERE d.owner_id=$1 ORDER BY a.key`, [OWNER_ID])).rows;
     const byDevice = new Map<string, any[]>();
     for (const a of agents) {
@@ -182,7 +182,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
   registerCredentialRoutes(app, db, id => wsHub.isOnline(id), id => wsHub.disconnectAgent(id));
   registerModelProxy(app, db, config, memoryBrain);
   registerSpeech(app, config, persona);
-  registerLink(app, db, linkService, wsHub);
+  registerLink(app, db, linkService, wsHub, config);
   registerArtifacts(app, db, config);
 
   app.get('/edge/v1/events', async req => {
@@ -197,7 +197,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
 
   app.get('/edge/v1/identity', async req => {
     const me = req.edgeIdentity!;
-    const agent = (await db.query('SELECT id,key,name,kind,summary,capabilities FROM agents WHERE id=$1', [me.agent_id])).rows[0];
+    const agent = (await db.query('SELECT id,key,name,kind,summary,capabilities,file_policy FROM agents WHERE id=$1', [me.agent_id])).rows[0];
     return { device: (await listDevices(db)).find(d => d.id === me.device_id), agent, scopes: ['memory', 'memory_brain', 'model', 'tasks', 'ws', 'persona', 'artifacts'], protocol: { name: 'anylink', version: '3.2' } };
   });
 

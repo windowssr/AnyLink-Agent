@@ -116,11 +116,11 @@ internal interface LinkTransport {
   suspend fun completion(body: JsonObject, onText: (String) -> Unit): JsonObject
   suspend fun uploadArtifact(bytes: ByteArray, filename: String, contentType: String = "application/octet-stream"): JsonObject =
     throw LinkFailure("UNSUPPORTED", "当前传输不支持上传附件")
-  suspend fun uploadArtifactStream(context: android.content.Context, uri: android.net.Uri, filename: String, contentType: String = "application/octet-stream", sizeBytes: Long = -1L): JsonObject =
+  suspend fun uploadArtifactStream(context: android.content.Context, uri: android.net.Uri, filename: String, contentType: String = "application/octet-stream", sizeBytes: Long = -1L, maxBytes: Long = AnyLinkFiles.HARD_MAX_BYTES): JsonObject =
     throw LinkFailure("UNSUPPORTED", "当前传输不支持流式上传附件")
   suspend fun downloadArtifact(artifactId: String): DownloadedArtifact =
     throw LinkFailure("UNSUPPORTED", "当前传输不支持下载附件")
-  suspend fun downloadArtifactToStorage(context: android.content.Context, artifactId: String, preferredFilename: String = "", preferredMime: String = "", expectedSha256: String = ""): Pair<SavedFile, String> =
+  suspend fun downloadArtifactToStorage(context: android.content.Context, artifactId: String, preferredFilename: String = "", preferredMime: String = "", expectedSha256: String = "", maxBytes: Long = AnyLinkFiles.MAX_BYTES): Pair<SavedFile, String> =
     throw LinkFailure("UNSUPPORTED", "当前传输不支持流式下载附件")
   fun cancel()
 }
@@ -261,8 +261,9 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
     filename: String,
     contentType: String,
     sizeBytes: Long,
+    maxBytes: Long,
   ): JsonObject = withContext(Dispatchers.IO) {
-    if (sizeBytes > AnyLinkFiles.MAX_BYTES) throw LinkFailure("ARTIFACT_TOO_LARGE", "文件超过 200 MiB 上限")
+    if (sizeBytes > maxBytes) throw LinkFailure("ARTIFACT_TOO_LARGE", "文件超过单文件上限 ${AnyLinkFiles.formatSize(maxBytes)}")
     val safeName = AnyLinkFiles.sanitizeFilename(filename)
     val safeMime = contentType.substringBefore(';').trim().ifBlank { "application/octet-stream" }
     val body = object : okhttp3.RequestBody() {
@@ -277,7 +278,7 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
             val n = input.read(buf)
             if (n <= 0) break
             total += n
-            if (total > AnyLinkFiles.MAX_BYTES) throw LinkFailure("ARTIFACT_TOO_LARGE", "文件超过 200 MiB 上限")
+            if (total > maxBytes) throw LinkFailure("ARTIFACT_TOO_LARGE", "文件超过单文件上限 ${AnyLinkFiles.formatSize(maxBytes)}")
             sink.write(buf, 0, n)
           }
           if (total == 0L) throw LinkFailure("FILE_EMPTY", "文件为空，未发送")
@@ -343,6 +344,7 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
     preferredFilename: String,
     preferredMime: String,
     expectedSha256: String,
+    maxBytes: Long,
   ): Pair<SavedFile, String> = withContext(Dispatchers.IO) {
     val encodedId = java.net.URLEncoder.encode(artifactId.trim(), "UTF-8")
     val request = Request.Builder().url(connection.server + "/edge/v1/artifacts/$encodedId").header("Authorization", "Bearer ${connection.token}").get().build()
@@ -363,6 +365,7 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
           input = response.body.byteStream(),
           filename = preferredFilename.ifBlank { headerName },
           contentType = preferredMime.ifBlank { headerMime },
+          maxBytes = maxBytes,
           expectedSha256 = checkSha,
         )
       }

@@ -14,6 +14,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -32,6 +35,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 /** Process-wide owner of the connection, device agent, Protocol v3.2 WebSocket bus, worker, voice and overlay state. */
 internal class AnyLinkRuntime private constructor(private val app: Application) {
@@ -55,11 +59,15 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val pendingFile = MutableStateFlow<PickedFile?>(null)
   val uploadingFile = MutableStateFlow(false)
   val maxSteps = MutableStateFlow(prefs.getInt("agent_max_steps", DEFAULT_AGENT_MAX_STEPS))
+  val acceptsFiles = MutableStateFlow(prefs.getBoolean("file_accepts", true))
+  val maxReceiveFileBytes = MutableStateFlow(prefs.getLong("file_max_receive_bytes", AnyLinkFiles.MAX_BYTES))
+  val confirmFileOverBytes = MutableStateFlow(prefs.getLong("file_confirm_over_bytes", AnyLinkFiles.DEFAULT_CONFIRM_OVER_BYTES))
   val activityVisible = MutableStateFlow(false)
   val serviceRunning = MutableStateFlow(false)
   val overlayVisible = MutableStateFlow(false)
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  private val pendingLocalApprovals = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
   // Separate CloudClient instances for chat vs background worker prevent concurrent cancel clobbering.
   private var chatCloud: CloudClient? = null
   private var workerCloud: CloudClient? = null
@@ -161,6 +169,14 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   }
 
   fun replyToTask(taskId: String, approved: Boolean? = null, choice: String? = null, message: String? = null) {
+    if (taskId.startsWith("local-file:")) {
+      val realId = taskId.removePrefix("local-file:")
+      val accept = approved != false
+      pendingLocalApprovals.remove(realId)?.complete(accept)
+      agent.value?.markInteractionResolved(taskId, if (accept) "已确认接收" else "已拒收")
+      voiceNotice.value = if (accept) "好哒主人，正在开始流式下载这个大文件…" else "好哒主人，已经帮你拒收这个大文件啦，没费一丁点流量！"
+      return
+    }
     val value = connection.value ?: return
     scope.launch {
       val body = buildJsonObject {
@@ -216,26 +232,19 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     val note = text.trim()
     scope.launch {
       try {
-        voiceNotice.value = "正在流式上传《${picked.filename}》（${AnyLinkFiles.formatSize(picked.sizeBytes)}）…"
         val uploader = CloudClient(value)
-        val uploaded = uploader.uploadArtifactStream(app, picked.uri, picked.filename, picked.mimeType, picked.sizeBytes)
-        val artifactId = uploaded.text("id")
-        val filename = uploaded.text("filename").ifBlank { picked.filename }
-        val contentType = uploaded.text("content_type").ifBlank { picked.mimeType }
-        val sizeBytes = uploaded["size_bytes"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: picked.sizeBytes
-        val sha256 = uploaded.text("sha256")
+        // Pre-flight 1: negotiate cloud server artifact limit dynamically from /edge/v1/protocol.
+        val proto = runCatching { uploader.request("GET", "/edge/v1/protocol") }.getOrNull()
+        val serverMax = (proto?.get("limits") as? JsonObject)?.get("artifact_max_bytes")?.jsonPrimitive?.longOrNull ?: AnyLinkFiles.MAX_BYTES
+        if (picked.sizeBytes > serverMax) {
+          throw LinkFailure("ARTIFACT_TOO_LARGE", "文件《${picked.filename}》（${AnyLinkFiles.formatSize(picked.sizeBytes)}）超过云端单文件上限 ${AnyLinkFiles.formatSize(serverMax)}，未上传。")
+        }
 
+        // Pre-flight 2 (for 1-tap direct send): resolve target Mac & validate its file_policy BEFORE uploading any bytes!
+        var directTarget: JsonObject? = null
+        var directTargetName = "Mac"
+        var targetNeedsConfirm = false
         if (note.isEmpty()) {
-          // Instant 1-tap file transfer directly to Mac (no LLM latency)
-          active.appendFileMessage(
-            role = "user",
-            text = "发送文件给电脑",
-            meta = "我发送的文件",
-            fileName = filename,
-            fileUri = picked.uri.toString(),
-            fileMime = contentType,
-            fileSize = sizeBytes,
-          )
           val dir = uploader.request("GET", "/edge/v1/directory")
           val items = (dir["items"] as? JsonArray).orEmpty().map { it.jsonObject }
           val peers = items.filter { (it["device"] as? JsonObject)?.text("id") != value.deviceId }
@@ -248,10 +257,47 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
           val preferred = agents.firstOrNull { it.text("key") == "mac-openclaw" }
             ?: agents.firstOrNull { it["ws_online"]?.jsonPrimitive?.booleanOrNull == true }
             ?: agents.firstOrNull()
-          val target = if (preferred != null) jsonObject("agent_id" to str(preferred.text("id"))) else jsonObject("device_id" to str((chosen["device"] as JsonObject).text("id")))
-          val targetName = (chosen["device"] as JsonObject).text("name").ifBlank { "Mac" }
+          directTargetName = (chosen["device"] as JsonObject).text("name").ifBlank { "Mac" }
+          val targetPolicy = preferred?.get("file_policy") as? JsonObject
+          if (targetPolicy != null) {
+            if (targetPolicy["accepts_files"]?.jsonPrimitive?.booleanOrNull == false) {
+              throw LinkFailure("TARGET_FILE_RECEIVE_DISABLED", "目标设备「$directTargetName」不支持或已关闭接收文件功能，未上传。")
+            }
+            val targetMax = targetPolicy["max_file_bytes"]?.jsonPrimitive?.longOrNull
+            if (targetMax != null && picked.sizeBytes > targetMax) {
+              throw LinkFailure("TARGET_FILE_TOO_LARGE", "文件《${picked.filename}》（${AnyLinkFiles.formatSize(picked.sizeBytes)}）超过「$directTargetName」单文件接收上限 ${AnyLinkFiles.formatSize(targetMax)}，未上传。")
+            }
+            val targetAvail = targetPolicy["available_bytes"]?.jsonPrimitive?.longOrNull
+            if (targetAvail != null && picked.sizeBytes > targetAvail) {
+              throw LinkFailure("TARGET_INSUFFICIENT_STORAGE", "目标设备「$directTargetName」剩余存储空间不足（剩余 ${AnyLinkFiles.formatSize(targetAvail)}），未上传。")
+            }
+            val confirmOver = targetPolicy["confirm_over_bytes"]?.jsonPrimitive?.longOrNull
+            if (confirmOver != null && confirmOver > 0L && picked.sizeBytes > confirmOver) targetNeedsConfirm = true
+          }
+          directTarget = if (preferred != null) jsonObject("agent_id" to str(preferred.text("id"))) else jsonObject("device_id" to str((chosen["device"] as JsonObject).text("id")))
+        }
+
+        voiceNotice.value = "正在流式上传《${picked.filename}》（${AnyLinkFiles.formatSize(picked.sizeBytes)}）…"
+        val uploaded = uploader.uploadArtifactStream(app, picked.uri, picked.filename, picked.mimeType, picked.sizeBytes, serverMax)
+        val artifactId = uploaded.text("id")
+        val filename = uploaded.text("filename").ifBlank { picked.filename }
+        val contentType = uploaded.text("content_type").ifBlank { picked.mimeType }
+        val sizeBytes = uploaded["size_bytes"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: picked.sizeBytes
+        val sha256 = uploaded.text("sha256")
+
+        if (note.isEmpty() && directTarget != null) {
+          // Instant 1-tap file transfer directly to Mac (no LLM latency)
+          active.appendFileMessage(
+            role = "user",
+            text = "发送文件给电脑",
+            meta = "我发送的文件",
+            fileName = filename,
+            fileUri = picked.uri.toString(),
+            fileMime = contentType,
+            fileSize = sizeBytes,
+          )
           uploader.request("POST", "/edge/v1/tasks", buildJsonObject {
-            put("target", target)
+            put("target", directTarget)
             put("capability", str("file.deliver"))
             put("instruction", str("接收来自手机的文件《$filename》"))
             put("input", buildJsonObject {
@@ -262,8 +308,9 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
               if (sha256.isNotBlank()) put("sha256", str(sha256))
             })
           }, "file-deliver:$artifactId")
-          active.appendEvent(role = "event", text = "《$filename》（${AnyLinkFiles.formatSize(sizeBytes)}）已上传云端并派发给 $targetName，签收后会通知你哦～", meta = "跨设备传文件")
-          voiceNotice.value = "文件已发给 $targetName，等待签收…"
+          val suffix = if (targetNeedsConfirm) "（文件较大，对方确认后即可保存）" else "，签收后会通知你哦～"
+          active.appendEvent(role = "event", text = "《$filename》（${AnyLinkFiles.formatSize(sizeBytes)}）已上传云端并派发给 $directTargetName$suffix", meta = "跨设备传文件")
+          voiceNotice.value = "文件已发给 $directTargetName，等待签收…"
           refreshTasks()
         } else {
           // File + custom instruction: let DeviceAgent send or forward artifact_id with full context
@@ -456,18 +503,109 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       ledger = ledger,
       info = { infoJson(value) },
       say = { text, source -> companionSay(text, source) },
-      receiveFile = { artifactId, input, source -> receiveDeliveredFile(transport, artifactId, input, source) },
+      receiveFile = { taskId, leaseToken, artifactId, input, source -> receiveDeliveredFile(transport, taskId, leaseToken, artifactId, input, source) },
+      filePolicy = { buildFilePolicyJson() },
       wakeup = workerWakeup,
       isWsOnline = { wsOnline.value },
     )
   }
 
-  private suspend fun receiveDeliveredFile(transport: LinkTransport, artifactId: String, input: JsonObject, source: String): Pair<SavedFile, String> {
-    val preferredName = input.text("filename")
+  private suspend fun receiveDeliveredFile(
+    transport: LinkTransport,
+    taskId: String,
+    leaseToken: String,
+    artifactId: String,
+    input: JsonObject,
+    source: String,
+  ): Pair<SavedFile, String> {
+    val preferredName = input.text("filename").ifBlank { "attachment.bin" }
     val preferredMime = input.text("content_type")
     val expectedSha = input.text("sha256")
     val note = input.text("note")
-    val (saved, actualSha) = transport.downloadArtifactToStorage(app, artifactId, preferredName, preferredMime, expectedSha)
+
+    // 1. Check whether this phone currently accepts incoming files.
+    if (!acceptsFiles.value) {
+      val msg = "手机端当前已关闭接收文件功能（可在「保活」设置中重新开启）"
+      agent.value?.appendEvent(role = "event", text = "已拦截来自 $source 的文件《$preferredName》：$msg", meta = "已关闭收文件")
+      throw FileDeclined("TARGET_FILE_RECEIVE_DISABLED", msg, learnBoundary = false)
+    }
+
+    // 2. Inspect declared size (or query /meta) BEFORE downloading a single byte.
+    val meta = if (input["size_bytes"] == null || input.text("filename").isBlank()) {
+      runCatching { transport.request("GET", "/edge/v1/artifacts/${java.net.URLEncoder.encode(artifactId.trim(), "UTF-8")}/meta") }.getOrNull()
+    } else null
+    val displayName = input.text("filename").ifBlank { meta?.text("filename").orEmpty() }.ifBlank { "attachment.bin" }
+    val expectedSize = input["size_bytes"]?.jsonPrimitive?.longOrNull
+      ?: meta?.get("size_bytes")?.jsonPrimitive?.longOrNull
+      ?: -1L
+
+    val maxAllowed = maxReceiveFileBytes.value
+    if (expectedSize > 0L && expectedSize > maxAllowed) {
+      val msg = "文件《$displayName》（${AnyLinkFiles.formatSize(expectedSize)}）超过手机单文件接收上限 ${AnyLinkFiles.formatSize(maxAllowed)}，已拒收"
+      agent.value?.appendEvent(role = "event", text = "来自 $source 的$msg", meta = "文件过大已拒收")
+      AnyLinkCompanionService.notifyProactive(app, "大肥鱼已拒收超大文件", "来自 $source 的《$displayName》（${AnyLinkFiles.formatSize(expectedSize)}）超过手机上限 ${AnyLinkFiles.formatSize(maxAllowed)}", tag = "file-reject:$taskId")
+      throw FileDeclined("TARGET_FILE_TOO_LARGE", msg, learnBoundary = false)
+    }
+
+    // 3. Verify free phone storage headroom before starting transfer.
+    val avail = AnyLinkFiles.availableStorageBytes(app)
+    if (avail >= 0L && expectedSize > 0L && expectedSize + AnyLinkFiles.STORAGE_HEADROOM_BYTES > avail) {
+      val msg = "手机剩余存储空间不足（剩余 ${AnyLinkFiles.formatSize(avail)}，文件 ${AnyLinkFiles.formatSize(expectedSize)}），无法接收《$displayName》"
+      agent.value?.appendEvent(role = "event", text = msg, meta = "存储空间不足")
+      AnyLinkCompanionService.notifyProactive(app, "手机存储空间不足", msg, tag = "file-space:$taskId", urgent = true)
+      throw LinkFailure("INSUFFICIENT_STORAGE", msg)
+    }
+
+    // 4. Large-file owner confirmation gate: ask before downloading on phone!
+    val confirmThreshold = confirmFileOverBytes.value
+    if (confirmThreshold > 0L && expectedSize > confirmThreshold) {
+      val sizeLabel = AnyLinkFiles.formatSize(expectedSize)
+      val threshLabel = AnyLinkFiles.formatSize(confirmThreshold)
+      runCatching {
+        val progressBody = buildJsonObject {
+          put("stage", str("awaiting_local_confirmation"))
+          put("message", str("文件较大（$sizeLabel），正在等待手机端主人点击确认接收…"))
+          if (leaseToken.isNotBlank()) put("lease_token", str(leaseToken))
+        }
+        transport.request("POST", "/edge/v1/tasks/$taskId/progress", progressBody)
+      }
+      val prompt = "$source 想发来大文件《$displayName》（$sizeLabel），超过手机设定的 $threshLabel 确认阈值。确认下载并保存到「下载/AnyLink」吗？"
+      val localKey = "local-file:$taskId"
+      val deferred = CompletableDeferred<Boolean>()
+      pendingLocalApprovals[taskId] = deferred
+      agent.value?.appendInteraction(
+        taskId = localKey,
+        interactionType = "awaiting_approval",
+        prompt = prompt,
+        riskLevel = "medium",
+        meta = "大文件接收确认 · $sizeLabel",
+      )
+      agent.value?.state?.update { it.copy(emotion = "curious", gesture = "point", sequence = UUID.randomUUID().toString()) }
+      voiceNotice.value = "收到来自 $source 的大文件《$displayName》（$sizeLabel），等你确认接收哦～"
+      AnyLinkCompanionService.notifyProactive(
+        app,
+        title = "大肥鱼收到大文件，等你确认接收",
+        body = prompt,
+        tag = "file-confirm:$taskId",
+        urgent = true,
+      )
+      speechPlayer?.enqueue("主人！${source}想给你传一个大文件叫${displayName}，有${sizeLabel}，点开屏幕确认一下我就帮你下载哦！", summarize = false, interrupt = false, forceRewrite = false)
+
+      val decision = try {
+        withTimeoutOrNull(300_000L) { deferred.await() }
+      } finally {
+        pendingLocalApprovals.remove(taskId)
+      }
+      if (decision == null) {
+        agent.value?.markInteractionResolved(localKey, "已超时未下载")
+        throw FileDeclined("FILE_CONFIRM_TIMEOUT", "等待手机端确认接收大文件《$displayName》（$sizeLabel）超时，未下载", learnBoundary = false)
+      }
+      if (!decision) {
+        throw FileDeclined("FILE_REJECTED_BY_OWNER", "主人已拒绝接收大文件《$displayName》（$sizeLabel）", learnBoundary = false)
+      }
+    }
+
+    val (saved, actualSha) = transport.downloadArtifactToStorage(app, artifactId, displayName, preferredMime, expectedSha, maxAllowed)
     val text = if (note.isNotBlank()) "来自 $source 的文件《${saved.filename}》：$note" else "已收到来自 $source 的文件《${saved.filename}》"
     voiceNotice.value = "已保存文件：${saved.filename}（${saved.displayPath}）"
     agent.value?.appendFileMessage(
@@ -587,6 +725,42 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     val clean = if (value <= 0) 0 else value.coerceIn(10, UNLIMITED_AGENT_STEPS_CAP)
     prefs.edit().putInt("agent_max_steps", clean).apply()
     maxSteps.value = clean
+  }
+
+  fun buildFilePolicyJson(): JsonObject = buildJsonObject {
+    put("accepts_files", JsonPrimitive(acceptsFiles.value))
+    put("max_file_bytes", JsonPrimitive(maxReceiveFileBytes.value))
+    put("confirm_over_bytes", JsonPrimitive(confirmFileOverBytes.value))
+    val avail = AnyLinkFiles.availableStorageBytes(app)
+    if (avail >= 0L) put("available_bytes", JsonPrimitive(maxOf(0L, avail - AnyLinkFiles.STORAGE_HEADROOM_BYTES)))
+  }
+
+  private fun syncFilePolicyToCloud() {
+    val value = connection.value ?: return
+    val policy = buildFilePolicyJson()
+    scope.launch {
+      runCatching { CloudClient(value).request("PATCH", "/edge/v1/agent/profile", jsonObject("file_policy" to policy)) }
+    }
+  }
+
+  fun setAcceptsFiles(enabled: Boolean) {
+    prefs.edit().putBoolean("file_accepts", enabled).apply()
+    acceptsFiles.value = enabled
+    syncFilePolicyToCloud()
+  }
+
+  fun setMaxReceiveFileBytes(bytes: Long) {
+    val clean = bytes.coerceIn(1024L * 1024L, AnyLinkFiles.HARD_MAX_BYTES)
+    prefs.edit().putLong("file_max_receive_bytes", clean).apply()
+    maxReceiveFileBytes.value = clean
+    syncFilePolicyToCloud()
+  }
+
+  fun setConfirmFileOverBytes(bytes: Long) {
+    val clean = if (bytes <= 0L) 0L else bytes.coerceIn(1024L * 1024L, AnyLinkFiles.HARD_MAX_BYTES)
+    prefs.edit().putLong("file_confirm_over_bytes", clean).apply()
+    confirmFileOverBytes.value = clean
+    syncFilePolicyToCloud()
   }
   fun overlayDismissed() = prefs.getBoolean("overlay_dismissed", false)
   fun dismissOverlay() { prefs.edit().putBoolean("overlay_dismissed", true).apply(); refreshOverlay() }

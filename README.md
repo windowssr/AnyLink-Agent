@@ -164,13 +164,18 @@ AnyLink's core is the **framework-agnostic Protocol v3, Cloud Hub, SDKs, and MCP
 2. **Android Native Independent Agent** — Setup Guide: [`examples/android-native/README.md`](examples/android-native/README.md)
    - Runs independently on-device (works even when Mac is offline); **Deep-Sea Glass Companion UI** (full-bleed unobstructed Live2D stage with WebGL pixel verification, Companion ↔ Reading mode toggle, frosted glass full-output chat sheet, and interactive v3.2 approval/choice cards), quick password login, foreground service keep-alive + high-priority proactive notifications, **📎 bidirectional 200 MiB streaming file transfer** (saves to `Downloads/AnyLink` with in-chat Open/Share card), **configurable on-device step budget (`50 / 100 / 200 / Unlimited`, default 100) with in-loop screen pruning and one-tap Continue**, detached SSE resume, offline SQLite memory outbox, and persona-matched voice feedback.
 
-### Cross-Device Bidirectional File Transfer & Upload Limits
+### Cross-Device Bidirectional File Transfer, Policy Negotiation & Upload Limits
 
-Edge devices exchange files end-to-end with **O(1)-RAM HTTP streaming**, SHA-256 verification, disk-backed cloud staging (`/edge/v1/artifacts`), and the `file.deliver` task capability:
+Edge devices exchange files end-to-end with **O(1)-RAM HTTP streaming**, SHA-256 verification, disk-backed cloud staging (`/edge/v1/artifacts`), the `file.deliver` task capability, and **Protocol v3.2 `file_policy` capability & capacity negotiation**:
 
-- **Android → Mac**: Tap `📎` in the Android composer to pick any file. Leave the message blank and tap **Send File** for instant zero-LLM transfer straight to Mac (`~/Downloads/AnyLink/`), or add an instruction so the Mac Agent processes the uploaded `artifact_id`.
-- **Mac → Android**: Ask the Mac Agent (or send via `anylink_file_send`) to deliver a local file to your phone; the Android worker streams it straight into `Downloads/AnyLink`, posts a heads-up notification, and renders an in-chat File Card with **Open** / **Share** actions.
-- **SDK / Script Nodes**: Use `@anylink-agent/sdk` `client.uploadArtifact(...)` / `client.downloadArtifactToFile(...)` or raw binary `POST/GET /edge/v1/artifacts`.
+- **Pre-Flight Negotiation (Zero Wasted Bandwidth)**:
+  - `GET /edge/v1/protocol` advertises live server `limits` (`artifact_max_bytes`, `artifact_quota_bytes`, `artifact_default_ttl_seconds`) so clients negotiate limits dynamically instead of hardcoding sizes.
+  - Each edge agent declares structured `file_policy` (`accepts_files`, `max_file_bytes`, `confirm_over_bytes`, `available_bytes`, `allowed_mime_prefixes`) via `POST /edge/v1/link/capabilities`, `PATCH /edge/v1/agent/profile`, or `POST /edge/v1/connect`, exposed in `GET /edge/v1/directory`.
+  - **Client Pre-Flight + Server Enforcement**: Before uploading a single byte (and again on `POST /edge/v1/tasks`), sender and server verify whether the recipient accepts files, fits within `max_file_bytes` & `available_bytes`, and matches MIME filters — failing fast with `TARGET_FILE_RECEIVE_DISABLED` / `TARGET_FILE_TOO_LARGE` / `TARGET_INSUFFICIENT_STORAGE` / `TARGET_FILE_TYPE_NOT_ALLOWED`. Transient per-file declines pass `learn_boundary: false` so Cloud Memory Brain never falsely records that a device cannot receive any files.
+- **Android → Mac**: Tap `📎` in the Android composer to pick any file. Leave the message blank and tap **Send File** for pre-flight checked, instant zero-LLM transfer straight to Mac (`~/Downloads/AnyLink/`), or add an instruction so the Mac Agent processes the uploaded `artifact_id`.
+- **Mac → Android (with Large-File Confirmation)**: Ask the Mac Agent (or call `anylink_file_send`) to send a local file to your phone. Before downloading, Android validates its receive toggle, max size, and `StatFs` free space; files above the phone's **large-file confirmation threshold (default 50 MB)** post an urgent notification + in-chat approval card so the owner confirms before downloading, then stream into `Downloads/AnyLink` with an Open/Share File Card.
+- **In-App Phone File Policy Controls**: In Android's **Keep-Alive (`保活`)** sheet, toggle incoming file reception, pick max single-file receive size (`50 MB / 200 MB / 500 MB / 1 GB`), and set the large-file confirmation threshold (`Off / 20 MB / 50 MB / 100 MB`) — synced immediately to the cloud directory.
+- **SDK / Script Nodes**: Use `@anylink-agent/sdk` `client.checkFileTransferTarget(...)`, `client.uploadArtifact(...)`, `client.downloadArtifactToFile(...)`, or `AnyLinkWorker({ filePolicy })`.
 
 #### Where to Adjust File Size Limits & Quotas
 

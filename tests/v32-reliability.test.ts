@@ -384,4 +384,50 @@ test('Protocol v3.1 + v3.2 fault-injection: zombie WS, cursor resume, receipt AC
   await memoryBrain.drain();
   const row = (await db.query('SELECT status,summary FROM memory_episodes WHERE id=$1', [epId])).rows[0];
   assert.equal(row.status, 'consolidated');
+
+  // 11. Protocol v3.2 File Transfer Negotiation (limits in /edge/v1/protocol + per-agent file_policy + server pre-flight)
+  const proto = await phone.protocol();
+  assert.ok(proto.capabilities.includes('file_policy'));
+  assert.equal(proto.limits.artifact_max_bytes, 16 * 1024);
+  assert.equal(proto.limits.artifact_quota_bytes, 64 * 1024);
+
+  // Target explicitly disables file receiving -> server rejects file.deliver with 409 TARGET_FILE_RECEIVE_DISABLED
+  await mac.updateProfile({ file_policy: { accepts_files: false } });
+  const dirDisabled = await phone.directory();
+  const macEntryDisabled = dirDisabled.items.flatMap((d: any) => d.agents).find((a: any) => a.id === macCred.agent_id);
+  assert.equal(macEntryDisabled?.file_policy?.accepts_files, false);
+  const preCheckDisabled = await phone.checkFileTransferTarget({ agent_id: macCred.agent_id }, { sizeBytes: 512 });
+  assert.equal(preCheckDisabled.ok, false);
+  assert.equal(preCheckDisabled.code, 'TARGET_FILE_RECEIVE_DISABLED');
+  await assert.rejects(
+    () => phone.createTask({ target: { agent_id: macCred.agent_id }, capability: 'file.deliver', input: { artifact_id: randomUUID(), filename: 'a.txt', size_bytes: 512 } }),
+    (err: any) => err.status === 409 && err.code === 'TARGET_FILE_RECEIVE_DISABLED',
+  );
+
+  // Target enables files with max_file_bytes=1024, confirm_over_bytes=512, available_bytes=2048
+  await mac.registerCapabilities(
+    [{ name: 'file.deliver', description: 'Receive files' }],
+    { filePolicy: { accepts_files: true, max_file_bytes: 1024, confirm_over_bytes: 512, available_bytes: 2048 } },
+  );
+  const preCheckTooBig = await phone.checkFileTransferTarget({ agent_id: macCred.agent_id }, { sizeBytes: 1500 });
+  assert.equal(preCheckTooBig.ok, false);
+  assert.equal(preCheckTooBig.code, 'TARGET_FILE_TOO_LARGE');
+  await assert.rejects(
+    () => phone.createTask({ target: { agent_id: macCred.agent_id }, capability: 'file.deliver', input: { artifact_id: randomUUID(), filename: 'big.bin', size_bytes: 1500 } }),
+    (err: any) => err.status === 413 && err.code === 'TARGET_FILE_TOO_LARGE',
+  );
+
+  // Storage check: available_bytes < file size -> 507 TARGET_INSUFFICIENT_STORAGE
+  await mac.updateProfile({ file_policy: { accepts_files: true, max_file_bytes: 4096, available_bytes: 256 } });
+  await assert.rejects(
+    () => phone.createTask({ target: { agent_id: macCred.agent_id }, capability: 'file.deliver', input: { artifact_id: randomUUID(), filename: 'mid.bin', size_bytes: 512 } }),
+    (err: any) => err.status === 507 && err.code === 'TARGET_INSUFFICIENT_STORAGE',
+  );
+
+  // Valid file within limits passes pre-flight and creates task cleanly
+  await mac.updateProfile({ file_policy: { accepts_files: true, max_file_bytes: 4096, confirm_over_bytes: 512, available_bytes: 8192 } });
+  const preCheckOk = await phone.checkFileTransferTarget({ agent_id: macCred.agent_id }, { sizeBytes: 768 });
+  assert.equal(preCheckOk.ok, true);
+  assert.equal(preCheckOk.requiresConfirmation, true);
+  assert.equal(preCheckOk.effectiveMaxBytes, 4096);
 });

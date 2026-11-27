@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ApiError, idempotent, type Db } from './db.js';
-import { OWNER_ID } from './config.js';
-import type { EdgeIdentity } from './edge-auth.js';
+import { type Config, OWNER_ID } from './config.js';
+import { type EdgeIdentity, type FilePolicy, filePolicySchema } from './edge-auth.js';
 import type { MemoryBrain } from './memory-brain.js';
 import { deviceSlugSchema } from './store.js';
 import type { WsHub, WsTaskDelegate } from './ws-hub.js';
@@ -11,7 +11,15 @@ import type { WsHub, WsTaskDelegate } from './ws-hub.js';
 export const capabilityName = z.string().regex(/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$/).max(100);
 export const capabilitiesSchema = z.object({
   capabilities: z.array(z.object({ name: capabilityName, description: z.string().max(500) }).strict()).max(32),
+  file_policy: filePolicySchema.optional(),
 }).strict().refine(v => new Set(v.capabilities.map(c => c.name)).size === v.capabilities.length, 'Duplicate capability');
+
+function formatBytesHuman(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
 
 const payloadSchema = z.record(z.string(), z.unknown()).refine(v => Buffer.byteLength(JSON.stringify(v)) <= 65536, 'Payload exceeds 64 KiB');
 const agentTarget = z.object({ agent_id: z.uuid() }).strict();
@@ -357,6 +365,65 @@ export class LinkService implements WsTaskDelegate {
             throw new ApiError(404, 'TARGET_DEVICE_NOT_FOUND', 'Target device does not exist or has been revoked');
           }
           targetDeviceId = deviceId;
+        }
+      }
+
+      // Pre-flight target file_policy validation for file.deliver tasks (prevents blind dispatch when receiver refuses files or size exceeds receiver limit).
+      if (capability === 'file.deliver' && (targetAgentId || targetDeviceId)) {
+        const candidates = (await c.query(
+          targetAgentId
+            ? 'SELECT id,name,capabilities,file_policy FROM agents WHERE id=$1 AND owner_id=$2 AND revoked_at IS NULL'
+            : 'SELECT id,name,capabilities,file_policy FROM agents WHERE device_id=$1 AND owner_id=$2 AND revoked_at IS NULL',
+          [targetAgentId ?? targetDeviceId, OWNER_ID],
+        )).rows;
+        const declared = candidates.filter(a => a.file_policy && typeof a.file_policy === 'object');
+        if (declared.length > 0) {
+          const accepting = candidates.filter(a => {
+            const p = a.file_policy as FilePolicy | null;
+            return p ? p.accepts_files !== false : true;
+          });
+          if (accepting.length === 0) {
+            throw new ApiError(409, 'TARGET_FILE_RECEIVE_DISABLED', 'Target device/agent does not accept incoming files (file_policy.accepts_files=false)');
+          }
+          let fileSize: number | null = typeof input.size_bytes === 'number' && Number.isFinite(input.size_bytes) && input.size_bytes >= 0 ? input.size_bytes : null;
+          let contentType: string | null = typeof input.content_type === 'string' && input.content_type.trim() ? input.content_type.trim().toLowerCase() : null;
+          if ((fileSize === null || contentType === null) && typeof input.artifact_id === 'string' && /^[0-9a-f-]{36}$/i.test(input.artifact_id)) {
+            const art = (await c.query('SELECT size_bytes,content_type FROM edge_artifacts WHERE id=$1 AND owner_id=$2 AND expires_at>now()', [input.artifact_id, OWNER_ID])).rows[0];
+            if (art) {
+              if (fileSize === null) fileSize = Number(art.size_bytes);
+              if (contentType === null) contentType = String(art.content_type || '').toLowerCase();
+            }
+          }
+          const declaredAccepting = accepting.filter(a => a.file_policy && typeof a.file_policy === 'object');
+          if (declaredAccepting.length === accepting.length) {
+            if (fileSize !== null) {
+              const sizeFit = declaredAccepting.some(a => {
+                const cap = (a.file_policy as FilePolicy).max_file_bytes;
+                return cap === undefined || fileSize! <= cap;
+              });
+              if (!sizeFit) {
+                const maxCap = Math.max(...declaredAccepting.map(a => Number((a.file_policy as FilePolicy).max_file_bytes ?? 0)));
+                throw new ApiError(413, 'TARGET_FILE_TOO_LARGE', `File size (${formatBytesHuman(fileSize)}) exceeds target device limit (${formatBytesHuman(maxCap)})`);
+              }
+              const storageFit = declaredAccepting.some(a => {
+                const avail = (a.file_policy as FilePolicy).available_bytes;
+                return avail === undefined || fileSize! <= avail;
+              });
+              if (!storageFit) {
+                const maxAvail = Math.max(...declaredAccepting.map(a => Number((a.file_policy as FilePolicy).available_bytes ?? 0)));
+                throw new ApiError(507, 'TARGET_INSUFFICIENT_STORAGE', `Target device reports insufficient free storage (${formatBytesHuman(maxAvail)} available for ${formatBytesHuman(fileSize)} file)`);
+              }
+            }
+            if (contentType) {
+              const mimeFit = declaredAccepting.some(a => {
+                const prefixes = (a.file_policy as FilePolicy).allowed_mime_prefixes;
+                return !prefixes?.length || prefixes.some(pref => contentType!.startsWith(pref.toLowerCase()));
+              });
+              if (!mimeFit) {
+                throw new ApiError(415, 'TARGET_FILE_TYPE_NOT_ALLOWED', `Target device does not accept file type "${contentType}"`);
+              }
+            }
+          }
         }
       }
 
@@ -724,7 +791,7 @@ export class LinkService implements WsTaskDelegate {
   }
 }
 
-export function registerLink(app: FastifyInstance, db: Db, linkService: LinkService, wsHub?: WsHub) {
+export function registerLink(app: FastifyInstance, db: Db, linkService: LinkService, wsHub?: WsHub, config?: Pick<Config, 'artifactMaxBytes' | 'artifactQuotaBytes' | 'artifactDefaultTtlSeconds'>) {
   const key = (req: FastifyRequest) => z.string().min(1).max(160).parse(req.headers['idempotency-key']);
   const who = (req: FastifyRequest) => req.edgeIdentity!;
 
@@ -734,8 +801,13 @@ export function registerLink(app: FastifyInstance, db: Db, linkService: LinkServ
     transport: { http: '/edge/v1', ws: '/edge/v1/ws', model: '/model/v1', artifacts: '/edge/v1/artifacts' },
     delivery: 'at-most-once-claim-with-fencing-lease',
     requeue: 'idempotent_only',
-    capabilities: ['memory', 'memory_brain', 'model', 'tasks', 'directory', 'ws', 'persona', 'events_cursor', 'receipt_ack', 'fencing_token', 'suspend_reply', 'artifacts', 'sse_resume'],
+    capabilities: ['memory', 'memory_brain', 'model', 'tasks', 'directory', 'ws', 'persona', 'events_cursor', 'receipt_ack', 'fencing_token', 'suspend_reply', 'artifacts', 'file_policy', 'sse_resume'],
     routing: ['agent', 'device', 'device_slug', 'device_name', 'agent_key', 'any'],
+    limits: {
+      artifact_max_bytes: config?.artifactMaxBytes ?? 200 * 1024 * 1024,
+      artifact_quota_bytes: config?.artifactQuotaBytes ?? 2 * 1024 * 1024 * 1024,
+      artifact_default_ttl_seconds: config?.artifactDefaultTtlSeconds ?? 3600,
+    },
   });
 
   app.get('/edge/v1/protocol', async () => protocolInfo());
@@ -743,7 +815,7 @@ export function registerLink(app: FastifyInstance, db: Db, linkService: LinkServ
 
   const directoryHandler = async (req: FastifyRequest) => {
     const me = who(req);
-    const rows = (await db.query(`SELECT d.id AS device_id,d.name AS device_name,d.slug AS device_slug,d.platform,a.id AS agent_id,a.key,a.name AS agent_name,a.kind,a.summary,a.capabilities,a.last_seen_at
+    const rows = (await db.query(`SELECT d.id AS device_id,d.name AS device_name,d.slug AS device_slug,d.platform,a.id AS agent_id,a.key,a.name AS agent_name,a.kind,a.summary,a.capabilities,a.file_policy,a.last_seen_at
       FROM devices d JOIN agents a ON a.device_id=d.id AND a.revoked_at IS NULL
       WHERE d.owner_id=$1 AND d.revoked_at IS NULL ORDER BY d.name,d.id,a.key`, [OWNER_ID])).rows;
     const items = new Map<string, any>();
@@ -758,6 +830,7 @@ export function registerLink(app: FastifyInstance, db: Db, linkService: LinkServ
         kind: row.kind,
         summary: row.summary ?? '',
         capabilities: row.capabilities,
+        file_policy: row.file_policy ?? null,
         last_seen_at: row.last_seen_at,
         ws_online: wsOnline,
         transport: wsOnline ? 'ws' : httpRecent ? 'http' : 'offline',
@@ -791,7 +864,11 @@ export function registerLink(app: FastifyInstance, db: Db, linkService: LinkServ
   app.post('/edge/v1/link/capabilities', async req => {
     const body = capabilitiesSchema.parse(req.body), me = who(req);
     return (await idempotent(db, `${me.agent_id}:link:capabilities`, key(req), body, async c => {
-      await c.query('UPDATE agents SET capabilities=$2,capabilities_updated_at=now() WHERE id=$1', [me.agent_id, JSON.stringify(body.capabilities)]);
+      if (body.file_policy !== undefined) {
+        await c.query('UPDATE agents SET capabilities=$2,file_policy=$3,capabilities_updated_at=now() WHERE id=$1', [me.agent_id, JSON.stringify(body.capabilities), JSON.stringify(body.file_policy)]);
+      } else {
+        await c.query('UPDATE agents SET capabilities=$2,capabilities_updated_at=now() WHERE id=$1', [me.agent_id, JSON.stringify(body.capabilities)]);
+      }
       return { agent_id: me.agent_id, device_id: me.device_id, ...body };
     })).value;
   });

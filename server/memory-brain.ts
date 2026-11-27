@@ -335,7 +335,7 @@ export class MemoryBrain {
     }
 
     // Immediate consolidation for critical device capability boundaries or when debounce is disabled.
-    const isUrgentBoundary = input.kind === 'task_outcome' && ['declined', 'failed'].includes(String(input.metadata?.state ?? ''));
+    const isUrgentBoundary = input.kind === 'task_outcome' && ['declined', 'failed'].includes(String(input.metadata?.state ?? '')) && input.metadata?.learn_boundary !== false;
     const debounceMs = this.config.memoryDebounceMs ?? 15000;
     const batchMax = this.config.memoryBatchMax ?? 6;
     if (isUrgentBoundary || debounceMs <= 0) {
@@ -484,8 +484,8 @@ export class MemoryBrain {
     }
 
     // Deterministic cross-device boundary learning: even without LLM (or if LLM skipped it),
-    // a declined/unsupported task ALWAYS teaches the network what the target device cannot do.
-    const isBoundaryOutcome = ep.kind === 'task_outcome' && (metadata.state === 'declined' || (metadata.state === 'failed' && metadata.learn_boundary !== false));
+    // A declined/unsupported task teaches the network what the target device cannot do, UNLESS explicitly opted out via learn_boundary: false (e.g. one-off file too large or owner rejected a single transfer).
+    const isBoundaryOutcome = ep.kind === 'task_outcome' && (metadata.state === 'declined' || metadata.state === 'failed') && metadata.learn_boundary !== false;
     if (isBoundaryOutcome && !ops.some(o => o.kind === 'boundary')) {
       const targetLabel = String(metadata.target_label ?? metadata.target_device_name ?? 'Target device');
       const reason = String(metadata.error_message ?? 'Cannot handle this request in its environment').slice(0, 400);

@@ -245,6 +245,13 @@ export async function migrate(db: Db) {
         INSERT INTO schema_migrations(version) VALUES(8);
       `);
     }
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=9')).rowCount) {
+      await c.query(`
+        -- Protocol v3.2 file transfer capability & capacity negotiation (file_policy per agent)
+        ALTER TABLE agents ADD COLUMN IF NOT EXISTS file_policy jsonb;
+        INSERT INTO schema_migrations(version) VALUES(9);
+      `);
+    }
     // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
     await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");
   });

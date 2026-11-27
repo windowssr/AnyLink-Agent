@@ -170,13 +170,18 @@ AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protoc
 2. **手机端（Android 原生独立 Agent）** — 详见配置文档：[`examples/android-native/README.md`](examples/android-native/README.md)
    - 手机本地运行完整对话循环与 SQLite 幂等账本，**不依赖 Mac 在线**；v0.9.0 全新「深海玻璃陪伴」视觉设计：全屏无遮挡 Live2D 舞台（内置 WebGL 像素实测验证，根治闪现消失）+ 陪伴/阅读双视图切换 + 磨砂玻璃完整对话流 + v3.2 高危审批/追问交互卡片 + 预设密码一键登录 + 后台前台服务保活、悬浮球与高优先级主动消息弹窗通知 + **📎 一键/指令跨设备双向传文件（200 MiB 流式读写、收件卡片一键打开/分享）** + **手机 Agent 默认 100 步执行上限（可在「保活」设置页切换 `50 / 100 / 200 / 不限`，含循环内自动裁剪旧屏幕与一键「继续执行」）** + 离线 Outbox / SSE 断线续接 + 贴合「蓝色大肥鱼」人设的活泼语音播报。
 
-### 跨设备双向文件互传与上传上限配置
+### 跨设备双向文件互传、能力协商与上传上限配置
 
-边缘设备之间通过云端临时附件中转（`/edge/v1/artifacts`）+ `file.deliver` 跨设备任务实现**全链路 O(1) 内存流式传输**（边传边算 SHA-256 校验，云端独立磁盘卷落盘，到期自动清理）：
+边缘设备之间通过云端临时附件中转（`/edge/v1/artifacts`）+ `file.deliver` 跨设备任务实现**全链路 O(1) 内存流式传输**（边传边算 SHA-256 校验，云端独立磁盘卷落盘，到期自动清理），并内置 **Protocol v3.2 文件接收能力与容量事前协商（`file_policy`）**：
 
-- **手机 → 电脑**：在 Android 对话框左下角点 `📎` 选文件（支持文档、图片、音视频、压缩包等）；**留空附言点「发文件」**直接零延迟传给在线 Mac 并保存到 `~/Downloads/AnyLink/`；也可**附加文字指令**（如"帮我整理这份 PDF 的重点"），手机上传后自动带 `artifact_id` 派发给电脑处理。
-- **电脑 → 手机**：在 Mac 或手机对话中直接让大肥鱼发送本机文件（如"把桌面的周报发到我手机"），Mac 调用 `anylink_file_send` 流式上传并派发 `file.deliver`；手机端自动流式写入 `下载/AnyLink/`，弹出顶部横幅通知并在聊天流生成带「打开文件 / 分享」按钮的文件卡片。
-- **SDK / 服务器脚本节点**：使用 `@anylink-agent/sdk` 的 `client.uploadArtifact(...)` / `client.downloadArtifactToFile(...)` 或直接调用 `POST/GET /edge/v1/artifacts` 流式二进制接口。
+- **事前协商防浪费流量（Pre-flight）**：
+  - `GET /edge/v1/protocol` 动态下发云端当前真实 `limits`（`artifact_max_bytes` / `artifact_quota_bytes` / `artifact_default_ttl_seconds`），各端不再依赖硬编码。
+  - 每个边缘 Agent 通过 `POST /edge/v1/link/capabilities` 或 `PATCH /edge/v1/agent/profile` 声明结构化 `file_policy`（`accepts_files`、`max_file_bytes`、`confirm_over_bytes`、`available_bytes`、`allowed_mime_prefixes`），并在 `GET /edge/v1/directory` 公开。
+  - **上传前预检 + 服务端兜底拦截**：发送方与云端在上传/派发前即核对对方是否允许收文件、单文件接收上限与剩余磁盘空间，不满足时直接返回明确错误提示（`TARGET_FILE_RECEIVE_DISABLED` / `TARGET_FILE_TOO_LARGE` / `TARGET_INSUFFICIENT_STORAGE` / `TARGET_FILE_TYPE_NOT_ALLOWED`），**不白白浪费上传流量**；因单次文件过大、空间不足或主人拒收导致的 `declined` 显式标记 `learn_boundary: false`，绝不污染云端能力边界记忆。
+- **手机 → 电脑**：在 Android 对话框左下角点 `📎` 选文件（支持文档、图片、音视频、压缩包等）；**留空附言点「发文件」**直接事前校验并零延迟传给在线 Mac 保存到 `~/Downloads/AnyLink/`；也可**附加文字指令**（如"帮我整理这份 PDF 的重点"），手机上传后自动带 `artifact_id` 派发给电脑处理。
+- **电脑 → 手机（含大文件确认弹窗）**：在 Mac 或手机对话中直接让大肥鱼发送本机文件（如"把桌面的周报发到我手机"），Mac 预检通过后调用 `anylink_file_send` 流式上传并派发 `file.deliver`；手机端下载前先校验本机开关、上限与剩余存储空间——若文件超过手机设置的**大文件确认阈值（默认 50 MB）**，会先弹出高优先级横幅通知与聊天确认卡片，等主人点头后再开始流式下载（防止流量环境下偷跑大文件）；完成后写入 `下载/AnyLink/` 并生成带「打开文件 / 分享」按钮的文件卡片。
+- **手机端可视化策略开关**：在手机右上角 **「保活」→「跨设备接收文件策略」** 中可一键开关是否允许接收文件、切换单文件最大接收上限（`50 MB / 200 MB / 500 MB / 1 GB`）与大文件弹窗确认阈值（`不弹窗 / 20 MB / 50 MB / 100 MB`），修改后实时同步到云端目录。
+- **SDK / 服务器脚本节点**：使用 `@anylink-agent/sdk` 的 `client.checkFileTransferTarget(...)`、`client.uploadArtifact(...)` / `client.downloadArtifactToFile(...)` 或 `AnyLinkWorker({ filePolicy })`。
 
 #### 上传上限与配额在哪里修改？
 

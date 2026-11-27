@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { z } from 'zod';
 import { capabilitiesSchema, TASK_STATES, taskCreateSchema, taskHeartbeatSchema, taskProgressSchema, taskReplySchema, taskResultSchema, taskSchema, taskSuspendSchema } from '../server/link.ts';
-import { agentProfileSchema, connectSchema } from '../server/edge-auth.ts';
+import { agentProfileSchema, connectSchema, filePolicySchema } from '../server/edge-auth.ts';
 import { memorySchema, memoryPatchSchema, memorySearchSchema, deviceSchema, devicePatchSchema } from '../server/store.ts';
 import { memoryAssembleSchema, memoryIngestSchema } from '../server/memory-brain.ts';
 import { modelInputSchema } from '../server/model-proxy.ts';
@@ -13,6 +13,7 @@ const installIdSchema = z.object({ install_id: z.string().regex(/^[A-Za-z0-9._:-
 const schemas = {
   Connect: connectSchema,
   AgentProfile: agentProfileSchema,
+  FilePolicy: filePolicySchema,
   InstallId: installIdSchema,
   Capabilities: capabilitiesSchema,
   TaskInput: taskCreateSchema,
