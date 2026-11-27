@@ -66,6 +66,10 @@ export function loadConfig() {
   const embeddingModel = process.env.ANYLINK_EMBEDDING_MODEL?.trim() || '';
   const embeddingBaseUrl = process.env.ANYLINK_EMBEDDING_BASE_URL?.trim() || deepseekBaseUrl;
   const embeddingApiKey = secret('ANYLINK_EMBEDDING_API_KEY') ?? providerKey;
+  const rawAsrKey = secret('ANYLINK_ASR_API_KEY') ?? '';
+  const asrApiKey = /^(REPLACE_|CONFIGURE_)/.test(rawAsrKey) ? '' : rawAsrKey;
+  const asrBaseUrl = process.env.ANYLINK_ASR_BASE_URL?.trim() || (asrApiKey ? 'https://api.siliconflow.cn/v1' : '');
+  const asrModel = process.env.ANYLINK_ASR_MODEL?.trim() || 'FunAudioLLM/SenseVoiceSmall';
   const models = parseModels(deepseekBaseUrl, providerKey, defaultModel);
 
   return z.object({
@@ -95,6 +99,9 @@ export function loadConfig() {
     ttsVoice: z.string().default(''),
     ttsRate: z.string().default(''),
     ttsPitch: z.string().default(''),
+    asrBaseUrl: z.string().default(''),
+    asrApiKey: z.string().default(''),
+    asrModel: z.string().max(120).default('FunAudioLLM/SenseVoiceSmall'),
     leaseReaperIntervalMs: z.number().int().min(200).max(300000).default(15000),
     memoryDebounceMs: z.number().int().min(0).max(300000).default(15000),
     memoryBatchMax: z.number().int().min(1).max(30).default(6),
@@ -135,6 +142,9 @@ export function loadConfig() {
     ttsVoice: process.env.ANYLINK_TTS_VOICE ?? '',
     ttsRate: process.env.ANYLINK_TTS_RATE ?? '',
     ttsPitch: process.env.ANYLINK_TTS_PITCH ?? '',
+    asrBaseUrl,
+    asrApiKey,
+    asrModel,
     leaseReaperIntervalMs: process.env.ANYLINK_LEASE_REAPER_MS ? Number(process.env.ANYLINK_LEASE_REAPER_MS) : 15000,
     memoryDebounceMs: process.env.ANYLINK_MEMORY_DEBOUNCE_MS !== undefined ? Number(process.env.ANYLINK_MEMORY_DEBOUNCE_MS) : 15000,
     memoryBatchMax: process.env.ANYLINK_MEMORY_BATCH_MAX ? Number(process.env.ANYLINK_MEMORY_BATCH_MAX) : 6,

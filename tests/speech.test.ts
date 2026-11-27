@@ -84,3 +84,25 @@ test('persona speech rewrites mechanical short receipts and strips stage parens'
   assert.ok(capturedPrompt.includes('大肥鱼') && capturedPrompt.includes('你是蓝色大肥鱼鲸鱼娘'));
   await app.close();
 });
+
+test('audio status and transcription route support OpenAI-compatible ASR and report 503 when unconfigured',async()=>{
+  const unconfigured=await appWith({});
+  const st0=await unconfigured.inject({method:'GET',url:'/model/v1/audio/status'});
+  assert.equal(st0.statusCode,200);assert.equal(st0.json().asr_enabled,false);
+  const res0=await unconfigured.inject({method:'POST',url:'/model/v1/audio/transcriptions',payload:{audio_base64:Buffer.alloc(64,1).toString('base64')}});
+  assert.equal(res0.statusCode,503);assert.equal(res0.json().error.code,'ASR_NOT_CONFIGURED');
+  await unconfigured.close();
+
+  const app=Fastify();
+  let capturedBytes=0;
+  registerSpeech(app,{deepseekApiKey:'',deepseekBaseUrl:'https://unused',asrModel:'SenseVoiceSmall'} as any,null,{
+    transcribe:async(audio,opts)=>{ capturedBytes=audio.length; return {text:`识别结果(${opts.language})`,model:'SenseVoiceSmall'}; },
+  });
+  const st=await app.inject({method:'GET',url:'/model/v1/audio/status'});
+  assert.equal(st.json().asr_enabled,true);assert.equal(st.json().asr_model,'SenseVoiceSmall');
+  const res=await app.inject({method:'POST',url:'/model/v1/audio/transcriptions',payload:{audio_base64:Buffer.alloc(128,7).toString('base64'),format:'wav',language:'zh'}});
+  assert.equal(res.statusCode,200);
+  assert.equal(capturedBytes,128);
+  assert.equal(res.json().text,'识别结果(zh)');
+  await app.close();
+});

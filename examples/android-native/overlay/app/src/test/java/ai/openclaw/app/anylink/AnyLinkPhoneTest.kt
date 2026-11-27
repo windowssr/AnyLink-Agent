@@ -226,4 +226,52 @@ class AnyLinkPhoneTest {
       assertEquals("ACCESSIBILITY_DISABLED", (failed?.get("error") as? JsonObject)?.text("code"))
     }
   }
+
+  @Test fun `voice sentence chunker, WAV encoder, and adaptive VAD work cleanly for real-time voice calls`() {
+    val chunker = VoiceSentenceChunker()
+    chunker.append("哼，主人好呀！")
+    assertEquals("哼，主人好呀！", chunker.take())
+    chunker.append("```kotlin\nprintln(1)\n```已经帮你搞定啦。")
+    assertEquals("已经帮你搞定啦。", chunker.take())
+    chunker.append("尾巴还在摇哦")
+    assertNull(chunker.take(force = false))
+    assertEquals("尾巴还在摇哦", chunker.take(force = true))
+
+    val pcm = ByteArray(3200) { (it % 127).toByte() }
+    val wav = WavEncoder.encodePcm16Mono(pcm, 16000)
+    assertEquals(44 + pcm.size, wav.size)
+    assertEquals("RIFF", String(wav, 0, 4, Charsets.US_ASCII))
+    assertEquals("WAVE", String(wav, 8, 4, Charsets.US_ASCII))
+
+    val vad = VoiceVadDetector(speechHoldMs = 100L, silenceEndMs = 800L)
+    vad.reset(0L)
+    assertEquals(VoiceVadDetector.Decision.CONTINUE, vad.feed(0.005f, 50L))
+    assertEquals(VoiceVadDetector.Decision.CONTINUE, vad.feed(0.12f, 100L))
+    assertEquals(VoiceVadDetector.Decision.SPEECH_STARTED, vad.feed(0.15f, 220L))
+    assertTrue(vad.hasSpeech)
+    assertEquals(VoiceVadDetector.Decision.CONTINUE, vad.feed(0.004f, 600L))
+    assertEquals(VoiceVadDetector.Decision.SPEECH_ENDED, vad.feed(0.004f, 1100L))
+  }
+
+  @Test fun `sendVoiceCallTurn streams spoken sentences immediately on SSE punctuation`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
+      server.enqueue(response("""{"protocol":"anylink","version":"3.2"}"""))
+      server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
+      val multiChunkSse =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"主人好呀！\"},\"finish_reason\":null}]}\n\n" +
+          "data: {\"choices\":[{\"delta\":{\"content\":\"我随时听你吩咐哦。\"},\"finish_reason\":null}]}\n\n" +
+          "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+          "data: [DONE]\n\n"
+      server.enqueue(stream(multiChunkSse))
+      server.enqueue(response("""{"episode_id":"ep-call","status":"pending"}"""))
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val agent = DeviceAgent(conn, CloudClient(conn), MemoryLedger(), { JsonObject(emptyMap()) })
+      val sentences = mutableListOf<String>()
+      val reply = agent.sendVoiceCallTurn("你在吗", onSentence = { sentences += it })
+      assertEquals("主人好呀！我随时听你吩咐哦。", reply)
+      assertEquals(listOf("主人好呀！", "我随时听你吩咐哦。"), sentences)
+    }
+  }
 }

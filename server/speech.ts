@@ -134,9 +134,77 @@ export const speechSchema = z.object({
   system_prompt: z.string().max(2000).optional(),
 }).strict();
 
-export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize } = {}) {
+export const transcribeSchema = z.object({
+  audio_base64: z.string().min(8).max(12 * 1024 * 1024),
+  format: z.enum(['wav', 'm4a', 'mp3', 'ogg', 'webm']).default('wav'),
+  language: z.string().min(2).max(16).default('zh'),
+  prompt: z.string().max(400).optional(),
+}).strict();
+
+const MAX_ASR_AUDIO_BYTES = 8 * 1024 * 1024;
+const AUDIO_MIME: Record<string, string> = {
+  wav: 'audio/wav',
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  ogg: 'audio/ogg',
+  webm: 'audio/webm',
+};
+
+export type Transcribe = (audio: Buffer, opts: { format: string; language: string; prompt?: string }) => Promise<{ text: string; model: string }>;
+
+export function createTranscriber(config: Pick<Config, 'asrBaseUrl' | 'asrApiKey' | 'asrModel'>, fetchImpl: typeof fetch = fetch): Transcribe | null {
+  const baseUrl = config.asrBaseUrl?.trim();
+  const apiKey = config.asrApiKey?.trim();
+  if (!baseUrl && !apiKey) return null;
+  const endpoint = `${(baseUrl || 'https://api.siliconflow.cn/v1').replace(/\/$/, '')}/audio/transcriptions`;
+  const model = config.asrModel?.trim() || 'FunAudioLLM/SenseVoiceSmall';
+  return async (audio, opts) => {
+    const form = new FormData();
+    const mime = AUDIO_MIME[opts.format] ?? 'audio/wav';
+    form.append('file', new Blob([new Uint8Array(audio)], { type: mime }), `voice.${opts.format}`);
+    form.append('model', model);
+    if (opts.language) form.append('language', opts.language);
+    if (opts.prompt) form.append('prompt', opts.prompt);
+    const headers: Record<string, string> = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const response = await fetchImpl(endpoint, {
+      method: 'POST',
+      headers,
+      body: form,
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) throw new Error(`ASR_PROVIDER_HTTP_${response.status}`);
+    const body = await response.json() as any;
+    const text = typeof body?.text === 'string' ? body.text.trim() : '';
+    return { text, model };
+  };
+}
+
+export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize; transcribe?: Transcribe | null } = {}) {
   const summarize = deps.summarize ?? createSummarizer(config);
   const synthesize = deps.synthesize ?? createSynthesizer({ config });
+  const transcribe = deps.transcribe !== undefined ? deps.transcribe : createTranscriber(config);
+  app.get('/model/v1/audio/status', async () => ({
+    asr_enabled: Boolean(transcribe),
+    asr_model: transcribe ? (config.asrModel || 'FunAudioLLM/SenseVoiceSmall') : null,
+    tts_enabled: true,
+  }));
+  app.post('/model/v1/audio/transcriptions', { bodyLimit: 14 * 1024 * 1024 }, async (req) => {
+    if (!transcribe) {
+      throw new ApiError(503, 'ASR_NOT_CONFIGURED', '未配置云端语音识别（ANYLINK_ASR_API_KEY / ANYLINK_ASR_BASE_URL），手机端将优先使用系统语音识别');
+    }
+    const input = transcribeSchema.parse(req.body);
+    const audio = Buffer.from(input.audio_base64, 'base64');
+    if (audio.length < 32) throw new ApiError(400, 'AUDIO_TOO_SHORT', '录音时长过短，请再试一次');
+    if (audio.length > MAX_ASR_AUDIO_BYTES) throw new ApiError(413, 'AUDIO_TOO_LARGE', '单段语音超过 8 MiB 上限');
+    const started = Date.now();
+    try {
+      const { text, model } = await transcribe(audio, { format: input.format, language: input.language, prompt: input.prompt });
+      return { text, language: input.language, model, duration_ms: Date.now() - started };
+    } catch {
+      throw new ApiError(502, 'ASR_UNAVAILABLE', '云端语音识别暂时不可用，请稍后重试');
+    }
+  });
   app.post('/model/v1/speech', { bodyLimit: 64 * 1024 }, async (req, reply) => {
     const input = speechSchema.parse(req.body);
     const cleaned = sanitizeSpeech(input.text);

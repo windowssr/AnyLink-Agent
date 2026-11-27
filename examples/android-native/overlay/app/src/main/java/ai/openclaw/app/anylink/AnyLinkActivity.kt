@@ -315,8 +315,13 @@ private suspend fun executeWorkerTask(
 /** Product launcher deliberately never creates NodeRuntime or a Gateway connection. */
 class AnyLinkActivity : ComponentActivity() {
   private lateinit var runtime: AnyLinkRuntime
+  private var pendingVoiceAction: String = "listen"
   private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
-    if (allowed) runtime.startListening() else runtime.voiceNotice.value = "需要麦克风权限，也可以直接打字和我聊哦。"
+    if (allowed) {
+      if (pendingVoiceAction == "call") runtime.startVoiceCall() else runtime.startListening()
+    } else {
+      runtime.voiceNotice.value = "需要麦克风权限，也可以直接打字和我聊哦。"
+    }
   }
   private val requestNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
   private val pickDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -343,6 +348,15 @@ class AnyLinkActivity : ComponentActivity() {
         val pendingFile by runtime.pendingFile.collectAsState()
         val uploadingFile by runtime.uploadingFile.collectAsState()
         val avatarReloadTick by runtime.avatarReloadTick.collectAsState()
+        val voiceLevel by runtime.voiceLevel.collectAsState()
+        val partialTranscript by runtime.partialTranscript.collectAsState()
+        val callActive by runtime.callActive.collectAsState()
+        val callState by runtime.callState.collectAsState()
+        val callMuted by runtime.callMuted.collectAsState()
+        val callSpeakerOn by runtime.callSpeakerOn.collectAsState()
+        val callDurationSec by runtime.callDurationSec.collectAsState()
+        val callUserCaption by runtime.callUserCaption.collectAsState()
+        val callAssistantCaption by runtime.callAssistantCaption.collectAsState()
         var configuration by remember { mutableStateOf(false) }
         var floating by remember { mutableStateOf(false) }
         permissionTick.intValue
@@ -367,7 +381,14 @@ class AnyLinkActivity : ComponentActivity() {
           },
           send = { text -> runtime.interruptAll(); runtime.sendWithOptionalFile(text) },
           stop = { runtime.interruptAll() },
-          listen = { runtime.interruptAll(); if (runtime.micGranted()) runtime.startListening() else requestMic.launch(Manifest.permission.RECORD_AUDIO) },
+          listen = {
+            if (listening) {
+              runtime.finishListeningNow()
+            } else {
+              pendingVoiceAction = "listen"
+              if (runtime.micGranted()) runtime.startListening() else requestMic.launch(Manifest.permission.RECORD_AUDIO)
+            }
+          },
           newConversation = { agent?.newConversation() },
           openFloating = { floating = true },
           replyTask = { taskId, approved, choice, msg -> runtime.replyToTask(taskId, approved, choice, msg) },
@@ -377,6 +398,25 @@ class AnyLinkActivity : ComponentActivity() {
           clearPendingFile = { runtime.clearPendingFile() },
           avatarReloadTrigger = avatarReloadTick,
           onAvatarStatus = { runtime.updateAvatarStatus(it) },
+          voiceLevel = voiceLevel,
+          partialTranscript = partialTranscript,
+          finishListening = { runtime.finishListeningNow() },
+          cancelListening = { runtime.cancelListening() },
+          callActive = callActive,
+          callState = callState,
+          callMuted = callMuted,
+          callSpeakerOn = callSpeakerOn,
+          callDurationSec = callDurationSec,
+          callUserCaption = callUserCaption,
+          callAssistantCaption = callAssistantCaption,
+          startCall = {
+            pendingVoiceAction = "call"
+            if (runtime.micGranted()) runtime.startVoiceCall() else requestMic.launch(Manifest.permission.RECORD_AUDIO)
+          },
+          endCall = { runtime.endVoiceCall() },
+          toggleCallMute = { runtime.toggleCallMute() },
+          toggleCallSpeaker = { runtime.toggleCallSpeaker() },
+          bargeInCall = { runtime.bargeInCall() },
         )
         if (floating) FloatingSettingsSheet(runtime, onDismiss = { floating = false; permissionTick.intValue++ })
       }
@@ -413,6 +453,8 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
   val confirmOverBytes by runtime.confirmFileOverBytes.collectAsState()
   val allowRemoteControl by runtime.allowRemoteControl.collectAsState()
   val avatarStatus by runtime.avatarStatus.collectAsState()
+  val voiceEngineMode by runtime.voiceEngineMode.collectAsState()
+  val cloudAsrEnabled by runtime.cloudAsrEnabled.collectAsState()
   val freeBytes = remember { AnyLinkFiles.availableStorageBytes(context) }
   ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color(0xFFF6FBFE), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -456,6 +498,28 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         AssistChip(onClick = { runtime.reloadAvatar() }, label = { Text("重新加载大肥鱼") })
       }
+      HorizontalDivider(color = Color(0xFFDCEEF8))
+      Text("语音输入与实时通话识别引擎", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
+      LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val voiceModes = listOf(
+          VoiceRecognizerController.MODE_AUTO to "自动（推荐）",
+          VoiceRecognizerController.MODE_CLOUD to "云端识别（国产机推荐）",
+          VoiceRecognizerController.MODE_SYSTEM to "系统识别",
+        )
+        items(voiceModes) { (mode, label) ->
+          FilterChip(
+            selected = voiceEngineMode == mode,
+            onClick = { runtime.setVoiceEngineMode(mode) },
+            label = { Text(label, fontSize = 12.sp) },
+          )
+        }
+      }
+      Text(
+        if (cloudAsrEnabled) "云端语音识别已就绪（支持全机型语音输入与实时通话）。"
+        else "云端暂未配置 ANYLINK_ASR_API_KEY，当前优先使用手机系统语音识别；若国产机无系统识别，可在服务器配置任意 OpenAI 兼容 ASR（如免费 SenseVoiceSmall）。",
+        style = MaterialTheme.typography.bodySmall,
+        color = SoftMist,
+      )
       HorizontalDivider(color = Color(0xFFDCEEF8))
       Text("手机 Agent 单轮执行步数上限", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
       LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -528,6 +592,22 @@ internal fun CloudCompanionScreen(
   clearPendingFile: () -> Unit = {},
   avatarReloadTrigger: Int = 0,
   onAvatarStatus: (String) -> Unit = {},
+  voiceLevel: Float = 0f,
+  partialTranscript: String = "",
+  finishListening: () -> Unit = {},
+  cancelListening: () -> Unit = {},
+  callActive: Boolean = false,
+  callState: String = "idle",
+  callMuted: Boolean = false,
+  callSpeakerOn: Boolean = true,
+  callDurationSec: Int = 0,
+  callUserCaption: String = "",
+  callAssistantCaption: String = "",
+  startCall: () -> Unit = {},
+  endCall: () -> Unit = {},
+  toggleCallMute: () -> Unit = {},
+  toggleCallSpeaker: () -> Unit = {},
+  bargeInCall: () -> Unit = {},
 ) {
   val context = LocalContext.current
   var showLicenses by remember { mutableStateOf(false) }
@@ -606,16 +686,17 @@ internal fun CloudCompanionScreen(
       emotion = state.emotion,
       gesture = state.gesture,
       sequence = state.sequence,
+      audioLevel = voiceLevel,
       safeTopPx = statusTopPx + with(density) { 56.dp.roundToPx() },
       safeBottomPx = 0,
-      mini = compactStage,
+      mini = compactStage && !callActive,
       reloadTrigger = avatarReloadTrigger,
       onStatusChange = onAvatarStatus,
       modifier = Modifier.fillMaxSize(),
     )
 
-    // Layer 2: Foreground Floating Glass UI
-    Column(
+    // Layer 2: Foreground Floating Glass UI (hidden while full-screen real-time call is active)
+    if (!callActive) Column(
       Modifier
         .fillMaxSize()
         .statusBarsPadding()
@@ -639,7 +720,12 @@ internal fun CloudCompanionScreen(
             letterSpacing = 1.5.sp,
             color = DeepInk,
           )
-          Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+          Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+            GlassChipButton(
+              text = "📞 通话",
+              enabled = server != null && !callActive,
+              onClick = startCall,
+            )
             GlassChipButton(
               text = if (tasks.isEmpty()) "任务" else "任务(${tasks.size})",
               onClick = { records = true },
@@ -651,7 +737,7 @@ internal fun CloudCompanionScreen(
             )
             GlassChipButton(
               text = "连接",
-              enabled = !state.busy,
+              enabled = !state.busy && !callActive,
               onClick = openConfiguration,
             )
           }
@@ -877,6 +963,41 @@ internal fun CloudCompanionScreen(
             modifier = Modifier.fillMaxWidth(),
           ) {
             Column(Modifier.fillMaxWidth()) {
+              if (listening && !callActive) {
+                Row(
+                  Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFE3F5FF))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  VoiceWaveformBars(level = voiceLevel, active = true)
+                  Text(
+                    partialTranscript.ifBlank { "正在听你说…" },
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = DeepInk,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                  )
+                  Surface(
+                    onClick = finishListening,
+                    color = OceanPrimary,
+                    shape = RoundedCornerShape(999.dp),
+                  ) {
+                    Text("说完了", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+                  }
+                  Text(
+                    "取消",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SeaSlate,
+                    modifier = Modifier.clickable { cancelListening() }.padding(horizontal = 4.dp, vertical = 4.dp),
+                  )
+                }
+              }
               if (pendingFile != null) {
                 Row(
                   Modifier
@@ -915,10 +1036,22 @@ internal fun CloudCompanionScreen(
                   color = Color(0xFFEAF6FD),
                   shape = CircleShape,
                   border = BorderStroke(1.dp, Color(0x99B6DDF2)),
-                  modifier = Modifier.size(40.dp),
+                  modifier = Modifier.size(38.dp),
                 ) {
                   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("📎", fontSize = 16.sp)
+                    Text("📎", fontSize = 15.sp)
+                  }
+                }
+                Surface(
+                  onClick = listen,
+                  enabled = server != null && !uploadingFile,
+                  color = if (listening) CoralStop else Color(0xFFEAF6FD),
+                  shape = CircleShape,
+                  border = BorderStroke(1.dp, if (listening) CoralStop else Color(0x99B6DDF2)),
+                  modifier = Modifier.size(38.dp),
+                ) {
+                  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(if (listening) "⏹" else "🎤", fontSize = 15.sp, color = if (listening) Color.White else OceanPrimary)
                   }
                 }
                 Box(
@@ -1004,6 +1137,23 @@ internal fun CloudCompanionScreen(
         }
       }
     }
+
+    // Layer 3: Full-screen Live2D Real-Time Voice Call HUD (leaves upper character stage completely unobstructed!)
+    if (callActive) {
+      VoiceCallOverlay(
+        callState = callState,
+        muted = callMuted,
+        speakerOn = callSpeakerOn,
+        durationSec = callDurationSec,
+        voiceLevel = voiceLevel,
+        userCaption = callUserCaption,
+        assistantCaption = callAssistantCaption,
+        onToggleMute = toggleCallMute,
+        onToggleSpeaker = toggleCallSpeaker,
+        onBargeIn = bargeInCall,
+        onEndCall = endCall,
+      )
+    }
   }
 
   // Connection Sheet (Quick Password Login + Optional Advanced)
@@ -1084,6 +1234,182 @@ internal fun CloudCompanionScreen(
         HorizontalDivider()
       }
     }
+  }
+}
+
+@Composable
+private fun VoiceWaveformBars(level: Float, active: Boolean) {
+  val clamped = if (active) level.coerceIn(0.12f, 1f) else 0.12f
+  val multipliers = listOf(0.55f, 0.9f, 1.0f, 0.8f, 0.5f)
+  Row(horizontalArrangement = Arrangement.spacedBy(2.5.dp), verticalAlignment = Alignment.CenterVertically) {
+    for (m in multipliers) {
+      val h = (6f + 16f * clamped * m).dp
+      Box(
+        Modifier
+          .width(3.dp)
+          .height(h)
+          .clip(RoundedCornerShape(99.dp))
+          .background(if (active) OceanBright else Color(0xFF9BB8C9)),
+      )
+    }
+  }
+}
+
+@Composable
+private fun VoiceCallOverlay(
+  callState: String,
+  muted: Boolean,
+  speakerOn: Boolean,
+  durationSec: Int,
+  voiceLevel: Float,
+  userCaption: String,
+  assistantCaption: String,
+  onToggleMute: () -> Unit,
+  onToggleSpeaker: () -> Unit,
+  onBargeIn: () -> Unit,
+  onEndCall: () -> Unit,
+) {
+  val mm = (durationSec / 60).toString().padStart(2, '0')
+  val ss = (durationSec % 60).toString().padStart(2, '0')
+  val stateText = when {
+    muted -> "已静音 · 点击开麦继续"
+    callState == "listening" -> "正在听你说…（说完自动回复）"
+    callState == "transcribing" -> "正在识别你说的话…"
+    callState == "thinking" -> "大肥鱼正在想…"
+    callState == "speaking" -> "大肥鱼说话中 · 点「打断」可随时插话"
+    else -> "实时通话已连接"
+  }
+  val dotColor = when {
+    muted -> Color(0xFF94A3B8)
+    callState == "listening" || callState == "speaking" -> MintLive
+    else -> OceanBright
+  }
+  Column(
+    Modifier
+      .fillMaxSize()
+      .statusBarsPadding()
+      .navigationBarsPadding()
+      .padding(horizontal = 16.dp, vertical = 12.dp),
+    verticalArrangement = Arrangement.SpaceBetween,
+  ) {
+    // Top translucent call status pill (leaves Live2D 大肥鱼 unobstructed below it!)
+    Surface(
+      color = Color(0xDC0B2A40),
+      shape = RoundedCornerShape(999.dp),
+      border = BorderStroke(1.dp, Color(0x668ED8F8)),
+      modifier = Modifier.align(Alignment.CenterHorizontally),
+    ) {
+      Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
+        Text("大肥鱼 · 实时通话", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Text("$mm:$ss", fontSize = 12.5.sp, fontFamily = FontFamily.Monospace, color = Color(0xFFB5E6FF))
+      }
+    }
+
+    // Bottom floating call caption + controls card
+    Surface(
+      color = Color(0xEBF4FAFE),
+      shape = RoundedCornerShape(28.dp),
+      border = BorderStroke(1.dp, Color(0xF0FFFFFF)),
+      shadowElevation = 14.dp,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Column(
+        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          VoiceWaveformBars(level = if (callState == "speaking") 0.65f else voiceLevel, active = !muted && (callState == "listening" || callState == "speaking"))
+          Text(stateText, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = OceanPrimary)
+        }
+        if (userCaption.isNotBlank()) {
+          Surface(color = Color(0xFFE3F2FB), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+            Text(
+              "你：$userCaption",
+              fontSize = 13.sp,
+              color = DeepInk,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+          }
+        }
+        if (assistantCaption.isNotBlank()) {
+          Text(
+            assistantCaption,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
+            color = DeepInk,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+          )
+        }
+        Row(
+          Modifier.fillMaxWidth().padding(top = 4.dp),
+          horizontalArrangement = Arrangement.SpaceEvenly,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          CallActionCircle(
+            icon = if (muted) "🔇" else "🎤",
+            label = if (muted) "已静音" else "静音",
+            bg = if (muted) Color(0xFF475569) else Color(0xFFE5F4FD),
+            fg = if (muted) Color.White else DeepInk,
+            onClick = onToggleMute,
+          )
+          CallActionCircle(
+            icon = "✋",
+            label = "打断",
+            bg = if (callState == "speaking" || callState == "thinking") OceanBright else Color(0xFFE5F4FD),
+            fg = if (callState == "speaking" || callState == "thinking") Color.White else DeepInk,
+            onClick = onBargeIn,
+          )
+          CallActionCircle(
+            icon = if (speakerOn) "🔊" else "🔈",
+            label = if (speakerOn) "扬声器" else "听筒",
+            bg = if (speakerOn) Color(0xFFD6EEF9) else Color(0xFFE5F4FD),
+            fg = DeepInk,
+            onClick = onToggleSpeaker,
+          )
+          CallActionCircle(
+            icon = "📵",
+            label = "挂断",
+            bg = CoralStop,
+            fg = Color.White,
+            onClick = onEndCall,
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun CallActionCircle(icon: String, label: String, bg: Color, fg: Color, onClick: () -> Unit) {
+  Column(
+    modifier = Modifier
+      .clip(RoundedCornerShape(16.dp))
+      .clickable(onClick = onClick)
+      .padding(horizontal = 6.dp, vertical = 4.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Surface(
+      color = bg,
+      shape = CircleShape,
+      border = BorderStroke(1.dp, Color(0x330B2A40)),
+      modifier = Modifier.size(54.dp),
+    ) {
+      Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(icon, fontSize = 20.sp, color = fg)
+      }
+    }
+    Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = SeaSlate)
   }
 }
 

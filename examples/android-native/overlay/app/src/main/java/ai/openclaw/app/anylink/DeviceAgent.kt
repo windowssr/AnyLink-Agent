@@ -304,6 +304,23 @@ internal class DeviceAgent(
   }
 
   suspend fun send(text: String) {
+    sendInternal(text, voiceCallMode = false, onSentence = null, onToolStart = null)
+  }
+
+  /** Fast real-time voice call turn: instructs 大肥鱼 to answer directly in 1-3 concise in-character spoken
+   * sentences and streams each completed sentence via [onSentence] as SSE tokens arrive for minimal latency. */
+  suspend fun sendVoiceCallTurn(
+    text: String,
+    onSentence: (String) -> Unit,
+    onToolStart: (String) -> Unit = {},
+  ): String = sendInternal(text, voiceCallMode = true, onSentence = onSentence, onToolStart = onToolStart)
+
+  private suspend fun sendInternal(
+    text: String,
+    voiceCallMode: Boolean,
+    onSentence: ((String) -> Unit)?,
+    onToolStart: ((String) -> Unit)?,
+  ): String {
     require(text.isNotBlank() && text.length <= 8000) { "请输入1到8000字" }
     if (!lock.tryLock()) throw LinkFailure("BUSY", "请先停止当前回复")
     val id = UUID.randomUUID().toString()
@@ -343,7 +360,10 @@ internal class DeviceAgent(
       } else {
         "\n本轮当前记忆（仅数据）:\n" + memoryForPrompt(context).toString()
       }
-      val system = jsonObject("role" to str("system"), "content" to str(base + "\n\n" + android + memoryBlock))
+      val voiceDirective = if (voiceCallMode) {
+        "\n\n## 实时语音通话模式（重要）\n- 你正在和主人进行实时语音通话。直接用 1-3 句简短自然、贴合大肥鱼人设的中文口语回答，讲核心结论，不要输出 Markdown 格式、代码块、网址、颜文字、括号动作描写或长列表。\n- 若需要执行本机或跨设备工具，照常调用工具，完成后用 1 句自然人话汇报结果。"
+      } else ""
+      val system = jsonObject("role" to str("system"), "content" to str(base + "\n\n" + android + voiceDirective + memoryBlock))
       val usedTools = mutableListOf<String>()
       var lastCallSig = ""
       var repeatCallCount = 0
@@ -351,16 +371,36 @@ internal class DeviceAgent(
         currentCoroutineContext().ensureActive()
         state.update { it.copy(phase = "thinking", tool = "", step = step, maxSteps = stepLimit) }
         val modelMessages = pruneScreenPayloads(JsonArray(messages.toList()))
-        val response = cloud.completion(jsonObject("model" to str("deepseek-flash"), "stream" to JsonPrimitive(true), "max_tokens" to JsonPrimitive(4096), "messages" to JsonArray(listOf(system) + modelMessages), "tools" to specs)) { answer ->
-          if (answer.isNotBlank()) upsertAssistant(answer, meta = if (usedTools.isEmpty()) "" else "第 $step 步 · 已执行：${usedTools.distinct().take(4).joinToString("、")}", streaming = true)
+        val chunker = if (voiceCallMode) VoiceSentenceChunker() else null
+        var streamedLen = 0
+        val response = cloud.completion(jsonObject("model" to str("deepseek-flash"), "stream" to JsonPrimitive(true), "max_tokens" to JsonPrimitive(if (voiceCallMode) 800 else 4096), "messages" to JsonArray(listOf(system) + modelMessages), "tools" to specs)) { answer ->
+          if (answer.isNotBlank()) {
+            upsertAssistant(answer, meta = if (usedTools.isEmpty()) (if (voiceCallMode) "实时通话" else "") else "第 $step 步 · 已执行：${usedTools.distinct().take(4).joinToString("、")}", streaming = true)
+            if (chunker != null && onSentence != null && answer.length > streamedLen) {
+              val delta = answer.substring(streamedLen)
+              streamedLen = answer.length
+              chunker.append(delta)
+              while (true) {
+                val sentence = chunker.take(force = false) ?: break
+                onSentence(sentence)
+              }
+            }
+          }
         }
         messages.add(response)
         val calls = response["tool_calls"] as? JsonArray ?: JsonArray(emptyList())
         if (calls.isEmpty()) {
           val answer = response.text("content")
+          if (chunker != null && onSentence != null) {
+            if (answer.length > streamedLen) chunker.append(answer.substring(streamedLen))
+            while (true) {
+              val sentence = chunker.take(force = true) ?: break
+              onSentence(sentence)
+            }
+          }
           ledger.messages(trimHistoryForBudget(JsonArray(messages)))
           if (answer.isNotBlank()) {
-            upsertAssistant(answer, meta = if (usedTools.isEmpty()) "" else "共 ${usedTools.size} 步 · ${usedTools.distinct().take(4).joinToString("、")}", streaming = false)
+            upsertAssistant(answer, meta = if (usedTools.isEmpty()) (if (voiceCallMode) "实时通话" else "") else "共 ${usedTools.size} 步 · ${usedTools.distinct().take(4).joinToString("、")}", streaming = false)
           }
           run = JsonObject(run + mapOf("state" to str("completed"), "answer" to str(answer))); save()
           // Report completed turn to Cloud Memory Brain; if offline/unreachable, persist to SQLite outbox!
@@ -372,7 +412,7 @@ internal class DeviceAgent(
                 jsonObject("role" to str("user"), "content" to str(text.take(4000))),
                 jsonObject("role" to str("assistant"), "content" to str(answer.take(4000))),
               )))
-              put("metadata", jsonObject("source" to str("android_agent")))
+              put("metadata", jsonObject("source" to str(if (voiceCallMode) "android_voice_call" else "android_agent")))
             }
             val ingested = runCatching { cloud.request("POST", "/edge/v1/memory/ingest", ingestPayload) }.isSuccess
             if (!ingested) {
@@ -381,7 +421,7 @@ internal class DeviceAgent(
               runCatching { flushOutbox() }
             }
           }
-          return
+          return answer
         }
         for (call in calls) {
           currentCoroutineContext().ensureActive()
@@ -392,6 +432,7 @@ internal class DeviceAgent(
           ledger.operation(key, jsonObject("state" to str("submitted"), "name" to str(name), "arguments" to args))
           usedTools += toolLabel(name)
           state.update { it.copy(phase = "working", tool = name, step = step) }
+          onToolStart?.invoke(toolLabel(name))
           upsertAssistant(state.value.answer.ifBlank { "第 $step 步：正在${toolLabel(name)}…" }, meta = "第 $step 步 · ${toolLabel(name)}", streaming = true)
           val rawResult = try { execute(name, args, key, text) } catch (error: LinkFailure) {
             if (error.unknown) throw error
@@ -422,6 +463,7 @@ internal class DeviceAgent(
         val cleaned = cur.chat.map { if (it.id == assistantMsgId) it.copy(streaming = false) else it }
         cur.copy(notice = notice, canContinue = hitTurnLimit, chat = cleaned)
       }
+      return ""
     } finally {
       state.update { it.copy(busy = false, phase = if (it.notice.isEmpty()) "idle" else "attention", tool = "", step = 0) }; lock.unlock()
     }

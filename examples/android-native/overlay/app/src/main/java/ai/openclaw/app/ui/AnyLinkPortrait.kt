@@ -100,6 +100,7 @@ internal fun AnyLinkPortrait(
   emotion: String,
   gesture: String?,
   sequence: String?,
+  audioLevel: Float = 0f,
   safeTopPx: Int = 0,
   safeBottomPx: Int = 0,
   mini: Boolean = false,
@@ -122,6 +123,7 @@ internal fun AnyLinkPortrait(
       put("emotion", emotion)
       put("gesture", gesture ?: "none")
       put("sequence", sequence ?: "")
+      put("level", audioLevel.coerceIn(0f, 1f))
       put("paused", paused)
       put("reducedMotion", !animationsEnabled)
       put("safeTop", safeTopPx)

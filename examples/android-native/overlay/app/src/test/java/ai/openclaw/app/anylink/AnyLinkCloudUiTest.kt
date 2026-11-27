@@ -299,4 +299,103 @@ class AnyLinkCloudUiTest {
     compose.onNodeWithText("println(\"ok\")").assertExists()
     compose.onNodeWithText("### 今日进展").assertDoesNotExist()
   }
+
+  @Test fun `voice input bar and full-screen real-time call overlay wire controls cleanly`() {
+    var listenTapped = false
+    var finishedTapped = false
+    var callStarted = false
+    var callEnded = false
+    var bargeInTapped = false
+    var muteTapped = false
+    var speakerTapped = false
+
+    compose.setContent {
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
+        CloudCompanionScreen(
+          state = LocalAgentState(),
+          server = "https://example.invalid",
+          deviceSlug = "my-phone",
+          wsOnline = true,
+          error = "",
+          voiceNotice = "",
+          connecting = false,
+          listening = true,
+          speaking = false,
+          tasks = emptyList(),
+          showConfiguration = false,
+          openConfiguration = {},
+          closeConfiguration = {},
+          connect = { _, _, _, _, _ -> },
+          send = {},
+          stop = {},
+          listen = { listenTapped = true },
+          newConversation = {},
+          voiceLevel = 0.6f,
+          partialTranscript = "打开电脑上的微信",
+          finishListening = { finishedTapped = true },
+          startCall = { callStarted = true },
+        )
+      }
+    }
+    compose.onNodeWithText("📞 通话").assertExists().performClick()
+    assertTrue(callStarted)
+    compose.onNodeWithText("打开电脑上的微信").assertExists()
+    compose.onNodeWithText("说完了").assertExists().performClick()
+    assertTrue(finishedTapped)
+    compose.onNodeWithText("⏹").assertExists().performClick()
+    assertTrue(listenTapped)
+  }
+
+  @Test fun `full-screen real-time voice call overlay renders live timer, captions, and call actions`() {
+    var callEnded = false
+    var bargeInTapped = false
+    var muteTapped = false
+    var speakerTapped = false
+    compose.setContent {
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
+        CloudCompanionScreen(
+          state = LocalAgentState(),
+          server = "https://example.invalid",
+          deviceSlug = "my-phone",
+          wsOnline = true,
+          error = "",
+          voiceNotice = "",
+          connecting = false,
+          listening = false,
+          speaking = true,
+          tasks = emptyList(),
+          showConfiguration = false,
+          openConfiguration = {},
+          closeConfiguration = {},
+          connect = { _, _, _, _, _ -> },
+          send = {},
+          stop = {},
+          listen = {},
+          newConversation = {},
+          callActive = true,
+          callState = "speaking",
+          callMuted = false,
+          callSpeakerOn = true,
+          callDurationSec = 65,
+          callUserCaption = "今天天气怎么样",
+          callAssistantCaption = "哼，今天阳光很好，适合出门走走哦！",
+          endCall = { callEnded = true },
+          toggleCallMute = { muteTapped = true },
+          toggleCallSpeaker = { speakerTapped = true },
+          bargeInCall = { bargeInTapped = true },
+        )
+      }
+    }
+    compose.onNodeWithText("大肥鱼 · 实时通话").assertExists()
+    compose.onNodeWithText("01:05").assertExists()
+    compose.onNodeWithText("你：今天天气怎么样").assertExists()
+    compose.onNodeWithText("静音").performClick()
+    assertTrue(muteTapped)
+    compose.onNodeWithText("打断").performClick()
+    assertTrue(bargeInTapped)
+    compose.onNodeWithText("扬声器").performClick()
+    assertTrue(speakerTapped)
+    compose.onNodeWithText("挂断").performClick()
+    assertTrue(callEnded)
+  }
 }

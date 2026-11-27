@@ -62,6 +62,7 @@ internal class SpeechPlayer(
   private val connection: () -> CloudConnection?,
   private val speakTts: (String, Boolean) -> Unit,
   private val onSpeaking: (Boolean) -> Unit,
+  private val onIdle: () -> Unit = {},
 ) {
   private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(45000, java.util.concurrent.TimeUnit.MILLISECONDS).build()
   private val json = Json { ignoreUnknownKeys = true }
@@ -71,6 +72,7 @@ internal class SpeechPlayer(
   private var busy = false
   private var epoch = 0
   private var currentFile: File? = null
+  val isActive: Boolean get() = busy || pending.isNotEmpty()
 
   fun enqueue(text: String, summarize: Boolean, interrupt: Boolean, forceRewrite: Boolean = true) {
     if (interrupt) { pending.clear(); epoch++; stopPlayer() }
@@ -82,7 +84,10 @@ internal class SpeechPlayer(
 
   private fun pump() {
     if (busy) return
-    val next = pending.pollFirst() ?: return
+    val next = pending.pollFirst() ?: run {
+      onIdle()
+      return
+    }
     busy = true
     val stamp = epoch
     scope.launch {
