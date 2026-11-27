@@ -3,8 +3,11 @@ package ai.openclaw.app.anylink
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import okhttp3.Call
@@ -31,13 +34,14 @@ internal data class CloudConnection(
   val installId: String = "",
   val deviceSlug: String = "",
 ) {
-  fun wsUrl(): String {
+  fun wsUrl(resumeAfterSeq: Long = 0L): String {
     val base = server.trimEnd('/')
-    return when {
+    val raw = when {
       base.startsWith("https://") -> "wss://" + base.removePrefix("https://") + "/edge/v1/ws"
       base.startsWith("http://") -> "ws://" + base.removePrefix("http://") + "/edge/v1/ws"
       else -> "$base/edge/v1/ws"
     }
+    return if (resumeAfterSeq > 0L) "$raw?resume_after_seq=$resumeAfterSeq" else raw
   }
 
   companion object {
@@ -113,19 +117,19 @@ internal interface LinkTransport {
   fun cancel()
 }
 
-/** Thread-safe AnyLink HTTP client. Tracks every in-flight call safely so concurrent
- * requests never clobber each other's cancellation handles. */
+/** Thread-safe AnyLink HTTP client with Protocol v3.2 SSE detach-on-disconnect recovery. */
 internal class CloudClient(private val connection: CloudConnection) : LinkTransport {
   private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
     .retryOnConnectionFailure(false).connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(125, TimeUnit.SECONDS).callTimeout(130, TimeUnit.SECONDS).build()
   private val inFlight = ConcurrentHashMap.newKeySet<Call>()
 
-  private fun call(method: String, path: String, body: JsonObject?, key: String?, revision: Int?): Call {
+  private fun call(method: String, path: String, body: JsonObject?, key: String?, revision: Int?, extraHeaders: Map<String, String> = emptyMap()): Call {
     require(path.startsWith('/') && !path.startsWith("//"))
     val request = Request.Builder().url(connection.server + path).header("Authorization", "Bearer ${connection.token}")
     if (key != null) request.header("Idempotency-Key", key)
     if (revision != null) request.header("If-Match", revision.toString())
+    for ((k, v) in extraHeaders) request.header(k, v)
     val payload = body?.toString()?.toRequestBody("application/json".toMediaType())
     return http.newCall(request.method(method, if (method in setOf("POST", "PATCH")) payload ?: "{}".toRequestBody("application/json".toMediaType()) else payload).build())
   }
@@ -151,11 +155,36 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
     } finally { inFlight.remove(call) }
   }
 
+  /** Recover a detached streaming model completion by X-AnyLink-Request-Id after a mobile network blip. */
+  private suspend fun recoverDetachedRequest(requestId: String, onText: (String) -> Unit): JsonObject? {
+    repeat(10) { attempt ->
+      delay(if (attempt == 0) 600L else 1200L)
+      val status = runCatching { request("GET", "/model/v1/requests/$requestId") }.getOrNull() ?: return@repeat
+      val partial = status.text("partial_text")
+      if (partial.isNotBlank()) onText(partial)
+      if (status.text("state") == "completed") {
+        val snap = status["result"] as? JsonObject ?: return null
+        val content = snap.text("content")
+        val toolCalls = snap["tool_calls"] as? JsonArray
+        if (content.isNotBlank()) onText(content)
+        return buildJsonObject {
+          put("role", "assistant")
+          put("content", content)
+          if (toolCalls != null && toolCalls.isNotEmpty()) put("tool_calls", toolCalls)
+        }
+      }
+      if (status.text("state") in setOf("rejected", "cancelled", "submission_unknown")) return null
+    }
+    return null
+  }
+
   override suspend fun completion(body: JsonObject, onText: (String) -> Unit): JsonObject = withContext(Dispatchers.IO) {
-    val call = call("POST", "/model/v1/chat/completions", body, null, null)
+    val call = call("POST", "/model/v1/chat/completions", body, null, null, mapOf("X-AnyLink-Detach-On-Disconnect" to "on"))
     inFlight.add(call)
+    var serverRequestId: String? = null
     try {
       call.execute().use { response ->
+        serverRequestId = response.header("X-AnyLink-Request-Id")?.takeIf { it.isNotBlank() }
         if (!response.isSuccessful) {
           val data = runCatching { linkJson.parseToJsonElement(response.body.string()).jsonObject }.getOrNull()
           val code = (data?.get("error") as? JsonObject)?.text("code") ?: "HTTP_${response.code}"
@@ -178,6 +207,9 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
         throw LinkFailure("STREAM_INCOMPLETE", "模型响应中断，没有自动重发", true)
       }
     } catch (error: IOException) {
+      if (!call.isCanceled() && serverRequestId != null && (error !is LinkFailure || error.code == "STREAM_INCOMPLETE")) {
+        recoverDetachedRequest(serverRequestId!!, onText)?.let { return@withContext it }
+      }
       throw if (error is LinkFailure) error else LinkFailure("STREAM_INCOMPLETE", "模型响应未完整确认，没有自动重发", true)
     } catch (_: Exception) {
       throw LinkFailure("INVALID_STREAM", "模型响应格式未完整确认，没有自动重发或执行工具", true)
@@ -189,7 +221,7 @@ internal class CloudClient(private val connection: CloudConnection) : LinkTransp
   }
 }
 
-/** Real-time Protocol v3 WebSocket client (/edge/v1/ws) backed by OkHttp with auto-reconnect. */
+/** Real-time Protocol v3.2 WebSocket client (/edge/v1/ws) with seq cursor resume, pong watchdog, and Full Jitter backoff. */
 internal class AnyLinkWebSocket(
   private val connection: CloudConnection,
   private val onState: (Boolean) -> Unit = {},
@@ -203,12 +235,16 @@ internal class AnyLinkWebSocket(
     .readTimeout(0, TimeUnit.MILLISECONDS)
     .build()
   private val scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
-    Thread(r, "anylink-ws-reconnect").apply { isDaemon = true }
+    Thread(r, "anylink-ws-bus").apply { isDaemon = true }
   }
   @Volatile private var ws: WebSocket? = null
-  @Volatile private var pendingReconnect: java.util.concurrent.ScheduledFuture<*>? = null
+  @Volatile private var pendingReconnect: ScheduledFuture<*>? = null
+  @Volatile private var pingTask: ScheduledFuture<*>? = null
+  @Volatile private var pongWatchdog: ScheduledFuture<*>? = null
   @Volatile private var closedByUser = false
   @Volatile private var attempt = 0
+  @Volatile var lastSeq: Long = 0L
+    private set
   @Volatile var connected: Boolean = false
     private set
 
@@ -220,19 +256,50 @@ internal class AnyLinkWebSocket(
     openNow()
   }
 
+  private fun stopHeartbeats() {
+    pingTask?.cancel(false); pingTask = null
+    pongWatchdog?.cancel(false); pongWatchdog = null
+  }
+
+  private fun startHeartbeats(activeWs: WebSocket) {
+    stopHeartbeats()
+    pingTask = runCatching {
+      scheduler.scheduleWithFixedDelay({
+        if (closedByUser || ws !== activeWs) return@scheduleWithFixedDelay
+        val ok = runCatching { activeWs.send("""{"type":"ping","ts":${System.currentTimeMillis()}}""") }.getOrDefault(false)
+        if (!ok) {
+          runCatching { activeWs.cancel() }
+          return@scheduleWithFixedDelay
+        }
+        if (pongWatchdog == null || pongWatchdog?.isDone == true) {
+          pongWatchdog = runCatching {
+            scheduler.schedule({
+              if (ws === activeWs) runCatching { activeWs.close(4000, "Pong timeout") }
+            }, 15, TimeUnit.SECONDS)
+          }.getOrNull()
+        }
+      }, 20, 20, TimeUnit.SECONDS)
+    }.getOrNull()
+  }
+
   private fun openNow() {
     if (closedByUser) return
+    stopHeartbeats()
     val prev = ws; ws = null; runCatching { prev?.cancel() }
     val req = Request.Builder()
-      .url(connection.wsUrl())
+      .url(connection.wsUrl(lastSeq))
       .header("Authorization", "Bearer ${connection.token}")
       .build()
     ws = http.newWebSocket(req, object : WebSocketListener() {
       override fun onMessage(webSocket: WebSocket, text: String) {
+        pongWatchdog?.cancel(false); pongWatchdog = null
         val frame = runCatching { linkJson.parseToJsonElement(text).jsonObject }.getOrNull() ?: return
+        frame["seq"]?.jsonPrimitive?.longOrNull?.let { if (it > lastSeq) lastSeq = it }
         if (frame.text("type") == "hello") {
           attempt = 0
+          frame["latest_event_seq"]?.jsonPrimitive?.longOrNull?.let { if (lastSeq == 0L) lastSeq = it }
           connected = true
+          startHeartbeats(webSocket)
           onState(true)
         }
         onFrame(frame)
@@ -240,23 +307,27 @@ internal class AnyLinkWebSocket(
 
       override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
         webSocket.close(1000, null)
-        handleDrop()
+        handleDrop(code)
       }
 
-      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = handleDrop()
-      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = handleDrop()
+      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = handleDrop(code)
+      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = handleDrop(response?.code ?: 1006)
     })
   }
 
   fun send(frame: JsonObject): Boolean = ws?.send(frame.toString()) == true
 
-  private fun handleDrop() {
+  fun ackReceipt(taskId: String): Boolean = send(jsonObject("type" to str("task.receipt_ack"), "task_id" to str(taskId)))
+
+  private fun handleDrop(code: Int) {
+    stopHeartbeats()
     markClosed()
-    if (closedByUser) return
-    val delaySec = minOf(15L, 2L * (1 shl minOf(attempt, 3)))
+    if (closedByUser || code == 4001 || code == 4003) return
+    val capMs = minOf(30_000L, 1000L * (1L shl minOf(attempt, 5)))
+    val delayMs = Random.nextLong(500L, maxOf(600L, capMs))
     attempt++
     pendingReconnect?.cancel(false)
-    pendingReconnect = runCatching { scheduler.schedule({ if (!closedByUser) openNow() }, delaySec, TimeUnit.SECONDS) }.getOrNull()
+    pendingReconnect = runCatching { scheduler.schedule({ if (!closedByUser) openNow() }, delayMs, TimeUnit.MILLISECONDS) }.getOrNull()
   }
 
   private fun markClosed() {
@@ -268,6 +339,7 @@ internal class AnyLinkWebSocket(
 
   fun close() {
     closedByUser = true
+    stopHeartbeats()
     pendingReconnect?.cancel(false)
     pendingReconnect = null
     val current = ws

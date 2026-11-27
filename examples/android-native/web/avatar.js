@@ -5,21 +5,64 @@
   const emotions = new Set(['neutral', 'happy', 'curious', 'comfort', 'apologetic', 'excited', 'shy']);
   let app, model, ready = false, paused = false, expressionKey = '', gestureSequence, actionEpoch = 0;
   let state = {phase: 'idle', emotion: 'neutral', level: 0, reducedMotion: false, safeTop: 0, safeBottom: 0, mini: false};
-  let touch = 0, lastFrame = performance.now();
+  let touch = 0, lastFrame = performance.now(), baseWidth = 0, baseHeight = 0;
   const pose = {x: 0, y: 0, tilt: 0, pitch: 0, mouth: 0, body: 0};
+
+  function viewportSize() {
+    const w = Math.max(1, Math.round(document.documentElement.clientWidth || window.innerWidth || 1));
+    const h = Math.max(1, Math.round(document.documentElement.clientHeight || window.innerHeight || 1));
+    return {w, h};
+  }
 
   function fit() {
     if (!model || !app) return;
-    const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+    const {w, h} = viewportSize();
+    if (w < 16 || h < 16) return;
     app.renderer.resize(w, h);
-    model.scale.set(1);
-    const mw = Math.max(1, model.width), mh = Math.max(1, model.height);
-    // Dedicated stage framing: center head & upper torso comfortably inside the visible stage box.
-    const scale = state.mini
-      ? Math.max(w * 1.45 / mw, h * 1.45 / mh)
-      : Math.max(w * 0.92 / mw, h * 1.85 / mh);
-    model.scale.set(scale);
-    model.position.set(w / 2, state.mini ? -h * 0.35 : -h * 0.08);
+    if (!baseWidth || !baseHeight) {
+      model.scale.set(1);
+      baseWidth = Math.max(1, model.width);
+      baseHeight = Math.max(1, model.height);
+    }
+    const mw = baseWidth, mh = baseHeight;
+    // Full-bleed deep-sea portrait framing:
+    // - Companion mode (!mini): place 大肥鱼 head, maid headdress, whale ears & upper torso
+    //   centered cleanly in the upper 54% of the screen, unobstructed above the glass chat sheet.
+    // - Reading / keyboard mode (mini): gently scale down and lift slightly so her face peeks above the sheet.
+    const safeTop = Math.max(24, Math.min(state.safeTop || 42, h * 0.14));
+    const targetScale = state.mini
+      ? Math.min((w * 0.86) / mw, (h * 0.72) / mh)
+      : Math.min((w * 1.32) / mw, Math.max((w * 0.96) / mw, (h * 0.96) / mh));
+    model.scale.set(targetScale);
+    const yPos = state.mini ? safeTop - h * 0.045 : safeTop + h * 0.015;
+    model.position.set(w / 2, yPos);
+  }
+
+  /** Sample the WebGL backbuffer to verify non-transparent pixels were actually drawn before dismissing Android fallback. */
+  function hasRenderedPixels() {
+    try {
+      const gl = app?.renderer?.gl;
+      if (!gl || gl.isContextLost?.()) return false;
+      const bw = gl.drawingBufferWidth | 0;
+      const bh = gl.drawingBufferHeight | 0;
+      if (bw < 16 || bh < 16) return false;
+      const px = new Uint8Array(4);
+      let hits = 0;
+      for (let gx = 1; gx <= 7; gx++) {
+        for (let gy = 1; gy <= 7; gy++) {
+          const x = Math.floor((bw * gx) / 8);
+          const y = Math.floor((bh * gy) / 8);
+          gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          if (px[3] > 20) {
+            hits++;
+            if (hits >= 3) return true;
+          }
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   async function gesture(name) {
@@ -54,6 +97,7 @@
   window.anylinkMobileAvatar = {
     update(value) {
       if (!value || !phases.has(value.phase)) return;
+      const dpr = window.devicePixelRatio || 1;
       state = {
         phase: value.phase,
         emotion: emotions.has(value.emotion) ? value.emotion : 'neutral',
@@ -61,21 +105,39 @@
         reducedMotion: !!value.reducedMotion,
         gesture: value.gesture,
         sequence: value.sequence,
-        safeTop: (Number(value.safeTop) || 0) / (window.devicePixelRatio || 1),
-        safeBottom: (Number(value.safeBottom) || 0) / (window.devicePixelRatio || 1),
+        safeTop: (Number(value.safeTop) || 0) / dpr,
+        safeBottom: (Number(value.safeBottom) || 0) / dpr,
         mini: value.mini === true,
       };
       fit();
       paused = value.paused === true;
       apply();
     },
+    nod() { touch = performance.now(); },
   };
 
+  async function waitForVisibleFrame(maxAttempts = 6) {
+    for (let i = 0; i < maxAttempts; i++) {
+      fit();
+      app.renderer.render(app.stage);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      if (hasRenderedPixels()) return true;
+      await new Promise(r => setTimeout(r, 220));
+    }
+    return false;
+  }
+
   async function start() {
-    const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+    const {w, h} = viewportSize();
     app = new PIXI.Application({
-      width: w, height: h, backgroundAlpha: 0, antialias: true, autoDensity: true,
-      resolution: Math.min(devicePixelRatio || 1, 1.5), powerPreference: 'default',
+      width: Math.max(w, 64),
+      height: Math.max(h, 64),
+      backgroundAlpha: 0,
+      antialias: true,
+      autoDensity: true,
+      preserveDrawingBuffer: true,
+      resolution: Math.min(devicePixelRatio || 1, 1.5),
+      powerPreference: 'default',
     });
     app.ticker.maxFPS = 24;
     PIXI.Ticker.shared.maxFPS = 24;
@@ -85,6 +147,10 @@
     app.stage.addChild(model);
     fit();
     addEventListener('resize', fit);
+    window.visualViewport?.addEventListener('resize', fit);
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => fit()).observe(document.body);
+    }
     const internal = model.internalModel, core = internal.coreModel;
     const available = new Set(['ParamAngleY', 'ParamAngleZ', 'ParamBodyAngleZ', 'ParamMouthOpenY'].filter(id => core.getParameterIndex(id) < core.getParameterCount()));
     const set = (id, value) => { if (available.has(id)) core.setParameterValueById(id, value); };
@@ -104,11 +170,17 @@
     const canvas = app.view;
     let contextLost = false;
     canvas.addEventListener('webglcontextlost', (event) => {
-      event.preventDefault(); contextLost = true; console.info('ANYLINK_AVATAR_CONTEXT_LOST');
-      setTimeout(() => { if (contextLost) location.reload(); }, 3000);
+      event.preventDefault(); contextLost = true; ready = false; console.info('ANYLINK_AVATAR_CONTEXT_LOST');
+      setTimeout(() => { if (contextLost) location.reload(); }, 2500);
     });
     canvas.addEventListener('webglcontextrestored', () => { contextLost = false; console.info('ANYLINK_AVATAR_CONTEXT_RESTORED'); location.reload(); });
     document.addEventListener('visibilitychange', apply);
+
+    const visible = await waitForVisibleFrame(6);
+    if (!visible) {
+      console.error('ANYLINK_AVATAR_FAILED: blank_webgl_surface');
+      return;
+    }
     ready = true;
     apply();
     console.info('ANYLINK_AVATAR_READY');

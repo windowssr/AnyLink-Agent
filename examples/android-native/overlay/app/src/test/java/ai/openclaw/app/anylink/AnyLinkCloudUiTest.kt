@@ -32,7 +32,7 @@ class AnyLinkCloudUiTest {
     assertFalse(permissions.contains("android.permission.READ_SMS")); assertFalse(permissions.contains("android.permission.ACCESS_BACKGROUND_LOCATION"))
     assertNull(app.packageManager.resolveActivity(Intent().setClassName(app, "ai.openclaw.app.MainActivity"), 0))
     compose.setContent {
-      MaterialTheme {
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
         CloudCompanionScreen(LocalAgentState(), null, "", false, "", "", false, false, false, emptyList(), true, {}, {}, { _, _, _, _, _ -> }, {}, {}, {}, {})
       }
     }
@@ -50,22 +50,71 @@ class AnyLinkCloudUiTest {
     }
   }
 
-  @Test fun `chat feed renders full multi-turn messages and task sheet renders v3 receipts`() {
+  @Test fun `deep-sea glass UI renders full multi-turn messages, v32 approval cards, and task receipts`() {
     val fileTask = linkJson.parseToJsonElement("""{"id":"33333333-3333-4333-8333-333333333333","capability":"files.search","state":"succeeded","result":{"state":"succeeded","output":{"matches":[{"name":"report.txt","path":"/Workspace/report.txt"}],"partial":true}}}""").jsonObject
     val invokeTask = linkJson.parseToJsonElement("""{"id":"44444444-4444-4444-8444-444444444444","capability":"agent.invoke","instruction":"帮我总结桌面的周报","state":"succeeded","result":{"state":"succeeded","output":{"reply":"周报已整理并汇总 3 条进展。"}}}""").jsonObject
     val declinedTask = linkJson.parseToJsonElement("""{"id":"55555555-5555-4555-8555-555555555555","capability":"agent.invoke","instruction":"发微信给老板","state":"declined","result":{"state":"declined","error":{"code":"UNSUPPORTED","message":"Mac 端无法直接发送微信消息"}}}""").jsonObject
+    var repliedApproval: Pair<String, Boolean?>? = null
     val chatState = LocalAgentState(
       chat = listOf(
         ChatMessage("u1", "user", "帮我把文件写到电脑桌面"),
-        ChatMessage("a1", "assistant", "已经帮你把文件写入电脑桌面啦，完整路径是 /Users/demo/Desktop/hello.txt。", meta = "已调用：安排跨设备任务"),
+        ChatMessage("a1", "assistant", "哼，小事一桩嘛！已经帮你写好了，就在 /Users/demo/Desktop/hello.txt。", meta = "已调用：安排跨设备任务"),
+        ChatMessage(
+          id = "int-1",
+          role = "interaction",
+          text = "准备清理 ~/Downloads 中的旧安装包（1.2 GB），确认移到废纸篓吗？",
+          meta = "跨设备高危审批",
+          taskId = "66666666-6666-4666-8666-666666666666",
+          interactionType = "awaiting_approval",
+          riskLevel = "high",
+        ),
       ),
     )
     compose.setContent {
-      MaterialTheme { CloudCompanionScreen(chatState, "https://example.invalid", "my-phone", true, "", "", false, false, false, listOf(fileTask, invokeTask, declinedTask), false, {}, {}, { _, _, _, _, _ -> }, {}, {}, {}, {}) }
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
+        CloudCompanionScreen(
+          state = chatState,
+          server = "https://example.invalid",
+          deviceSlug = "my-phone",
+          wsOnline = true,
+          error = "",
+          voiceNotice = "",
+          connecting = false,
+          listening = false,
+          speaking = false,
+          tasks = listOf(fileTask, invokeTask, declinedTask),
+          showConfiguration = false,
+          openConfiguration = {},
+          closeConfiguration = {},
+          connect = { _, _, _, _, _ -> },
+          send = {},
+          stop = {},
+          listen = {},
+          newConversation = {},
+          replyTask = { id, approved, _, _ -> repliedApproval = id to approved },
+        )
+      }
     }
-    compose.onNodeWithText("Protocol v3 · @my-phone · WS 实时在线").assertExists()
+    compose.onNodeWithText("Protocol v3.2 · @my-phone · WS 实时在线").assertExists()
+    compose.onNodeWithText("哼，小事一桩嘛！已经帮你写好了，就在 /Users/demo/Desktop/hello.txt。").assertExists()
+    compose.onNodeWithText("批准执行").assertExists()
+
+    System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
+      val file = java.io.File(directory, "android-companion-v09.png"); file.parentFile?.mkdirs()
+      file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    compose.onNodeWithText("展开阅读 ⌃").performClick()
+    compose.onNodeWithText("陪伴视图 ⌄").assertExists()
     compose.onNodeWithText("帮我把文件写到电脑桌面").assertExists()
-    compose.onNodeWithText("已经帮你把文件写入电脑桌面啦，完整路径是 /Users/demo/Desktop/hello.txt。").assertExists()
+    System.getenv("ANYLINK_SCREENSHOT_DIR")?.let { directory ->
+      val file = java.io.File(directory, "android-reading-v09.png"); file.parentFile?.mkdirs()
+      file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    compose.onNodeWithText("批准执行").performClick()
+    assertEquals("66666666-6666-4666-8666-666666666666" to true, repliedApproval)
+
     compose.onNodeWithText("任务(3)").performClick()
     compose.onNodeWithText("report.txt").assertExists()
     compose.onNodeWithText("/Workspace/report.txt").assertExists()

@@ -46,7 +46,7 @@ internal object SpeechSanitizer {
   }
 }
 
-private data class Pending(val text: String, val summarize: Boolean, val interrupt: Boolean)
+private data class Pending(val text: String, val summarize: Boolean, val interrupt: Boolean, val forceRewrite: Boolean = false)
 
 /** Fetches /model/v1/speech and plays the mp3; falls back to system TTS with the
  * server's spoken_text (or the locally sanitized text when the request fails). */
@@ -66,9 +66,9 @@ internal class SpeechPlayer(
   private var epoch = 0
   private var currentFile: File? = null
 
-  fun enqueue(text: String, summarize: Boolean, interrupt: Boolean) {
+  fun enqueue(text: String, summarize: Boolean, interrupt: Boolean, forceRewrite: Boolean = false) {
     if (interrupt) { pending.clear(); epoch++; stopPlayer() }
-    pending.addLast(Pending(text, summarize, interrupt))
+    pending.addLast(Pending(text, summarize, interrupt, forceRewrite))
     pump()
   }
 
@@ -94,6 +94,7 @@ internal class SpeechPlayer(
       val body = jsonObject(
         "text" to str(next.text.take(8000)),
         "summarize" to kotlinx.serialization.json.JsonPrimitive(next.summarize),
+        "rewrite" to str(if (next.forceRewrite) "always" else if (next.summarize) "auto" else "never"),
         "voice" to str("sweet-lively"),
         "style" to str("persona"),
       ).toString().toRequestBody("application/json".toMediaType())

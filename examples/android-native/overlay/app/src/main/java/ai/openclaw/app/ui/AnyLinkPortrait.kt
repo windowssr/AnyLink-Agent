@@ -13,12 +13,15 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -37,7 +40,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -140,25 +142,26 @@ internal fun AnyLinkPortrait(
   val bobDp by infinite.animateFloat(
     initialValue = -3f,
     targetValue = 3f,
-    animationSpec = infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+    animationSpec = infiniteRepeatable(tween(2600, easing = FastOutSlowInEasing), RepeatMode.Reverse),
     label = "bob",
   )
   val pulseScale by infinite.animateFloat(
     initialValue = 0.985f,
-    targetValue = 1.025f,
-    animationSpec = infiniteRepeatable(tween(if (phase == AnyLinkPhase.Speaking) 450 else 2200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+    targetValue = 1.022f,
+    animationSpec = infiniteRepeatable(tween(if (phase == AnyLinkPhase.Speaking) 440 else 2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
     label = "pulse",
   )
 
-  Box(modifier, contentAlignment = Alignment.Center) {
+  Box(modifier, contentAlignment = Alignment.TopCenter) {
+    // Full-bleed hardware-accelerated WebView: never clip with RoundedCornerShape or start at alpha(0f),
+    // which prevents Android Chromium WebGL layer compositing bugs on transparent canvases.
     if (!webFailed) {
       key(webEpoch) {
         DisposableEffect(webEpoch) {
           onDispose { web?.stopLoading(); web?.destroy(); web = null }
         }
         AndroidView(
-          // Keep WebView invisible until Live2D explicitly emits READY so a white/blank surface never hides the fallback portrait.
-          modifier = Modifier.fillMaxSize().alpha(if (ready) 1f else 0f),
+          modifier = Modifier.fillMaxSize(),
           factory = { context ->
             WebView(context).apply {
               web = this
@@ -168,8 +171,9 @@ internal fun AnyLinkPortrait(
               settings.domStorageEnabled = false
               settings.allowFileAccess = false
               settings.allowContentAccess = false
-              settings.useWideViewPort = true
-              settings.loadWithOverviewMode = true
+              // Keep exact CSS dp viewport (do NOT set useWideViewPort/loadWithOverviewMode which inflate innerWidth to 980px).
+              settings.useWideViewPort = false
+              settings.loadWithOverviewMode = false
               settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
               settings.mediaPlaybackRequiresUserGesture = true
               webViewClient = object : WebViewClient() {
@@ -199,6 +203,9 @@ internal fun AnyLinkPortrait(
                       ready = true
                       evaluateJavascript("window.anylinkMobileAvatar?.update($currentPayload)", null)
                     }
+                    text == "ANYLINK_AVATAR_CONTEXT_LOST" -> {
+                      ready = false
+                    }
                     text.startsWith("ANYLINK_AVATAR_FAILED") -> {
                       ready = false
                       webFailed = true
@@ -217,29 +224,43 @@ internal fun AnyLinkPortrait(
       }
     }
 
-    // Native animated portrait fallback: immediately visible on frame 1 while WebGL initializes, and stays crisp if WebGL is unavailable.
-    if (!ready || webFailed) {
-      val ringBrush = Brush.radialGradient(
-        colors = listOf(Color(0x558ED8F8), Color(0x22468CAF), Color.Transparent),
-      )
+    // Native animated portrait fallback: stays smoothly visible on top until Live2D verifies real rendered pixels,
+    // and smoothly re-appears if WebGL loses context or fails, so the character NEVER flashes and disappears.
+    AnimatedVisibility(
+      visible = !ready || webFailed,
+      enter = fadeIn(tween(220)),
+      exit = fadeOut(tween(380)),
+      modifier = Modifier.fillMaxSize(),
+    ) {
       Box(
         modifier = Modifier
-          .size(if (mini) 92.dp else 184.dp)
-          .graphicsLayer {
-            translationY = if (animationsEnabled) bobDp * density else 0f
-            val s = if (animationsEnabled) pulseScale else 1f
-            scaleX = s; scaleY = s
-          }
-          .background(ringBrush, CircleShape)
-          .padding(if (mini) 8.dp else 14.dp),
-        contentAlignment = Alignment.Center,
+          .fillMaxSize()
+          .background(Brush.verticalGradient(listOf(Color(0xFFF6FCFF), Color(0xFFDDF1FC), Color(0xFFBFE3F6))))
+          .padding(top = if (mini) 58.dp else 96.dp),
+        contentAlignment = Alignment.TopCenter,
       ) {
-        Image(
-          painter = painterResource(R.drawable.anylink_avatar),
-          contentDescription = "大肥鱼形象",
-          contentScale = ContentScale.Crop,
-          modifier = Modifier.fillMaxSize().clip(CircleShape),
+        val ringBrush = Brush.radialGradient(
+          colors = listOf(Color(0x668ED8F8), Color(0x22468CAF), Color.Transparent),
         )
+        Box(
+          modifier = Modifier
+            .size(if (mini) 92.dp else 212.dp)
+            .graphicsLayer {
+              translationY = if (animationsEnabled) bobDp * density else 0f
+              val s = if (animationsEnabled) pulseScale else 1f
+              scaleX = s; scaleY = s
+            }
+            .background(ringBrush, CircleShape)
+            .padding(if (mini) 8.dp else 16.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Image(
+            painter = painterResource(R.drawable.anylink_avatar),
+            contentDescription = "大肥鱼形象",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().clip(CircleShape),
+          )
+        }
       }
     }
   }

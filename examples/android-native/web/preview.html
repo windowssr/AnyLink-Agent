@@ -1,16 +1,80 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大肥鱼 · 原生 Android 形象预览</title><link rel="stylesheet" href="./preview.css"></head>
-<body>
-  <aside class="preview-note">Android 本地 Agent · 统一连接 AnyLink 服务器 · 此页仅演示形象与状态</aside>
-  <main class="phone">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>大肥鱼 · AnyLink v0.9 深海玻璃界面预览</title>
+  <link rel="stylesheet" href="./preview.css">
+</head>
+<body data-phase="idle">
+  <aside class="preview-note">Android 本地 Agent · Protocol v3.2 深海玻璃界面预览（实景 Live2D + 对话玻璃层）</aside>
+  <main class="phone" id="phone">
+    <div class="ocean-orbs" aria-hidden="true"><span></span><span></span></div>
     <iframe id="portrait" src="./avatar/portrait.html" title="大肥鱼半身形象"></iframe>
-    <header><div><h1>大肥鱼</h1><span>手机独立运行，不依赖 Mac。</span></div><span class="presence"><i></i>我在</span></header>
-    <div class="bottom-fade"></div>
-    <section class="voice-panel"><div class="state"><span id="state-light"></span><span id="state-label">想聊什么，或想让我做点什么？</span></div><div id="waveform" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div><div class="controls"><button id="text-button" aria-label="文字输入">⌨</button><button id="voice-button">演示倾听</button><button id="results-button" aria-label="结果与记录">≡</button></div><p>聊天，或者交给我一件事。</p></section>
-    <section id="results" hidden><button id="close-results" aria-label="收起结果">×</button><h2>处理结果</h2><p>这里会显示同一位 Agent 返回的真实任务结果。</p><span>电脑预览未执行任务</span></section>
-    <section id="text-panel" hidden><input placeholder="想让我做什么？" maxlength="500"><button id="close-text">收起</button><p>这是界面预览，输入不会提交给模型。</p></section>
+
+    <header class="glass-header">
+      <div class="brand-cluster">
+        <h1>大肥鱼</h1>
+        <div class="status-pill"><i class="dot"></i><span id="status-text">@my-phone · WS 实时在线</span></div>
+      </div>
+      <div class="header-actions">
+        <button class="glass-chip" id="results-button">任务<em>2</em></button>
+        <button class="glass-chip">保活</button>
+        <button class="glass-chip">连接</button>
+      </div>
+    </header>
+
+    <div class="stage-spacer" id="stage-spacer">
+      <div class="phase-pill"><span id="state-light"></span><span id="state-label">想聊什么，或交给我办点事？</span></div>
+    </div>
+
+    <section class="glass-sheet" id="glass-sheet">
+      <div class="sheet-bar">
+        <span class="drag-handle"></span>
+        <div class="sheet-bar-row">
+          <button class="mode-pill" id="mode-toggle">展开阅读 ⌃</button>
+          <span class="memory-hint">云端共享记忆 · Protocol v3.2</span>
+        </div>
+      </div>
+
+      <div class="chat-feed" id="chat-feed">
+        <div class="bubble user">帮我把桌面上的周报移到主目录文件夹里</div>
+        <div class="bubble assistant">
+          <div class="meta">大肥鱼 · 已调用：安排跨设备任务</div>
+          <p>哼，小事一桩嘛！我已经让 Mac 那边的我帮你挪好了，就在 <code>/Users/demo/大肥鱼想对宝宝说的话.txt</code>，内容一字没动哦。</p>
+        </div>
+        <div class="bubble approval">
+          <div class="meta">跨设备高危审批 · Mac (@home-mac)</div>
+          <p>准备清理 <code>~/Downloads</code> 中 30 天前的安装包（共 1.2 GB），确认移入废纸篓吗？</p>
+          <div class="approval-actions">
+            <button class="btn-approve">批准执行</button>
+            <button class="btn-reject">先不要</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <input id="draft" placeholder="和我聊聊，或安排跨设备任务…" maxlength="500">
+        <button id="voice-button" class="voice-orb" aria-label="语音说话">说话</button>
+      </div>
+    </section>
+
+    <section id="results" hidden>
+      <button id="close-results" aria-label="收起结果">×</button>
+      <h2>跨设备任务与回执</h2>
+      <p><b>✓ 移动周报到主目录</b> · 已签收 ACK · <code>/Users/demo/周报.txt</code></p>
+      <p><b>⏳ 清理旧安装包</b> · 等待主人审批（Protocol v3.2）</p>
+    </section>
   </main>
-  <nav class="states" aria-label="人物状态演示"><button data-phase="idle">陪伴</button><button data-phase="listening">倾听</button><button data-phase="thinking">思考</button><button data-phase="working">做事</button><button data-phase="speaking">说话</button><button data-phase="attention">需要你</button></nav>
+
+  <nav class="states" aria-label="人物状态演示">
+    <button data-phase="idle">陪伴</button>
+    <button data-phase="listening">倾听</button>
+    <button data-phase="thinking">思考</button>
+    <button data-phase="working">做事</button>
+    <button data-phase="speaking">说话</button>
+    <button data-phase="attention">需要你</button>
+  </nav>
   <script src="./preview.js"></script>
-</body></html>
+</body>
+</html>

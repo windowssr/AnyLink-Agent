@@ -2,23 +2,23 @@
 
 > 本目录属于 `examples/` 展示实例，与核心协议（`protocol/`）、云端中枢（`server/`）和 SDK（`sdk/`、`sdk-python/`、`mcp/`）完全隔离。
 
-Android 客户端直接在手机本地运行完整的 Agent 会话、工具循环与 SQLite 幂等账本，**不依赖 Mac 在线或任何 Gateway**；仅在需要操作电脑时通过 AnyLink 云端 Protocol v3 与 Mac 实时联动。
+Android 客户端直接在手机本地运行完整的 Agent 会话、工具循环与 SQLite 幂等账本，**不依赖 Mac 在线或任何 Gateway**；仅在需要操作电脑时通过 AnyLink 云端 Protocol v3.2 与 Mac 实时联动。
 
 ---
 
-## 一、核心特性与前端架构
+## 一、核心特性与前端架构（`v0.9.0` 深海玻璃陪伴版）
 
-- **独立形象舞台 + 完整可滚动对话流**：
-  - 顶部为独立无遮挡的虚拟形象舞台（支持点击「收起/展开形象」，弹起输入法时自动紧凑化）；首帧即展示带呼吸动效的原生头像，Live2D 就绪后平滑淡入，杜绝白屏或卡死文字。
-  - 中部为完整可滚动的多轮对话气泡流（支持流式输出、长文选择复制、工具调用标签、实时跨设备回执卡片与快捷提问芯片）。
+- **全屏无遮挡 Live2D 舞台 + 磨砂玻璃双视图**：
+  - 采用全屏深海浅蓝径向光晕与无裁剪 WebView 舞台（移除圆角裁剪、透明度遮罩与宽视口错位），并在 `avatar.js` 中通过 `preserveDrawingBuffer: true` + `ResizeObserver` + `gl.readPixels` 实测渲染出非空像素后才隐藏原生兜底立绘，彻底根治真机 Live2D 闪一下消失的问题；WebGL 上下文丢失时自动平滑回切兜底图。
+  - 底部磨砂玻璃对话面板支持一键切换「**陪伴视图**」与「**展开阅读**」（弹起输入法自动紧凑），完整展示多轮对话气泡（支持长按选择复制、工具调用标签与跨设备回执）以及 **Protocol v3.2 高危审批 / 追问交互卡片**（一键「批准执行」/「先不要」或选项回复）。
 - **极简登录验证**：
   - 只需填写 **HTTPS 服务器地址** 与 **预设登录密码（或加入密钥）** 即可一键接入，自动签发并加密保存专属设备令牌（Android Keystore AES-GCM），密码绝不落盘。
   - 展开「高级选项」可自定义设备名称、唯一短别名 `slug`（如 `my-phone`）或导入旧版凭据 JSON。
-- **后台保活与轻量化悬浮球**：
-  - 连接成功后自动拉起常驻前台服务 `AnyLinkCompanionService`（不强依赖悬浮窗权限），退到后台也能保持 `/edge/v1/ws` WebSocket 实时在线与断线自动重连。
-  - 开启悬浮窗权限后，退到后台会自动显示轻量化原生大肥鱼悬浮球（点按说话、长按回 App、拖动换位、拖至底部 `×` 隐藏），低内存、零后台 WebGL 崩溃风险。
-- **跨设备联动 + 主动语音汇报**：
-  - 支持免能力表 `task_invoke`（如 `@home-mac`）、`task_create`、`link_directory`，Mac 完成任务或拒绝（`declined`）后会通过 WebSocket 实时推回并显示在对话流、同时语音播报。
+- **弱网韧性与后台保活**：
+  - WebSocket 支持 `resume_after_seq` 游标续传、20 秒心跳 + 15 秒 Pong 死链检测、Full Jitter 指数退避、`task.receipt_ack` 回执确认；流式对话支持 `X-AnyLink-Detach-On-Disconnect: on` 断线续接；离线记忆自动写入 SQLite `memory_outbox` 并在重连后自动补发。
+  - 连接成功后自动拉起常驻前台服务 `AnyLinkCompanionService`（不强依赖悬浮窗权限），开启悬浮窗权限后退后台显示轻量化原生大肥鱼悬浮球（点按说话、长按回 App、拖动换位、拖至底部 `×` 隐藏）。
+- **跨设备联动 + 贴合「蓝色大肥鱼」人设的语音播报**：
+  - 支持免能力表 `task_invoke`（如 `@home-mac`）、`task_reply`、`task_create`、`link_directory`；Mac 完成任务或拒绝（`declined`）后实时推送并经服务端「蓝色大肥鱼」人设口语化改写与活泼韵律（`+10%` 语速 / `+6Hz` 音调）语音播报。
   - 可选开启无障碍服务（`AnyLinkAccessibilityService`），让手机大肥鱼本机读屏、点按、输入、滚动与打开应用（控屏工具仅限本机对话，不对外暴露为远程能力）。
 
 ---
@@ -71,16 +71,16 @@ node examples/android-native/scripts/inspect-apk.mjs --private
 开启手机「USB 调试」连接电脑，使用项目内置 `adb` 安装（或直接把 APK 传到手机点击安装）：
 ```bash
 data/android-native/sdk/platform-tools/adb devices
-data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.5.0-preview.1-private.apk
+data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.9.0-private.apk
 ```
 
 ---
 
 ## 四、真机使用与后台保活配置
 
-1. 打开 App，填写 **HTTPS 服务器地址**（例如 `https://your-server`）和 **登录密码 / 加入密钥**，点击「验证并连接」。
-2. 顶栏出现绿点 `Protocol v3 · WS 实时在线` 即连接成功。
-3. 点击顶栏「**后台**」：
+1. 打开 App，填写 **HTTPS 服务器地址**（例如 `https://anylink.example.com`）和 **登录密码 / 加入密钥**，点击「验证并连接」。
+2. 顶栏出现绿点 `Protocol v3.2 · @my-phone · WS 实时在线` 即连接成功。
+3. 点击顶栏「**保活**」：
    - **通知权限**：建议开启，保持前台保活通知正常显示。
    - **电池优化**：强烈建议在国产 ROM（小米/华为/OPPO/vivo/荣耀等）里设为「无限制 / 允许后台高耗电」，避免锁屏或隐藏后被系统强杀。
    - **悬浮权限**（可选）：开启后切后台出现轻量化悬浮球。

@@ -21,12 +21,16 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
-/** Process-wide owner of the connection, device agent, WebSocket bus, worker, voice and overlay state. */
+/** Process-wide owner of the connection, device agent, Protocol v3.2 WebSocket bus, worker, voice and overlay state. */
 internal class AnyLinkRuntime private constructor(private val app: Application) {
   companion object {
     @Volatile private var instance: AnyLinkRuntime? = null
@@ -141,7 +145,34 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       val last = active.state.value.runs.firstOrNull()
       if (last?.text("state") == "completed" && last.text("id") != lastSpokenRun && last.text("answer").isNotBlank()) {
         lastSpokenRun = last.text("id")
-        speechPlayer?.enqueue(last.text("answer").take(3500), summarize = true, interrupt = true)
+        speechPlayer?.enqueue(last.text("answer").take(3500), summarize = true, interrupt = true, forceRewrite = false)
+      }
+    }
+  }
+
+  fun replyToTask(taskId: String, approved: Boolean? = null, choice: String? = null, message: String? = null) {
+    val value = connection.value ?: return
+    scope.launch {
+      val body = buildJsonObject {
+        approved?.let { put("approved", JsonPrimitive(it)) }
+        choice?.takeIf { it.isNotBlank() }?.let { put("choice", str(it)) }
+        message?.takeIf { it.isNotBlank() }?.let { put("message", str(it)) }
+      }
+      val ok = runCatching {
+        CloudClient(value).request("POST", "/edge/v1/tasks/$taskId/reply", body, "reply:$taskId:${UUID.randomUUID()}")
+      }.isSuccess
+      if (ok) {
+        val summary = when {
+          approved == true -> "已批准"
+          approved == false -> "已拒绝"
+          !choice.isNullOrBlank() -> "已选：$choice"
+          else -> "已回复"
+        }
+        agent.value?.markInteractionResolved(taskId, summary)
+        voiceNotice.value = if (approved == false) "好哒主人，我告诉那边先不要做了。" else "收到啦主人，我这就让另一边接着办！"
+        refreshTasks()
+      } else {
+        voiceNotice.value = "唔，回复没送出去，稍后再点一次试试看～"
       }
     }
   }
@@ -172,7 +203,13 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       if (wsClient == null) {
         val socket = AnyLinkWebSocket(
           connection = value,
-          onState = { online -> wsOnline.value = online; if (online) workerWakeup.trySend(Unit) },
+          onState = { online ->
+            wsOnline.value = online
+            if (online) {
+              workerWakeup.trySend(Unit)
+              scope.launch { runCatching { agent.value?.flushOutbox() } }
+            }
+          },
           onFrame = { frame -> handleWsFrame(frame) },
         )
         wsClient = socket
@@ -195,6 +232,28 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         if (msg.isNotBlank()) voiceNotice.value = msg
         scope.launch { refreshTasks() }
       }
+      "task.awaiting_input", "task.awaiting_approval" -> {
+        val task = frame["task"] as? JsonObject ?: return
+        val taskId = task.text("id")
+        val interaction = (frame["interaction"] as? JsonObject) ?: (task["pending_interaction"] as? JsonObject) ?: return
+        val prompt = interaction.text("prompt").ifBlank { "另一边的设备需要主人确认一下才能继续哦。" }
+        val choices = (interaction["choices"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        val risk = interaction.text("risk_level")
+        val isApproval = frame.text("type") == "task.awaiting_approval"
+        agent.value?.appendInteraction(
+          taskId = taskId,
+          interactionType = if (isApproval) "awaiting_approval" else "awaiting_input",
+          prompt = prompt,
+          choices = choices,
+          riskLevel = risk,
+          meta = if (isApproval) "跨设备高危审批" else "跨设备追问",
+        )
+        agent.value?.state?.update { it.copy(emotion = "curious", gesture = "point", sequence = UUID.randomUUID().toString()) }
+        val spokenHint = if (isApproval) "主人，另一边准备做个重要操作，等你点头批准呢，快看看屏幕确认吧！" else "唔，主人，另一边有件事想先问问你的意见，点一下聊天卡片就能回复哦。"
+        voiceNotice.value = prompt.take(120)
+        speechPlayer?.enqueue(spokenHint, summarize = false, interrupt = false, forceRewrite = false)
+        scope.launch { refreshTasks() }
+      }
       "task.completed" -> {
         val task = frame["task"] as? JsonObject ?: return
         scope.launch { refreshTasks() }
@@ -203,30 +262,72 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     }
   }
 
+  private fun acknowledgeReceipt(taskId: String) {
+    if (taskId.isBlank()) return
+    val sentWs = wsClient?.ackReceipt(taskId) == true
+    if (!sentWs) {
+      val conn = connection.value ?: return
+      scope.launch { runCatching { CloudClient(conn).request("POST", "/edge/v1/tasks/$taskId/ack", JsonObject(emptyMap())) } }
+    }
+  }
+
   private fun announceCompletedOutboundTask(task: JsonObject) {
     val id = task.text("id")
-    if (id.isBlank() || !announcedTasks.add(id)) return
+    if (id.isBlank()) return
+    acknowledgeReceipt(id)
+    if (!announcedTasks.add(id)) return
     val result = task["result"] as? JsonObject
     val output = result?.get("output") as? JsonObject
     val err = result?.get("error") as? JsonObject
-    val spoken = when (task.text("state")) {
+    val state = task.text("state")
+    val displayText: String
+    val speechInput: String
+    val forcePersonaRewrite: Boolean
+    when (state) {
       "succeeded" -> {
         val reply = output?.text("reply")?.ifBlank { output.text("text") }.orEmpty()
-        if (reply.isNotBlank()) "跨设备任务完成啦：$reply" else "跨设备任务已经完成啦。"
+        displayText = if (reply.isNotBlank()) reply else "另一边已经把事情办妥啦。"
+        speechInput = if (reply.isNotBlank()) reply else "主人，另一边交给我的事已经搞定啦！"
+        forcePersonaRewrite = reply.isNotBlank()
       }
-      "declined" -> "对方设备暂时做不到：${err?.text("message").orEmpty().ifBlank { "超出对方环境范围" }}"
-      "failed" -> "跨设备任务未完成：${err?.text("message").orEmpty().ifBlank { "执行失败" }}"
-      "unknown" -> "跨设备任务结果未确认，请查看任务面板。"
+      "declined" -> {
+        val msg = err?.text("message").orEmpty().ifBlank { "当前环境不太支持做这件事" }
+        displayText = msg
+        speechInput = "唔，主人，另一边刚回来说这件事现在没法办到：$msg"
+        forcePersonaRewrite = true
+      }
+      "failed" -> {
+        val msg = err?.text("message").orEmpty().ifBlank { "执行中途出了点小状况" }
+        displayText = msg
+        speechInput = "唔，主人，另一边执行失败了：$msg"
+        forcePersonaRewrite = true
+      }
+      "expired" -> {
+        displayText = "等待超时啦，另一边暂时没来得及接单。"
+        speechInput = "唔，主人，刚才那件事排太久超时啦，另一台设备可能没在线哦。"
+        forcePersonaRewrite = false
+      }
+      "unknown" -> {
+        displayText = "刚才连接断了一下，我不敢乱猜有没有办完，主人点开任务确认一下最稳妥哦。"
+        speechInput = "唔，主人，刚才那边中途断联了，结果还没确认，我不敢瞎重试，你点开任务看一眼吧。"
+        forcePersonaRewrite = false
+      }
       else -> return
     }
-    voiceNotice.value = spoken.take(240)
+    voiceNotice.value = displayText.take(200)
     agent.value?.appendEvent(
       role = "event",
-      text = spoken,
-      meta = if (task.text("state") == "succeeded") "跨设备回执 · 已完成" else "跨设备回执 · ${task.text("state")}",
+      text = displayText,
+      meta = when (state) {
+        "succeeded" -> "跨设备回执 · 已完成"
+        "declined" -> "跨设备回执 · 暂不支持"
+        "expired" -> "跨设备回执 · 已超时"
+        "unknown" -> "跨设备回执 · 结果待确认"
+        else -> "跨设备回执 · 未完成"
+      },
     )
-    agent.value?.state?.update { it.copy(emotion = if (task.text("state") == "succeeded") "happy" else "apologetic", gesture = "wave", sequence = UUID.randomUUID().toString()) }
-    speechPlayer?.enqueue(spoken.take(3500), summarize = spoken.length > 80, interrupt = false)
+    agent.value?.state?.update { it.copy(emotion = if (state == "succeeded") "happy" else "apologetic", gesture = "wave", sequence = UUID.randomUUID().toString()) }
+    speechPlayer?.enqueue(speechInput.take(3500), summarize = true, interrupt = false, forceRewrite = forcePersonaRewrite)
   }
 
   private suspend fun workerLoop(transport: CloudClient, value: CloudConnection) {
@@ -245,7 +346,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     voiceNotice.value = "来自 $source：$text"
     agent.value?.appendEvent(role = "event", text = text, meta = "来自 $source")
     agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
-    speechPlayer?.enqueue(text, summarize = false, interrupt = false)
+    speechPlayer?.enqueue(text, summarize = false, interrupt = false, forceRewrite = false)
   }
 
   fun onActivityStarted() { activityVisible.value = true; prefs.edit().putBoolean("overlay_dismissed", false).apply(); syncWorker(); refreshOverlay() }
@@ -259,7 +360,20 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     if (speech != null) return
     speech = TextToSpeech(app) { status ->
       speechReady = status == TextToSpeech.SUCCESS
-      if (speechReady) { speech?.language = Locale.SIMPLIFIED_CHINESE; speech?.setSpeechRate(1.08f); speech?.setPitch(1.12f) }
+      if (speechReady) {
+        speech?.language = Locale.SIMPLIFIED_CHINESE
+        // Prefer a clear Chinese female voice when falling back to local Android TTS.
+        runCatching {
+          val voices = speech?.voices.orEmpty()
+          val zhFemale = voices.firstOrNull { v ->
+            v.locale?.language == "zh" && !v.isNetworkConnectionRequired &&
+              Regex("female|xiaoxiao|xiaoyi|yue|ting|zh-cn-x-fis|zh-cn-x-zhe", RegexOption.IGNORE_CASE).containsMatchIn(v.name)
+          } ?: voices.firstOrNull { v -> v.locale?.language == "zh" && !v.isNetworkConnectionRequired }
+          if (zhFemale != null) speech?.voice = zhFemale
+        }
+        speech?.setSpeechRate(1.06f)
+        speech?.setPitch(1.18f)
+      }
     }
     speech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(utteranceId: String?) { speaking.value = true }
@@ -275,18 +389,18 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   fun startListening() {
     if (listening.value) { recognizer?.cancel(); listening.value = false; return }
     if (speaking.value || agent.value?.state?.value?.busy == true) { interruptAll(); return }
-    if (connection.value == null) { voiceNotice.value = "先连接服务器再和我说话。"; return }
+    if (connection.value == null) { voiceNotice.value = "先连接服务器再和我说话哦。"; return }
     if (!micGranted()) { voiceNotice.value = "需要麦克风权限，点我打开应用授权。"; openApp(); return }
-    if (!SpeechRecognizer.isRecognitionAvailable(app)) { voiceNotice.value = "系统没有语音识别服务，请使用文字输入。"; return }
+    if (!SpeechRecognizer.isRecognitionAvailable(app)) { voiceNotice.value = "系统没有语音识别服务，可以直接打字和我聊哦。"; return }
     recognizer?.destroy()
     recognizer = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(app)) SpeechRecognizer.createOnDeviceSpeechRecognizer(app) else SpeechRecognizer.createSpeechRecognizer(app)
     recognizer?.setRecognitionListener(object : RecognitionListener {
-      override fun onReadyForSpeech(params: Bundle?) { listening.value = true; voiceNotice.value = "我在听。点击停止可随时打断。" }
+      override fun onReadyForSpeech(params: Bundle?) { listening.value = true; voiceNotice.value = "我在听呢，主人请说～" }
       override fun onBeginningOfSpeech() = Unit
       override fun onRmsChanged(rmsdB: Float) = Unit
       override fun onBufferReceived(buffer: ByteArray?) = Unit
       override fun onEndOfSpeech() { listening.value = false }
-      override fun onError(error: Int) { listening.value = false; voiceNotice.value = "没有收到完整语音（$error），可以重说或输入文字。" }
+      override fun onError(error: Int) { listening.value = false; voiceNotice.value = "唔，没听清（$error），再说一次或者打字也行哦。" }
       override fun onResults(results: Bundle?) {
         listening.value = false
         results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }?.let { voiceNotice.value = it; send(it) }

@@ -1,18 +1,51 @@
 const portrait = document.getElementById('portrait');
-const labels = {idle:'想聊什么，或想让我做点什么？',listening:'我在听，你说。',thinking:'让我想一想…',working:'正在帮你处理…',speaking:'正在回复 · 可以打断',attention:'这件事需要你看看'};
+const phone = document.getElementById('phone');
+const toggleBtn = document.getElementById('mode-toggle');
+const labels = {
+  idle: '想聊什么，或交给我办点事？',
+  listening: '我在听呢，主人请说～',
+  thinking: '唔，让本鲸鱼娘想想…',
+  working: '正在跨设备帮你处理…',
+  speaking: '回复中 · 随时可以打断',
+  attention: '这里需要主人确认一下哦',
+};
 let phase = 'idle';
-function change(next) {
-  phase = next; document.body.dataset.phase = phase;
-  document.getElementById('state-label').textContent = labels[phase];
-  document.getElementById('voice-button').textContent = ['idle','attention'].includes(phase) ? '演示倾听' : '结束演示';
-  for (const button of document.querySelectorAll('.states [data-phase]')) button.classList.toggle('selected',button.dataset.phase === phase);
-  portrait.contentWindow?.anylinkMobileAvatar?.update({phase,emotion:phase==='attention'?'apologetic':'neutral',gesture:'none',reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches});
+let reading = false;
+
+function syncAvatar() {
+  portrait.contentWindow?.anylinkMobileAvatar?.update({
+    phase,
+    emotion: phase === 'attention' ? 'apologetic' : phase === 'speaking' ? 'happy' : 'neutral',
+    gesture: 'none',
+    mini: reading,
+    safeTop: 52,
+    safeBottom: 0,
+    reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+  });
 }
-portrait.addEventListener('load',()=>change(phase));
-for(const button of document.querySelectorAll('.states [data-phase]'))button.addEventListener('click',()=>change(button.dataset.phase));
-document.getElementById('voice-button').addEventListener('click',()=>change(['idle','attention'].includes(phase)?'listening':'idle'));
-document.getElementById('results-button').addEventListener('click',()=>document.getElementById('results').hidden=false);
-document.getElementById('close-results').addEventListener('click',()=>document.getElementById('results').hidden=true);
-document.getElementById('text-button').addEventListener('click',()=>{document.getElementById('text-panel').hidden=false;document.querySelector('input').focus();});
-document.getElementById('close-text').addEventListener('click',()=>document.getElementById('text-panel').hidden=true);
+
+function change(next) {
+  phase = next;
+  document.body.dataset.phase = phase;
+  document.getElementById('state-label').textContent = labels[phase];
+  document.getElementById('voice-button').textContent = ['idle', 'attention'].includes(phase) ? '说话' : '停止';
+  for (const button of document.querySelectorAll('.states [data-phase]')) {
+    button.classList.toggle('selected', button.dataset.phase === phase);
+  }
+  syncAvatar();
+}
+
+portrait.addEventListener('load', () => syncAvatar());
+for (const button of document.querySelectorAll('.states [data-phase]')) {
+  button.addEventListener('click', () => change(button.dataset.phase));
+}
+document.getElementById('voice-button').addEventListener('click', () => change(['idle', 'attention'].includes(phase) ? 'listening' : 'idle'));
+document.getElementById('results-button').addEventListener('click', () => { document.getElementById('results').hidden = false; });
+document.getElementById('close-results').addEventListener('click', () => { document.getElementById('results').hidden = true; });
+toggleBtn.addEventListener('click', () => {
+  reading = !reading;
+  phone.classList.toggle('reading', reading);
+  toggleBtn.textContent = reading ? '陪伴视图 ⌄' : '展开阅读 ⌃';
+  syncAvatar();
+});
 change('idle');

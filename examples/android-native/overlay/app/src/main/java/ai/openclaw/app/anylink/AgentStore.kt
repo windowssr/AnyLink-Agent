@@ -27,6 +27,9 @@ internal interface AgentLedger {
   fun workerTasks(): List<JsonObject>
   fun saveNote(name: String, content: String)
   fun readNote(name: String): String?
+  fun enqueueMemoryOutbox(id: String, payload: JsonObject) {}
+  fun memoryOutbox(): List<Pair<String, JsonObject>> = emptyList()
+  fun removeMemoryOutbox(id: String) {}
 }
 private class LinkDatabase(context: Context, name: String) : SQLiteOpenHelper(context, name, null, 1) {
   override fun onCreate(db: SQLiteDatabase) {
@@ -59,6 +62,33 @@ internal class SqlAgentLedger(context: Context, connection: CloudConnection) : A
   override fun workerTasks(): List<JsonObject> = database.readableDatabase.query("records", arrayOf("value"), "kind=?", arrayOf("workertask"), null, null, "rowid DESC", "200").use { rows -> buildList { while (rows.moveToNext()) add(linkJson.parseToJsonElement(rows.getString(0)).jsonObject) } }
   override fun saveNote(name: String, content: String) = set("note", name, content)
   override fun readNote(name: String): String? = get("note", name)
+
+  @Synchronized override fun enqueueMemoryOutbox(id: String, payload: JsonObject) {
+    set("memory_outbox", id, payload.toString())
+    // Enforce 100-item FIFO cap.
+    val existing = database.readableDatabase.query("records", arrayOf("id"), "kind=?", arrayOf("memory_outbox"), null, null, "rowid ASC").use { rows ->
+      buildList { while (rows.moveToNext()) add(rows.getString(0)) }
+    }
+    if (existing.size > 100) {
+      for (dropId in existing.take(existing.size - 100)) {
+        database.writableDatabase.delete("records", "kind=? AND id=?", arrayOf("memory_outbox", dropId))
+      }
+    }
+  }
+
+  @Synchronized override fun memoryOutbox(): List<Pair<String, JsonObject>> =
+    database.readableDatabase.query("records", arrayOf("id", "value"), "kind=?", arrayOf("memory_outbox"), null, null, "rowid ASC", "100").use { rows ->
+      buildList {
+        while (rows.moveToNext()) {
+          val parsed = runCatching { linkJson.parseToJsonElement(rows.getString(1)).jsonObject }.getOrNull() ?: continue
+          add(rows.getString(0) to parsed)
+        }
+      }
+    }
+
+  @Synchronized override fun removeMemoryOutbox(id: String) {
+    database.writableDatabase.delete("records", "kind=? AND id=?", arrayOf("memory_outbox", id))
+  }
 }
 /** Token ciphertext stays in app-private SQLite; the encryption key never leaves Android Keystore. */
 internal class ConnectionStore(context: Context) {
