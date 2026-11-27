@@ -6,7 +6,7 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 
 ---
 
-## 一、核心特性与前端架构（`v0.9.1` 深海玻璃陪伴版）
+## 一、核心特性与前端架构（`v0.9.2` 深海玻璃陪伴版）
 
 - **全屏无遮挡 Live2D 舞台 + 磨砂玻璃双视图 + 原生 Markdown 渲染**：
   - 全屏深海浅蓝径向光晕与无裁剪 WebView 舞台：私有版构建自动把模型资产规范为纯 ASCII 路径（`dafeiyu.moc3`、`textures/texture_00.png` 等）避免 APK ZIP 编码问题，WebView 放行 `data:`/`blob:`、关闭移动端易引发黑屏的 MSAA、移除盖在 WebView 上的全屏遮挡层，并在「保活」页内置 **「大肥鱼形象引擎状态」** 诊断与一键重新加载按钮。
@@ -80,7 +80,7 @@ node examples/android-native/scripts/inspect-apk.mjs --private
 开启手机「USB 调试」连接电脑，使用项目内置 `adb` 安装（或直接把 APK 传到手机点击安装）：
 ```bash
 data/android-native/sdk/platform-tools/adb devices
-data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.9.1-private.apk
+data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.9.2-private.apk
 ```
 
 ---
