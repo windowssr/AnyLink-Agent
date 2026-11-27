@@ -11,7 +11,7 @@
 <p align="center">
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/lang-简体中文-0ea5e9?style=flat-square" alt="简体中文" /></a>
   <a href="protocol/README.md"><img src="https://img.shields.io/badge/Protocol-v3.2-22d3ee?style=flat-square" alt="Protocol v3.2" /></a>
-  <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.9.0"><img src="https://img.shields.io/badge/Release-v0.9.0-0284c7?style=flat-square" alt="Release v0.9.0" /></a>
+  <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.9.1"><img src="https://img.shields.io/badge/Release-v0.9.1-0284c7?style=flat-square" alt="Release v0.9.1" /></a>
   <a href="sdk-python/README.md"><img src="https://img.shields.io/badge/Python-anylink--agent-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python SDK" /></a>
   <a href="sdk/README.md"><img src="https://img.shields.io/badge/TypeScript-@anylink--agent%2Fsdk-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript SDK" /></a>
   <a href="mcp/README.md"><img src="https://img.shields.io/badge/MCP-@anylink--agent%2Fmcp-10b981?style=flat-square" alt="MCP Server" /></a>

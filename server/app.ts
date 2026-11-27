@@ -106,7 +106,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
     return (await idempotent(db, scope, key(req), body, fn)).value;
   }
 
-  app.get('/healthz', async () => ({ ok: true, service: 'anylink-agent', version: '0.9.0', protocol: '3.2', role: 'personal-agent-hub' }));
+  app.get('/healthz', async () => ({ ok: true, service: 'anylink-agent', version: '0.9.1', protocol: '3.2', role: 'personal-agent-hub' }));
   app.get('/readyz', async (_req, reply) => {
     let database = false;
     try { await db.query('SELECT 1'); database = true; } catch {}
@@ -147,7 +147,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
   });
 
   app.get('/v1/status', async () => ({
-    version: '0.9.0',
+    version: '0.9.1',
     protocol: '3.2',
     assistant: 'AnyLink',
     default_model: config.defaultModel,

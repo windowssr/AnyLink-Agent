@@ -1,6 +1,6 @@
 {
   "name": "@anylink-agent/mcp",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Zero-code MCP server bridging Claude Code, Cursor, Codex, and OpenClaw to an AnyLink Protocol v3.2 Personal Agent Network",
   "type": "module",
   "license": "MIT",

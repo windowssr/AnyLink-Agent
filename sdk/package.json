@@ -1,6 +1,6 @@
 {
   "name": "@anylink-agent/sdk",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Harness-independent Protocol v3.2 SDK for Personal Agent Networks (Cloud Memory Brain, Multi-Model Gateway, resilient WebSocket bus, interactive tasks & artifacts)",
   "type": "module",
   "license": "MIT",

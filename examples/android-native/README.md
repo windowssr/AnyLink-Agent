@@ -76,7 +76,7 @@ node examples/android-native/scripts/inspect-apk.mjs --private
 开启手机「USB 调试」连接电脑，使用项目内置 `adb` 安装（或直接把 APK 传到手机点击安装）：
 ```bash
 data/android-native/sdk/platform-tools/adb devices
-data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.9.0-private.apk
+data/android-native/sdk/platform-tools/adb install -r artifacts/android-native/AnyLink-Android-0.9.1-private.apk
 ```
 
 ---
