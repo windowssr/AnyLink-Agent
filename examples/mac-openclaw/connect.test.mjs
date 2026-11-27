@@ -68,3 +68,25 @@ test('join mode adopts a legacy device token install_id before connecting agents
  assert.equal(connection.device_id,deviceId);assert.equal(connection.install_id.startsWith('mac-'),true);
  assert.equal(fs.readFileSync(profileFile,'utf8'),profile,'rejoin keeps the layered OpenClaw profile');
 });
+test('rejoin to a new server URL updates OpenClaw baseUrl and matching journal bindings without losing settings',{skip:process.platform!=='darwin'},async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'anylink-mac-rebind-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ fs.mkdirSync(path.join(root,'examples/mac-openclaw'),{recursive:true});fs.mkdirSync(path.join(root,'sdk/src'),{recursive:true});fs.mkdirSync(path.join(root,'secrets'),{recursive:true});fs.mkdirSync(path.join(root,'data/mac/openclaw'),{recursive:true});fs.mkdirSync(path.join(root,'data/mac/link'),{recursive:true});
+ for(const name of ['connect.mjs','configure.mjs'])fs.copyFileSync('examples/mac-openclaw/'+name,path.join(root,'examples/mac-openclaw',name));fs.copyFileSync('sdk/src/client.mjs',path.join(root,'sdk/src/client.mjs'));
+ const deviceId='00000000-0000-4000-8000-000000000030',mainId='00000000-0000-4000-8000-000000000031',workerId='00000000-0000-4000-8000-000000000032';
+ fs.writeFileSync(path.join(root,'secrets/mac-connection.json'),JSON.stringify({server:'http://127.0.0.1:3181',ssh_host:'ywc',install_id:'mac-rebind-test-001',device_id:deviceId,agent_id:mainId,token:'ak_old_main',worker:{agent_id:workerId,token:'ak_old_worker'}}));
+ fs.writeFileSync(path.join(root,'data/mac/openclaw/openclaw.json'),JSON.stringify({tools:{fs:{workspaceOnly:false}},models:{providers:{anylink:{baseUrl:'http://127.0.0.1:3181/model/v1'}}}}));
+ fs.writeFileSync(path.join(root,'data/mac/link',`executions-${mainId}.jsonl`),JSON.stringify({type:'binding',server:'http://127.0.0.1:3181/',device_id:deviceId,agent_id:mainId})+'\n'+JSON.stringify({type:'exec',task_id:'t1',state:'reported',result:{state:'succeeded'}})+'\n');
+ const server=createServer((req,res)=>{
+  res.setHeader('Content-Type','application/json');let body='';req.on('data',b=>body+=b);req.on('end',()=>{
+   if(req.method==='POST'&&req.url==='/edge/v1/connect'){const input=JSON.parse(body);const id=input.agent.key==='mac-openclaw'?mainId:workerId;res.statusCode=201;res.end(JSON.stringify({device_id:deviceId,agent_id:id,credential_id:'c',token:'ak_new_'+input.agent.key}));return;}
+   if(req.method==='GET'&&req.url==='/edge/v1/identity'){res.end(JSON.stringify({device:{id:deviceId},agent:{id:req.headers.authorization.includes('openclaw')?mainId:workerId}}));return;}
+   res.statusCode=404;res.end('{}');});});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>server.close());
+ const url='http://127.0.0.1:'+server.address().port,keyFile=path.join(root,'join-key');fs.writeFileSync(keyFile,'j'.repeat(32)+'\n',{mode:0o600});
+ const run=await new Promise((resolve,reject)=>{const p=spawn(process.execPath,[path.join(root,'examples/mac-openclaw/connect.mjs'),'--server',url,'--join-key-file',keyFile]);let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);p.on('error',reject);p.on('close',code=>resolve({code,output}));});
+ assert.equal(run.code,0,run.output);
+ const conn=JSON.parse(fs.readFileSync(path.join(root,'secrets/mac-connection.json'),'utf8'));assert.equal(conn.server,url);assert.equal(conn.ssh_host,null);
+ const oc=JSON.parse(fs.readFileSync(path.join(root,'data/mac/openclaw/openclaw.json'),'utf8'));assert.equal(oc.models.providers.anylink.baseUrl,url+'/model/v1');assert.equal(oc.tools.fs.workspaceOnly,false);
+ const jLines=fs.readFileSync(path.join(root,'data/mac/link',`executions-${mainId}.jsonl`),'utf8').trim().split('\n').map(l=>JSON.parse(l));
+ assert.equal(jLines[0].server,url+'/');assert.equal(jLines[1].task_id,'t1');
+});

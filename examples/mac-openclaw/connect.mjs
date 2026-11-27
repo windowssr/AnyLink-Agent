@@ -81,7 +81,44 @@ if (values['credential-file']) {
 if (existing) {
   fs.writeFileSync(paths.connection, JSON.stringify(connection, null, 2) + '\n', { mode: 0o600 });
   fs.chmodSync(paths.connection, 0o600);
-  console.log(JSON.stringify({ configured: true, rejoined: true, device_id: connection.device_id, device_slug: connection.device_slug ?? null, profile_preserved: true }));
+  const openclawFile = path.join(paths.state, 'openclaw.json');
+  if (fs.existsSync(openclawFile)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(openclawFile, 'utf8'));
+      const desired = `${connection.server}/model/v1`;
+      if (cfg?.models?.providers?.anylink?.baseUrl && cfg.models.providers.anylink.baseUrl !== desired) {
+        cfg.models.providers.anylink.baseUrl = desired;
+        fs.writeFileSync(openclawFile, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
+        fs.chmodSync(openclawFile, 0o600);
+      }
+    } catch {}
+  }
+  const linkDir = path.join(root, 'data/mac/link');
+  const canonicalServer = connection.server.replace(/\/$/, '') + '/';
+  for (const aid of [connection.agent_id, connection.worker?.agent_id].filter(Boolean)) {
+    const jf = path.join(linkDir, `executions-${aid}.jsonl`);
+    if (!fs.existsSync(jf)) continue;
+    try {
+      const lines = fs.readFileSync(jf, 'utf8').split('\n');
+      let changed = false;
+      const updated = lines.map(line => {
+        if (!line.trim()) return line;
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'binding' && entry.device_id === connection.device_id && (!entry.agent_id || entry.agent_id === aid) && entry.server !== canonicalServer) {
+            changed = true;
+            return JSON.stringify({ ...entry, server: canonicalServer });
+          }
+        } catch {}
+        return line;
+      });
+      if (changed) {
+        fs.writeFileSync(jf, updated.join('\n'), { mode: 0o600 });
+        fs.chmodSync(jf, 0o600);
+      }
+    } catch {}
+  }
+  console.log(JSON.stringify({ configured: true, rejoined: true, server: connection.server, ssh_host: connection.ssh_host ?? null, device_id: connection.device_id, device_slug: connection.device_slug ?? null, profile_preserved: true }));
 } else {
   configure(connection);
 }
