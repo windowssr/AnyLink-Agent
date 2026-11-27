@@ -86,20 +86,14 @@ function uniqueFileInDir(dir, rawName) {
   return target;
 }
 
-/** Handles incoming cross-device `file.deliver` tasks on Mac: downloads artifact, verifies SHA-256,
- * and saves cleanly to ~/Downloads/AnyLink (or an authorized destination_dir). */
+/** Handles incoming cross-device `file.deliver` tasks on Mac: streams artifact directly to disk, verifies SHA-256,
+ * and saves cleanly to ~/Downloads/AnyLink (or an authorized destination_dir) with O(1) RAM. */
 export function createFileDeliverHandler({ client, defaultDir = path.join(os.homedir(), 'Downloads', 'AnyLink'), policy } = {}) {
   return {
-    description: 'Receive a file uploaded via /edge/v1/artifacts and save it to Mac ~/Downloads/AnyLink',
+    description: 'Receive a file uploaded via /edge/v1/artifacts (up to 200 MiB streaming) and save it to Mac ~/Downloads/AnyLink',
     async execute(input, { signal } = {}) {
       const artifactId = String(input?.artifact_id ?? '').trim();
       if (!artifactId) throw new TaskFailure('BAD_TOOL_INPUT', 'file.deliver 需要 artifact_id');
-      const downloaded = await client.downloadArtifact(artifactId, { signal });
-      const actualSha = createHash('sha256').update(downloaded.data).digest('hex');
-      const expectedSha = input?.sha256 || downloaded.sha256;
-      if (expectedSha && expectedSha !== actualSha) {
-        throw new TaskFailure('SHA256_MISMATCH', '文件下载校验和不一致，已拒绝保存');
-      }
       let targetDir = defaultDir;
       if (typeof input?.destination_dir === 'string' && input.destination_dir.trim()) {
         const rawDir = input.destination_dir.trim();
@@ -109,6 +103,26 @@ export function createFileDeliverHandler({ client, defaultDir = path.join(os.hom
         if (allowed) targetDir = expanded;
       }
       fs.mkdirSync(targetDir, { recursive: true });
+      if (typeof client.downloadArtifactToFile === 'function') {
+        const metaName = input?.filename || (await client.artifactMeta?.(artifactId, { signal }).catch(() => null))?.filename || 'attachment.bin';
+        const finalPath = uniqueFileInDir(targetDir, metaName);
+        const dl = await client.downloadArtifactToFile(artifactId, finalPath, { expectedSha256: input?.sha256, signal });
+        const finalName = path.basename(dl.path);
+        return {
+          saved_path: dl.path,
+          filename: finalName,
+          content_type: input?.content_type || dl.contentType,
+          size_bytes: dl.sizeBytes,
+          sha256: dl.sha256,
+          reply: `已收到并保存文件《${finalName}》到 ${dl.path}`,
+        };
+      }
+      const downloaded = await client.downloadArtifact(artifactId, { signal });
+      const actualSha = createHash('sha256').update(downloaded.data).digest('hex');
+      const expectedSha = input?.sha256 || downloaded.sha256;
+      if (expectedSha && expectedSha !== actualSha) {
+        throw new TaskFailure('SHA256_MISMATCH', '文件下载校验和不一致，已拒绝保存');
+      }
       const finalPath = uniqueFileInDir(targetDir, input?.filename || downloaded.filename);
       fs.writeFileSync(finalPath, downloaded.data, { mode: 0o644 });
       const finalName = path.basename(finalPath);

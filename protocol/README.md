@@ -73,7 +73,7 @@ Identity hierarchy: `Owner → Device → Agent`.
   - **Fencing Token**: Workers echo `lease_token` on heartbeat, progress, suspend, and result; stale workers receive `409 LEASE_FENCED` and must abort locally.
   - **Unified Reaper**: Actively pushes `task.completed` for queued TTL expiry (`expired`), waiting timeout (`expired`), idempotent lease timeout (`queued` retry up to `max_retries`), and non-idempotent lease / hard execution timeout (`unknown`).
 - **Event Cursor Catch-up (`GET /edge/v1/events?after_seq=<n>&limit=100`)**: Paginated replay of missed events for the authenticated agent.
-- **Binary Artifacts (`POST /edge/v1/artifacts`, `GET /edge/v1/artifacts/:id`, `GET /edge/v1/artifacts/:id/meta`, `DELETE /edge/v1/artifacts/:id`)**: Upload raw binary or base64 JSON payloads (default 10 MiB max per artifact, 200 MiB owner quota, 1h TTL, SHA-256 checksum) and pass `artifact_id` inside task `input`/`output`.
+- **Binary Artifacts (`POST /edge/v1/artifacts`, `GET /edge/v1/artifacts/:id`, `GET /edge/v1/artifacts/:id/meta`, `DELETE /edge/v1/artifacts/:id`)**: Stream raw binary payloads directly to disk with O(1) RAM (or base64 JSON for small payloads); default 200 MiB max per artifact (configurable up to 1 GiB), 2 GiB owner quota, 1h TTL, SHA-256 checksum; pass `artifact_id` inside task `input`/`output`.
 
 ### WebSocket Frame Schema (`GET /edge/v1/ws?resume_after_seq=<n>`)
 Connect with `Authorization: Bearer <token>` (or send `{ "type": "auth", "token": "<token>", "resume_after_seq": <n> }` as the first frame within 5s). On connect, the server replays missed `edge_events` with `seq > resume_after_seq` and re-pushes any unacknowledged `task.completed` receipts.

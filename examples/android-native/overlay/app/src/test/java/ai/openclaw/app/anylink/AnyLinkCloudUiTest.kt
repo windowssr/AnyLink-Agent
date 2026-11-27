@@ -163,7 +163,7 @@ class AnyLinkCloudUiTest {
     val payload = "hello-from-mac-pdf".toByteArray()
     val saved = AnyLinkFiles.saveReceivedFile(app, payload, "../evil/周报.pdf", "application/pdf")
     assertEquals("周报.pdf", saved.filename)
-    assertEquals(payload.size, saved.sizeBytes)
+    assertEquals(payload.size.toLong(), saved.sizeBytes)
     assertNotNull(saved.uri)
 
     var pickedClicked = false

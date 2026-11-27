@@ -78,7 +78,7 @@
 - **弱网加固的 WebSocket 实时总线**：应用层双向心跳与僵尸连接剔除、慢消费者背压保护、单调递增 `edge_events` 事件序列游标（`resume_after_seq` 断线续传零丢帧），以及回执送达确认（`task.receipt_ack` / `POST /edge/v1/tasks/:id/ack`），未确认的跨设备回执在重连后自动补发。
 - **防脑裂 Fencing Token 与可靠超时回报**：每次原子 `claim` 签发递增 `attempt` 与随机 `lease_token`，失联复活的旧 Worker 回传会被 `409 LEASE_FENCED` 拦截；声明 `idempotent: true` 的只读任务租约超时可自动安全重试，带副作用任务绝不盲目重跑；统一 Reaper 主动推送排队过期（`expired`）、等待追问/审批超时与硬执行超时（`max_execution_seconds`）。
 - **队列治理与循环调用防护**：支持任务优先级 `priority`（0–100）、要求在线快速失败 `require_online`（`409 TARGET_OFFLINE`）、资源级并发互斥键 `concurrency_key`、队列水位限流（`429 QUEUE_FULL`），以及 `trace_id` / `parent_task_id` / `call_depth` 防无限互相调用（`409 CALL_DEPTH_EXCEEDED`）。
-- **人机协同挂起与大附件直传**：Worker 可通过 `/suspend` 挂起为 `awaiting_input`（追问）或 `awaiting_approval`（高危审批）并暂停租约扣减，主人回复 `/reply` 后无缝恢复；文件/截图等大载荷通过 `POST/GET /edge/v1/artifacts`（SHA-256 校验、单文件 10 MiB / 总配额 200 MiB、到期自动清理）直传。
+- **人机协同挂起与大附件流式直传**：Worker 可通过 `/suspend` 挂起为 `awaiting_input`（追问）或 `awaiting_approval`（高危审批）并暂停租约扣减，主人回复 `/reply` 后无缝恢复；视频、文档、压缩包等大文件通过 `POST/GET /edge/v1/artifacts` 零内存流式直传与独立磁盘卷存储（SHA-256 校验、默认单文件 200 MiB / 总配额 2 GiB，可调至 1 GiB、到期自动清理）。
 - **SSE 断线脱钩续接与离线 Outbox**：对话流携带 `X-AnyLink-Detach-On-Disconnect: on` 后，即使手机切网断开，云端也会继续跑完生成并缓存快照，重连通过 `GET /model/v1/requests/:id` 补拉完整结果；离线产生的记忆先入本地 Outbox 队列，恢复联网自动补发。
 
 ---

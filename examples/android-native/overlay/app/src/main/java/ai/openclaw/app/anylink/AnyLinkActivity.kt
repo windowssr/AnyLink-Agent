@@ -99,7 +99,7 @@ internal suspend fun linkWorkerLoop(
   ledger: AgentLedger,
   info: () -> JsonObject,
   say: suspend (String, String) -> Unit,
-  receiveFile: (suspend (DownloadedArtifact, JsonObject, String) -> SavedFile)? = null,
+  receiveFile: (suspend (String, JsonObject, String) -> Pair<SavedFile, String>)? = null,
   wakeup: Channel<Unit>? = null,
   isWsOnline: () -> Boolean = { false },
 ) {
@@ -220,7 +220,7 @@ private suspend fun executeWorkerTask(
   transport: LinkTransport,
   info: () -> JsonObject,
   say: suspend (String, String) -> Unit,
-  receiveFile: (suspend (DownloadedArtifact, JsonObject, String) -> SavedFile)?,
+  receiveFile: (suspend (String, JsonObject, String) -> Pair<SavedFile, String>)?,
   deviceName: suspend (String) -> String,
 ): JsonObject {
   val input = task["input"]?.jsonObject ?: JsonObject(emptyMap())
@@ -229,14 +229,9 @@ private suspend fun executeWorkerTask(
     val artifactId = input.text("artifact_id")
     if (artifactId.isBlank()) throw LinkFailure("BAD_TOOL_INPUT", "file.deliver 需要 artifact_id")
     val receiver = receiveFile ?: throw LinkFailure("FILE_RECEIVER_UNAVAILABLE", "当前环境无法保存附件")
-    val downloaded = transport.downloadArtifact(artifactId)
-    val expectedSha = input.text("sha256")
-    if (expectedSha.isNotBlank() && !expectedSha.equals(downloaded.sha256, ignoreCase = true)) {
-      throw LinkFailure("SHA256_MISMATCH", "收到的文件校验和不一致，未保存")
-    }
     val source = task["source_device_id"]?.jsonPrimitive?.contentOrNull
     val sourceName = if (source.isNullOrBlank()) "其他设备" else deviceName(source)
-    val saved = receiver(downloaded, input, sourceName)
+    val (saved, actualSha) = receiver(artifactId, input, sourceName)
     return jsonObject(
       "state" to str("succeeded"),
       "output" to jsonObject(
@@ -244,7 +239,7 @@ private suspend fun executeWorkerTask(
         "filename" to str(saved.filename),
         "content_type" to str(saved.contentType),
         "size_bytes" to JsonPrimitive(saved.sizeBytes),
-        "sha256" to str(downloaded.sha256),
+        "sha256" to str(actualSha),
         "reply" to str("手机已收到并保存文件《${saved.filename}》到 ${saved.displayPath}"),
       ),
     )

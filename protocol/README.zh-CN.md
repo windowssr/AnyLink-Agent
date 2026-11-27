@@ -51,5 +51,5 @@ AnyLink 是面向**个人 Agent 网络（Personal Agent Network）**的引擎无
   - Worker 可通过 `POST /edge/v1/tasks/:id/suspend`（或 WS `task.suspend`）进入 `awaiting_input` / `awaiting_approval` 并暂停租约倒计时；发起方通过 `POST /edge/v1/tasks/:id/reply`（或 WS `task.reply`）恢复执行。
 - **事件游标与回执 ACK**：
   - `GET /edge/v1/ws?resume_after_seq=<n>` 与 `GET /edge/v1/events?after_seq=<n>` 支持按单调序列号无漏重放；发起方收到 `task.completed` 后须回复 `task.receipt_ack`（或 `POST /edge/v1/tasks/:id/ack`），未确认的回执将在下次重连时自动补发。
-- **二进制附件直传（`/edge/v1/artifacts`）**：
-  - `POST /edge/v1/artifacts`、`GET /edge/v1/artifacts/:id`、`GET /edge/v1/artifacts/:id/meta`、`DELETE /edge/v1/artifacts/:id` 支持单文件 ≤10 MiB、总配额 200 MiB、SHA-256 校验与 TTL 自动清理，任务载荷只需传递 `artifact_id`。
+- **二进制附件流式直传（`/edge/v1/artifacts`）**：
+  - `POST /edge/v1/artifacts`、`GET /edge/v1/artifacts/:id`、`GET /edge/v1/artifacts/:id/meta`、`DELETE /edge/v1/artifacts/:id` 采用零内存流式读写与独立磁盘卷存储，默认单文件 ≤200 MiB（环境变量可调至 1 GiB）、总配额 2 GiB、SHA-256 校验与 TTL 自动清理，任务载荷只需传递 `artifact_id`。

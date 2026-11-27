@@ -19,7 +19,14 @@ async function fixture(run,{routeFileMissing=false,onRequest}={}){
   if(!routeFileMissing)await writeFile(androidFile,JSON.stringify({server:'http://fixture',token:'ak_fixture_android',device_id:ANDROID}));
   const original=globalThis.fetch,hooks={},requests=[];let factory;
   globalThis.fetch=async(url,options)=>{
-    const entry={path:new URL(url).pathname,method:options.method,token:options.headers.Authorization,headers:options.headers,body:options.body===undefined?undefined:JSON.parse(options.body)};
+    let parsedBody;
+    if(options.body===undefined)parsedBody=undefined;
+    else if(typeof options.body==='string')parsedBody=JSON.parse(options.body);
+    else if(options.body&&typeof options.body[Symbol.asyncIterator]==='function'){
+      const chunks=[];for await(const c of options.body)chunks.push(Buffer.isBuffer(c)?c:Buffer.from(c));
+      parsedBody=Buffer.concat(chunks);
+    }else parsedBody=options.body;
+    const entry={path:new URL(url).pathname,method:options.method,token:options.headers.Authorization,headers:options.headers,body:parsedBody};
     requests.push(entry);
     const override=await onRequest?.(entry);if(override!==undefined)return override;
     if(entry.path==='/edge/v1/memory/assemble')return Response.json({error:{code:'NOT_FOUND'}},{status:404});
@@ -272,7 +279,7 @@ test('anylink_file_send uploads local file and dispatches file.deliver to Androi
   const payload = Buffer.from('你好，来自 Mac 的测试文件！', 'utf8');
   const sha = createHash('sha256').update(payload).digest('hex');
   writeFileSync(src, payload);
-  let uploadedBody = null, taskBody = null;
+  let uploadedBody = null, uploadedHeaders = null, taskBody = null;
   try {
     await fixture(async({tools})=>{
       const macTools = tools(macContext);
@@ -280,8 +287,9 @@ test('anylink_file_send uploads local file and dispatches file.deliver to Androi
       assert.equal(sent.isError, undefined, JSON.stringify(sent));
       assert.equal(sent.details.sent, true);
       assert.equal(sent.details.artifact_id, '11111111-1111-4111-8111-111111111111');
-      assert.equal(uploadedBody.filename, 'hello.txt');
-      assert.equal(Buffer.from(uploadedBody.data_base64, 'base64').toString('utf8'), '你好，来自 Mac 的测试文件！');
+      assert.equal(decodeURIComponent(uploadedHeaders['X-AnyLink-Filename']), 'hello.txt');
+      assert.equal(uploadedHeaders['X-AnyLink-Content-Type'], 'text/plain');
+      assert.equal(Buffer.from(uploadedBody).toString('utf8'), '你好，来自 Mac 的测试文件！');
       assert.equal(taskBody.capability, 'file.deliver');
       assert.equal(taskBody.target.agent_id, '22222222-2222-4222-8222-222222222222');
       assert.equal(taskBody.input.artifact_id, '11111111-1111-4111-8111-111111111111');
@@ -295,7 +303,8 @@ test('anylink_file_send uploads local file and dispatches file.deliver to Androi
       onRequest: entry => {
         if (entry.method === 'POST' && entry.path === '/edge/v1/artifacts') {
           uploadedBody = entry.body;
-          return Response.json({ id: '11111111-1111-4111-8111-111111111111', filename: entry.body.filename, content_type: entry.body.content_type, size_bytes: payload.length, sha256: sha }, { status: 201 });
+          uploadedHeaders = entry.headers;
+          return Response.json({ id: '11111111-1111-4111-8111-111111111111', filename: decodeURIComponent(entry.headers['X-AnyLink-Filename']), content_type: entry.headers['X-AnyLink-Content-Type'], size_bytes: payload.length, sha256: sha }, { status: 201 });
         }
         if (entry.method === 'GET' && entry.path === '/edge/v1/directory') {
           return Response.json({ items: [{ device: { id: '33333333-3333-4333-8333-333333333333', name: 'Android', platform: 'android' }, agents: [{ id: '22222222-2222-4222-8222-222222222222', ws_online: true, online: true }] }] });

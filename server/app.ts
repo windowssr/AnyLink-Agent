@@ -62,7 +62,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
     maxQueuedGlobal: config.maxQueuedGlobal,
     maxCallDepth: config.maxCallDepth,
     onReapTick: async () => {
-      await Promise.all([wsHub.pruneOldEvents(), pruneExpiredArtifacts(db), pruneModelSnapshots(db)]);
+      await Promise.all([wsHub.pruneOldEvents(), pruneExpiredArtifacts(db, config.artifactDir), pruneModelSnapshots(db)]);
     },
   });
   wsHub.setTaskDelegate(linkService);

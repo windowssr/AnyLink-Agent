@@ -104,9 +104,10 @@ export function loadConfig() {
     maxQueuedPerAgent: z.number().int().min(1).max(5000).default(50),
     maxQueuedGlobal: z.number().int().min(1).max(50000).default(500),
     maxCallDepth: z.number().int().min(1).max(20).default(5),
-    artifactMaxBytes: z.number().int().min(1024).max(50 * 1024 * 1024).default(10 * 1024 * 1024),
-    artifactQuotaBytes: z.number().int().min(1024).max(1024 * 1024 * 1024).default(200 * 1024 * 1024),
+    artifactMaxBytes: z.number().int().min(1024).max(1024 * 1024 * 1024).default(200 * 1024 * 1024),
+    artifactQuotaBytes: z.number().int().min(1024).max(20 * 1024 * 1024 * 1024).default(2 * 1024 * 1024 * 1024),
     artifactDefaultTtlSeconds: z.number().int().min(60).max(86400).default(3600),
+    artifactDir: z.string().optional(),
   }).parse({
     databaseUrl: secret('DATABASE_URL'),
     ownerToken: secret('OWNER_TOKEN'),
@@ -143,9 +144,10 @@ export function loadConfig() {
     maxQueuedPerAgent: process.env.ANYLINK_MAX_QUEUED_PER_AGENT ? Number(process.env.ANYLINK_MAX_QUEUED_PER_AGENT) : 50,
     maxQueuedGlobal: process.env.ANYLINK_MAX_QUEUED_GLOBAL ? Number(process.env.ANYLINK_MAX_QUEUED_GLOBAL) : 500,
     maxCallDepth: process.env.ANYLINK_MAX_CALL_DEPTH ? Number(process.env.ANYLINK_MAX_CALL_DEPTH) : 5,
-    artifactMaxBytes: process.env.ANYLINK_ARTIFACT_MAX_BYTES ? Number(process.env.ANYLINK_ARTIFACT_MAX_BYTES) : 10 * 1024 * 1024,
-    artifactQuotaBytes: process.env.ANYLINK_ARTIFACT_QUOTA_BYTES ? Number(process.env.ANYLINK_ARTIFACT_QUOTA_BYTES) : 200 * 1024 * 1024,
+    artifactMaxBytes: process.env.ANYLINK_ARTIFACT_MAX_BYTES ? Number(process.env.ANYLINK_ARTIFACT_MAX_BYTES) : 200 * 1024 * 1024,
+    artifactQuotaBytes: process.env.ANYLINK_ARTIFACT_QUOTA_BYTES ? Number(process.env.ANYLINK_ARTIFACT_QUOTA_BYTES) : 2 * 1024 * 1024 * 1024,
     artifactDefaultTtlSeconds: process.env.ANYLINK_ARTIFACT_TTL_SECONDS ? Number(process.env.ANYLINK_ARTIFACT_TTL_SECONDS) : 3600,
+    artifactDir: process.env.ANYLINK_ARTIFACT_DIR?.trim() ?? '',
   });
 }
 

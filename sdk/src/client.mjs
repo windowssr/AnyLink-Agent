@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
 
 export class AnyLinkError extends Error {
   constructor(message, { code = 'ANYLINK_ERROR', status = 0, requestId, idempotencyKey, submissionUnknown = false, cause } = {}) {
@@ -371,17 +373,19 @@ export class AnyLinkClient {
     return sock.connect(options);
   }
 
-  async #request(method, reqPath, body, { idempotencyKey, signal, raw = false, headers = {}, safeRetry = false } = {}) {
+  async #request(method, reqPath, body, { idempotencyKey, signal, raw = false, headers = {}, safeRetry = false, timeoutMs } = {}) {
     const writing = !['GET', 'HEAD'].includes(method);
     const key = writing && idempotencyKey !== false ? (idempotencyKey ?? crypto.randomUUID()) : undefined;
     const retryable = !writing || safeRetry;
     const maxAttempts = retryable ? 3 : 1;
+    const reqTimeout = timeoutMs ?? this.#timeout;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const requestSignal = AbortSignal.any([AbortSignal.timeout(this.#timeout), ...(signal ? [signal] : [])]);
+      const requestSignal = AbortSignal.any([AbortSignal.timeout(reqTimeout), ...(signal ? [signal] : [])]);
       let response;
       try {
-        const isRawBody = body instanceof Uint8Array || Buffer.isBuffer(body);
+        const isStream = body && (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream);
+        const isRawBody = isStream || body instanceof Uint8Array || Buffer.isBuffer(body);
         response = await this.#fetch(new URL(reqPath, this.#base), {
           method,
           redirect: 'error',
@@ -393,6 +397,7 @@ export class AnyLinkClient {
             ...headers,
           },
           ...(body !== undefined ? { body: isRawBody ? body : JSON.stringify(body) } : {}),
+          ...(isStream ? { duplex: 'half' } : {}),
         });
       } catch (cause) {
         if (retryable && attempt + 1 < maxAttempts && !signal?.aborted) {
@@ -454,15 +459,23 @@ export class AnyLinkClient {
   updateMemory(id, revision, patch, options) { return this.#request('PATCH', `edge/v1/memories/${encodeURIComponent(id)}`, { ...patch, expected_revision: revision }, options); }
   deleteMemory(id, revision, options) { return this.#request('DELETE', `edge/v1/memories/${encodeURIComponent(id)}`, undefined, { ...options, headers: { 'If-Match': String(revision) } }); }
 
-  // Binary Artifacts (Protocol v3.2)
-  uploadArtifact({ data, filename = 'attachment.bin', contentType = 'application/octet-stream', taskId, ttlSeconds }, options = {}) {
-    const buf = Buffer.isBuffer(data) ? data : (data instanceof Uint8Array ? Buffer.from(data) : Buffer.from(String(data)));
-    return this.#request('POST', 'edge/v1/artifacts', buf, {
+  // Binary Artifacts (Protocol v3.2 — supports streaming up to 200+ MiB with O(1) RAM)
+  uploadArtifact({ data, filename = 'attachment.bin', contentType = 'application/octet-stream', taskId, ttlSeconds, sizeBytes }, options = {}) {
+    const isNodeReadable = data && typeof data.pipe === 'function' && typeof data[Symbol.asyncIterator] === 'function';
+    const isWebStream = data && typeof ReadableStream !== 'undefined' && data instanceof ReadableStream;
+    const payload = isWebStream ? data
+      : isNodeReadable ? Readable.toWeb(data)
+      : (Buffer.isBuffer(data) ? data : (data instanceof Uint8Array ? Buffer.from(data) : Buffer.from(String(data))));
+    const declaredSize = sizeBytes ?? (Buffer.isBuffer(payload) || payload instanceof Uint8Array ? payload.byteLength : undefined);
+    return this.#request('POST', 'edge/v1/artifacts', payload, {
       idempotencyKey: false,
+      timeoutMs: 600_000,
       ...options,
       headers: {
-        'Content-Type': contentType,
+        'Content-Type': 'application/octet-stream',
+        'X-AnyLink-Content-Type': contentType,
         'X-AnyLink-Filename': encodeURIComponent(filename),
+        ...(declaredSize !== undefined ? { 'Content-Length': String(declaredSize) } : {}),
         ...(taskId ? { 'X-AnyLink-Task-Id': taskId } : {}),
         ...(ttlSeconds !== undefined ? { 'X-AnyLink-TTL': String(ttlSeconds) } : {}),
         ...(options.headers ?? {}),
@@ -471,7 +484,7 @@ export class AnyLinkClient {
   }
   artifactMeta(id, options) { return this.#request('GET', `edge/v1/artifacts/${encodeURIComponent(id)}/meta`, undefined, options); }
   async downloadArtifact(id, options) {
-    const res = await this.#request('GET', `edge/v1/artifacts/${encodeURIComponent(id)}`, undefined, { ...options, raw: true });
+    const res = await this.#request('GET', `edge/v1/artifacts/${encodeURIComponent(id)}`, undefined, { timeoutMs: 600_000, ...options, raw: true });
     const data = Buffer.from(await res.arrayBuffer());
     return {
       data,
@@ -479,6 +492,40 @@ export class AnyLinkClient {
       contentType: res.headers.get('content-type') ?? 'application/octet-stream',
       sha256: res.headers.get('x-anylink-sha256') ?? undefined,
     };
+  }
+  /** Stream an artifact directly to disk with incremental SHA-256 verification (O(1) RAM). */
+  async downloadArtifactToFile(id, targetDirOrPath, { expectedSha256, ...options } = {}) {
+    const res = await this.#request('GET', `edge/v1/artifacts/${encodeURIComponent(id)}`, undefined, { timeoutMs: 600_000, ...options, raw: true });
+    const filename = res.headers.get('x-anylink-filename') ? decodeURIComponent(res.headers.get('x-anylink-filename')) : 'attachment.bin';
+    const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+    const serverSha = res.headers.get('x-anylink-sha256') ?? undefined;
+    const isDir = fs.existsSync(targetDirOrPath) && fs.statSync(targetDirOrPath).isDirectory();
+    const outPath = isDir ? path.join(targetDirOrPath, path.basename(filename)) : targetDirOrPath;
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    const tmpPath = `${outPath}.part-${crypto.randomUUID().slice(0, 8)}`;
+    const hasher = createHash('sha256');
+    const out = fs.createWriteStream(tmpPath, { mode: 0o644 });
+    let sizeBytes = 0;
+    try {
+      if (res.body) {
+        for await (const rawChunk of res.body) {
+          const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+          sizeBytes += chunk.length;
+          hasher.update(chunk);
+          if (!out.write(chunk)) await new Promise((resolve, reject) => { out.once('drain', resolve); out.once('error', reject); });
+        }
+      }
+      await new Promise((resolve, reject) => { out.end(() => resolve()); out.once('error', reject); });
+      const actualSha = hasher.digest('hex');
+      const checkSha = expectedSha256 || serverSha;
+      if (checkSha && checkSha !== actualSha) throw new AnyLinkError('Artifact SHA-256 checksum mismatch', { code: 'SHA256_MISMATCH' });
+      fs.renameSync(tmpPath, outPath);
+      return { path: outPath, filename, contentType, sizeBytes, sha256: actualSha };
+    } catch (err) {
+      out.destroy();
+      try { fs.unlinkSync(tmpPath); } catch {}
+      throw err;
+    }
   }
   deleteArtifact(id, options) { return this.#request('DELETE', `edge/v1/artifacts/${encodeURIComponent(id)}`, undefined, { idempotencyKey: false, ...options }); }
 

@@ -29,6 +29,8 @@ services:
       - /opt/anylink-agent/secrets/model.env
     environment:
       NODE_OPTIONS: --max-old-space-size=160
+      ANYLINK_ARTIFACT_DIR: /data/artifacts
+    volumes: [/opt/anylink-agent/data/artifacts:/data/artifacts]
     ports: ['127.0.0.1:3180:3180']
     networks: [backend]
     depends_on:

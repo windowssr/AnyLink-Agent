@@ -215,14 +215,13 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     val note = text.trim()
     scope.launch {
       try {
-        voiceNotice.value = "正在上传《${picked.filename}》…"
-        val bytes = withContext(Dispatchers.IO) { AnyLinkFiles.readBytesBounded(app, picked.uri) }
+        voiceNotice.value = "正在流式上传《${picked.filename}》（${AnyLinkFiles.formatSize(picked.sizeBytes)}）…"
         val uploader = CloudClient(value)
-        val uploaded = uploader.uploadArtifact(bytes, picked.filename, picked.mimeType)
+        val uploaded = uploader.uploadArtifactStream(app, picked.uri, picked.filename, picked.mimeType, picked.sizeBytes)
         val artifactId = uploaded.text("id")
         val filename = uploaded.text("filename").ifBlank { picked.filename }
         val contentType = uploaded.text("content_type").ifBlank { picked.mimeType }
-        val sizeBytes = uploaded["size_bytes"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: bytes.size.toLong()
+        val sizeBytes = uploaded["size_bytes"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: picked.sizeBytes
         val sha256 = uploaded.text("sha256")
 
         if (note.isEmpty()) {
@@ -456,19 +455,18 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       ledger = ledger,
       info = { infoJson(value) },
       say = { text, source -> companionSay(text, source) },
-      receiveFile = { artifact, input, source -> receiveDeliveredFile(artifact, input, source) },
+      receiveFile = { artifactId, input, source -> receiveDeliveredFile(transport, artifactId, input, source) },
       wakeup = workerWakeup,
       isWsOnline = { wsOnline.value },
     )
   }
 
-  private suspend fun receiveDeliveredFile(artifact: DownloadedArtifact, input: JsonObject, source: String): SavedFile {
-    val preferredName = input.text("filename").ifBlank { artifact.filename }
-    val preferredMime = input.text("content_type").ifBlank { artifact.contentType }
+  private suspend fun receiveDeliveredFile(transport: LinkTransport, artifactId: String, input: JsonObject, source: String): Pair<SavedFile, String> {
+    val preferredName = input.text("filename")
+    val preferredMime = input.text("content_type")
+    val expectedSha = input.text("sha256")
     val note = input.text("note")
-    val saved = withContext(Dispatchers.IO) {
-      AnyLinkFiles.saveReceivedFile(app, artifact.bytes, preferredName, preferredMime)
-    }
+    val (saved, actualSha) = transport.downloadArtifactToStorage(app, artifactId, preferredName, preferredMime, expectedSha)
     val text = if (note.isNotBlank()) "来自 $source 的文件《${saved.filename}》：$note" else "已收到来自 $source 的文件《${saved.filename}》"
     voiceNotice.value = "已保存文件：${saved.filename}（${saved.displayPath}）"
     agent.value?.appendFileMessage(
@@ -478,18 +476,18 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       fileName = saved.filename,
       fileUri = saved.uri?.toString().orEmpty(),
       fileMime = saved.contentType,
-      fileSize = saved.sizeBytes.toLong(),
+      fileSize = saved.sizeBytes,
       fileLocation = saved.displayPath,
     )
     agent.value?.state?.update { it.copy(emotion = "happy", gesture = "wave", sequence = UUID.randomUUID().toString()) }
     AnyLinkCompanionService.notifyProactive(
       app,
       title = "大肥鱼收到来自 $source 的文件",
-      body = "《${saved.filename}》（${AnyLinkFiles.formatSize(saved.sizeBytes.toLong())}）已保存到手机「${saved.displayPath}」",
-      tag = "file:${artifact.sha256.take(12)}",
+      body = "《${saved.filename}》（${AnyLinkFiles.formatSize(saved.sizeBytes)}）已保存到手机「${saved.displayPath}」",
+      tag = "file:${actualSha.take(12)}",
     )
     speechPlayer?.enqueue("主人！${source}刚给你传过来一个文件叫${saved.filename}，我已经帮你存进下载里的 AnyLink 文件夹啦！", summarize = false, interrupt = false, forceRewrite = false)
-    return saved
+    return saved to actualSha
   }
 
   private fun companionSay(text: String, source: String) {

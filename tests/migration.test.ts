@@ -41,7 +41,7 @@ test('migration v3 to v4 backfills agents, moves capabilities and drops grants',
   assert.equal(task.source_agent_id,agent.id);assert.equal(task.target_device_id,deviceId);assert.equal(task.claimed_by_agent_id,agent.id);
   for(const table of ['link_grants','link_capabilities'])assert.equal((await db.query('SELECT to_regclass($1) AS t',[table])).rows[0].t,null,table+' dropped');
   assert.ok((await db.query("SELECT conname FROM pg_constraint WHERE conrelid='memories'::regclass AND contype='c'")).rows.length>=2,'named memory checks exist');
-  assert.equal((await db.query('SELECT max(version) AS v FROM schema_migrations')).rows[0].v,7,'migrated cleanly through v7');
+  assert.equal((await db.query('SELECT max(version) AS v FROM schema_migrations')).rows[0].v,8,'migrated cleanly through v8');
   assert.ok((await db.query("SELECT to_regclass('memory_episodes') AS t")).rows[0].t,'memory_episodes table created');
   assert.ok((await db.query("SELECT to_regclass('edge_events') AS t")).rows[0].t,'edge_events table created');
   assert.ok((await db.query("SELECT to_regclass('edge_artifacts') AS t")).rows[0].t,'edge_artifacts table created');

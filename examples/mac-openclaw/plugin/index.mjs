@@ -1,10 +1,11 @@
-import { readFileSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, statSync, createReadStream, createWriteStream, mkdirSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
-const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 200 * 1024 * 1024;
 const MIME_BY_EXT = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml',
   '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json', '.csv': 'text/csv', '.html': 'text/html',
@@ -62,9 +63,9 @@ const writeLinkSpecs = [
 ];
 
 const artifactLinkSpecs = [
-  { name: 'anylink_file_send', description: '把 Mac 本机文件（≤10 MiB，支持图片、PDF、文档、压缩包等任意格式）上传到云端附件并发送给手机或其他设备（capability: file.deliver）。省略目标参数时自动选择在线手机设备。', parameters: object({ path: str('Mac 本地文件路径（支持 ~/Desktop/... 或绝对路径）'), target_device_slug: str('目标设备唯一短别名，可选'), target_device_name: str('目标设备名称，可选'), target_agent_id: str('目标 Agent ID，可选'), target_device_id: str('目标设备 ID，可选'), target_agent_key: str('目标 Agent key，可选'), filename: str('可选自定义显示文件名'), note: str('可选附言或说明'), ttl_seconds: { type: 'integer', minimum: 60, maximum: 86400 } }, ['path']) },
-  { name: 'anylink_artifact_upload', description: '将 Mac 本机文件（≤10 MiB）上传到 AnyLink 云端临时附件存储，返回 artifact_id 与 sha256，供后续跨设备任务引用。', parameters: object({ path: str('Mac 本地文件路径'), filename: str('可选文件名'), content_type: str('可选 MIME 类型'), task_id: str('可选关联任务 ID'), ttl_seconds: { type: 'integer', minimum: 60, maximum: 86400 } }, ['path']) },
-  { name: 'anylink_artifact_download', description: '从 AnyLink 云端下载其他设备传来的附件（artifact_id），自动校验 SHA-256 并保存到本机 ~/Downloads/AnyLink/ 或指定路径。', parameters: object({ artifact_id: str('云端附件 UUID'), destination_path: str('可选保存目录或完整文件路径，省略默认保存到 ~/Downloads/AnyLink/') }, ['artifact_id']) },
+  { name: 'anylink_file_send', description: '把 Mac 本机文件（流式传输 ≤200 MiB，支持视频、图片、PDF、文档、压缩包等任意格式）上传到云端附件并发送给手机或其他设备（capability: file.deliver）。省略目标参数时自动选择在线手机设备。', parameters: object({ path: str('Mac 本地文件路径（支持 ~/Desktop/... 或绝对路径）'), target_device_slug: str('目标设备唯一短别名，可选'), target_device_name: str('目标设备名称，可选'), target_agent_id: str('目标 Agent ID，可选'), target_device_id: str('目标设备 ID，可选'), target_agent_key: str('目标 Agent key，可选'), filename: str('可选自定义显示文件名'), note: str('可选附言或说明'), ttl_seconds: { type: 'integer', minimum: 60, maximum: 86400 } }, ['path']) },
+  { name: 'anylink_artifact_upload', description: '将 Mac 本机文件（流式传输 ≤200 MiB）上传到 AnyLink 云端临时附件存储，返回 artifact_id 与 sha256，供后续跨设备任务引用。', parameters: object({ path: str('Mac 本地文件路径'), filename: str('可选文件名'), content_type: str('可选 MIME 类型'), task_id: str('可选关联任务 ID'), ttl_seconds: { type: 'integer', minimum: 60, maximum: 86400 } }, ['path']) },
+  { name: 'anylink_artifact_download', description: '从 AnyLink 云端流式下载其他设备传来的附件（artifact_id），自动校验 SHA-256 并保存到本机 ~/Downloads/AnyLink/ 或指定路径。', parameters: object({ artifact_id: str('云端附件 UUID'), destination_path: str('可选保存目录或完整文件路径，省略默认保存到 ~/Downloads/AnyLink/') }, ['artifact_id']) },
 ];
 
 const allLinkSpecs = [...readLinkSpecs, ...writeLinkSpecs, ...artifactLinkSpecs];
@@ -282,17 +283,29 @@ export default {
                 if (!existsSync(localPath)) return failure('FILE_NOT_FOUND', `本地文件不存在：${localPath}`);
                 const st = statSync(localPath);
                 if (!st.isFile()) return failure('NOT_A_FILE', `路径不是普通文件：${localPath}`);
-                if (st.size > MAX_ARTIFACT_BYTES) return failure('ARTIFACT_TOO_LARGE', `文件大小 ${(st.size / 1024 / 1024).toFixed(2)} MiB 超过 10 MiB 限制`);
-                const bytes = readFileSync(localPath);
+                if (st.size > MAX_ARTIFACT_BYTES) return failure('ARTIFACT_TOO_LARGE', `文件大小 ${(st.size / 1024 / 1024).toFixed(2)} MiB 超过 200 MiB 限制`);
                 const filename = sanitizeFilename(params.filename || path.basename(localPath));
                 const contentType = params.content_type || inferMime(filename);
-                const uploaded = await request(conn, '/edge/v1/artifacts', 'POST', {
-                  filename,
-                  content_type: contentType,
-                  data_base64: bytes.toString('base64'),
-                  ...(params.task_id ? { task_id: params.task_id } : {}),
-                  ...(params.ttl_seconds !== undefined ? { ttl_seconds: params.ttl_seconds } : {}),
-                }, {}, 60000);
+                const uploadResp = await fetch(conn.server + '/edge/v1/artifacts', {
+                  method: 'POST',
+                  signal: AbortSignal.timeout(600000),
+                  headers: {
+                    Authorization: `Bearer ${conn.token}`,
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Length': String(st.size),
+                    'X-AnyLink-Filename': encodeURIComponent(filename),
+                    'X-AnyLink-Content-Type': contentType,
+                    ...(params.task_id ? { 'X-AnyLink-Task-Id': params.task_id } : {}),
+                    ...(params.ttl_seconds !== undefined ? { 'X-AnyLink-TTL': String(params.ttl_seconds) } : {}),
+                  },
+                  body: Readable.toWeb(createReadStream(localPath)),
+                  duplex: 'half',
+                });
+                const uploaded = await uploadResp.json().catch(() => ({}));
+                if (!uploadResp.ok) {
+                  const errCode = /^[A-Z][A-Z0-9_]{0,63}$/.test(uploaded?.error?.code ?? '') ? uploaded.error.code : `HTTP_${uploadResp.status}`;
+                  return failure(errCode, uploaded?.error?.message || `上传附件失败：${errCode}`);
+                }
                 if (spec.name === 'anylink_artifact_upload') return result(uploaded);
 
                 let target = params.target_agent_id ? { agent_id: params.target_agent_id }
@@ -342,7 +355,7 @@ export default {
               if (spec.name === 'anylink_artifact_download') {
                 const resp = await fetch(conn.server + '/edge/v1/artifacts/' + encodeURIComponent(params.artifact_id), {
                   method: 'GET',
-                  signal: AbortSignal.timeout(60000),
+                  signal: AbortSignal.timeout(600000),
                   headers: { Authorization: `Bearer ${conn.token}` },
                 });
                 if (!resp.ok) {
@@ -350,10 +363,7 @@ export default {
                   try { const j = await resp.json(); if (j?.error?.code) errCode = j.error.code; } catch {}
                   return failure(errCode, `下载云端附件失败：${errCode}`);
                 }
-                const buf = Buffer.from(await resp.arrayBuffer());
                 const expectedSha = resp.headers.get('x-anylink-sha256');
-                const actualSha = createHash('sha256').update(buf).digest('hex');
-                if (expectedSha && expectedSha !== actualSha) return failure('SHA256_MISMATCH', '下载的文件校验和不一致，已拒绝保存');
                 const rawName = resp.headers.get('x-anylink-filename') ? decodeURIComponent(resp.headers.get('x-anylink-filename')) : 'attachment.bin';
                 const cleanName = sanitizeFilename(rawName);
                 const contentType = resp.headers.get('content-type') || inferMime(cleanName);
@@ -374,8 +384,32 @@ export default {
                   mkdirSync(defaultDir, { recursive: true });
                   outFile = uniqueTargetPath(defaultDir, cleanName);
                 }
-                writeFileSync(outFile, buf, { mode: 0o644 });
-                return result({ saved_path: outFile, filename: path.basename(outFile), content_type: contentType, size_bytes: buf.length, sha256: actualSha });
+                const tmpFile = `${outFile}.part-${randomUUID().slice(0, 8)}`;
+                const hasher = createHash('sha256');
+                const ws = createWriteStream(tmpFile, { mode: 0o644 });
+                let sizeBytes = 0;
+                try {
+                  if (resp.body) {
+                    for await (const rawChunk of resp.body) {
+                      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+                      sizeBytes += chunk.length;
+                      hasher.update(chunk);
+                      if (!ws.write(chunk)) await new Promise((resolve, reject) => { ws.once('drain', resolve); ws.once('error', reject); });
+                    }
+                  }
+                  await new Promise((resolve, reject) => { ws.end(() => resolve()); ws.once('error', reject); });
+                  const actualSha = hasher.digest('hex');
+                  if (expectedSha && expectedSha !== actualSha) {
+                    try { unlinkSync(tmpFile); } catch {}
+                    return failure('SHA256_MISMATCH', '下载的文件校验和不一致，已拒绝保存');
+                  }
+                  renameSync(tmpFile, outFile);
+                  return result({ saved_path: outFile, filename: path.basename(outFile), content_type: contentType, size_bytes: sizeBytes, sha256: actualSha });
+                } catch (err) {
+                  ws.destroy();
+                  try { unlinkSync(tmpFile); } catch {}
+                  throw err;
+                }
               }
               if (spec.name === 'anylink_link_directory') return result(await request(conn, '/edge/v1/directory'));
               if (spec.name === 'anylink_task_status') return result(await request(conn, '/edge/v1/tasks/' + encodeURIComponent(params.id)));

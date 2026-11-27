@@ -8,7 +8,8 @@ test -f "$release/release.env"
 test -f "$base/secrets/app.env"
 test -f "$base/secrets/model.env"
 test -f "$base/secrets/postgres.env"
-mkdir -p "$base/data/postgres" "$base/backups"
+mkdir -p "$base/data/postgres" "$base/data/artifacts" "$base/backups"
+chown 1000:1000 "$base/data/artifacts" 2>/dev/null || chmod 777 "$base/data/artifacts"
 compose=(docker compose --project-name anylink-agent --env-file "$release/release.env" -f "$release/compose.yaml")
 source "$release/release.env"
 python3 - "$release/manifest.json" "$APP_IMAGE" "$release/image-fingerprint.py" <<'PY'

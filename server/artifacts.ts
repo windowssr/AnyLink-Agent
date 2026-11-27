@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { basename } from 'node:path';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { rename, unlink } from 'node:fs/promises';
+import os from 'node:os';
+import path, { basename } from 'node:path';
+import type { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ApiError, type Db } from './db.js';
@@ -29,6 +33,11 @@ export const artifactMetaSchema = z.object({
   expires_at: z.string(),
 });
 
+function decodeHeaderFilename(raw: unknown): string {
+  const s = String(raw ?? 'attachment.bin');
+  try { return decodeURIComponent(s); } catch { return s; }
+}
+
 function sanitizeFilename(raw: unknown): string {
   const cleaned = basename(String(raw ?? 'attachment.bin').replaceAll('\\', '/')).replace(/[\x00-\x1f"<>|:*?]/g, '_').trim();
   return (cleaned || 'attachment.bin').slice(0, 200);
@@ -39,72 +48,164 @@ function sanitizeContentType(raw: unknown): string {
   return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(base) ? base : 'application/octet-stream';
 }
 
-export async function pruneExpiredArtifacts(db: Db): Promise<number> {
-  const res = await db.query('DELETE FROM edge_artifacts WHERE owner_id=$1 AND expires_at<=now()', [OWNER_ID]);
+export function resolveArtifactDir(configured?: string): string {
+  const dir = configured?.trim() || path.join(os.tmpdir(), 'anylink-artifacts');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+function safeArtifactFile(dir: string, storagePath: string): string | null {
+  const clean = basename(storagePath);
+  if (!/^[0-9a-f-]{36}\.bin$/i.test(clean)) return null;
+  return path.join(dir, clean);
+}
+
+export async function pruneExpiredArtifacts(db: Db, artifactDir?: string): Promise<number> {
+  const res = await db.query('DELETE FROM edge_artifacts WHERE owner_id=$1 AND expires_at<=now() RETURNING storage_path', [OWNER_ID]);
+  const dir = artifactDir?.trim() || path.join(os.tmpdir(), 'anylink-artifacts');
+  for (const row of res.rows) {
+    if (row.storage_path) {
+      const file = safeArtifactFile(dir, String(row.storage_path));
+      if (file) await unlink(file).catch(() => {});
+    }
+  }
   return res.rowCount ?? 0;
 }
 
+async function streamToDisk(stream: Readable, tmpPath: string, maxBytes: number, remainingQuota: number): Promise<{ size: number; sha256: string }> {
+  const hash = createHash('sha256');
+  const out = createWriteStream(tmpPath, { mode: 0o600 });
+  let size = 0;
+  try {
+    for await (const rawChunk of stream) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      size += chunk.length;
+      if (size > maxBytes) {
+        throw new ApiError(413, 'ARTIFACT_TOO_LARGE', `Artifact exceeds limit of ${maxBytes} bytes`);
+      }
+      if (size > remainingQuota) {
+        throw new ApiError(413, 'ARTIFACT_QUOTA_EXCEEDED', 'Artifact storage quota exceeded');
+      }
+      hash.update(chunk);
+      if (!out.write(chunk)) {
+        await new Promise<void>((resolve, reject) => {
+          out.once('drain', resolve);
+          out.once('error', reject);
+        });
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      out.end(() => resolve());
+      out.once('error', reject);
+    });
+    return { size, sha256: hash.digest('hex') };
+  } catch (err) {
+    out.destroy();
+    await unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+}
+
+function isReadableStream(v: unknown): v is Readable {
+  return !!v && typeof v === 'object' && typeof (v as Readable).pipe === 'function' && typeof (v as Readable)[Symbol.asyncIterator] === 'function';
+}
+
 export function registerArtifacts(app: FastifyInstance, db: Db, config: Config) {
-  const maxBytes = config.artifactMaxBytes ?? 10 * 1024 * 1024;
-  const quotaBytes = config.artifactQuotaBytes ?? 200 * 1024 * 1024;
+  const maxBytes = config.artifactMaxBytes ?? 200 * 1024 * 1024;
+  const quotaBytes = config.artifactQuotaBytes ?? 2 * 1024 * 1024 * 1024;
   const defaultTtl = config.artifactDefaultTtlSeconds ?? 3600;
+  const jsonMaxBytes = Math.min(maxBytes, 25 * 1024 * 1024);
+  const artifactDir = resolveArtifactDir(config.artifactDir);
 
   void app.register(async scope => {
-    // Allow raw binary payloads on /edge/v1/artifacts without altering JSON parsing elsewhere.
-    const binaryParser = (_req: unknown, body: Buffer, done: (err: Error | null, res?: Buffer) => void) => done(null, body);
-    for (const mime of ['application/octet-stream', 'application/pdf', 'text/plain', 'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'audio/mpeg', 'audio/wav', 'audio/ogg']) {
-      scope.addContentTypeParser(mime, { parseAs: 'buffer', bodyLimit: maxBytes + 1024 }, binaryParser);
-    }
+    // Stream ANY non-JSON payload directly to disk (O(1) RAM) instead of buffering in memory.
+    scope.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
 
-    scope.post('/edge/v1/artifacts', { bodyLimit: Math.ceil(maxBytes * 1.4) + 65536 }, async (req, reply) => {
+    scope.post('/edge/v1/artifacts', { bodyLimit: Math.ceil(jsonMaxBytes * 1.4) + 65536 }, async (req, reply) => {
       const me = req.edgeIdentity!;
-      let data: Buffer;
+      await pruneExpiredArtifacts(db, artifactDir);
+      const used = Number((await db.query('SELECT COALESCE(SUM(size_bytes),0) AS total FROM edge_artifacts WHERE owner_id=$1 AND expires_at>now()', [OWNER_ID])).rows[0].total);
+      const remainingQuota = quotaBytes - used;
+      if (remainingQuota <= 0) {
+        throw new ApiError(413, 'ARTIFACT_QUOTA_EXCEEDED', `Artifact storage quota (${quotaBytes} bytes) exceeded`);
+      }
+
+      const id = randomUUID();
+      const storageName = `${id}.bin`;
+      const tmpPath = path.join(artifactDir, `${id}.tmp`);
+      const finalPath = path.join(artifactDir, storageName);
+
       let filename: string;
       let contentType: string;
       let taskId: string | null = null;
       let ttlSeconds = defaultTtl;
+      let sizeBytes: number;
+      let sha256: string;
 
-      if (Buffer.isBuffer(req.body)) {
-        data = req.body;
-        filename = sanitizeFilename(req.headers['x-anylink-filename'] ? decodeURIComponent(String(req.headers['x-anylink-filename'])) : 'attachment.bin');
+      if (isReadableStream(req.body)) {
+        filename = sanitizeFilename(req.headers['x-anylink-filename'] ? decodeHeaderFilename(req.headers['x-anylink-filename']) : 'attachment.bin');
         contentType = sanitizeContentType(req.headers['x-anylink-content-type'] ?? req.headers['content-type']);
         const rawTaskId = req.headers['x-anylink-task-id'];
         if (rawTaskId) taskId = uuidOpt.parse(String(rawTaskId)) ?? null;
         const rawTtl = req.headers['x-anylink-ttl'];
         if (rawTtl !== undefined) ttlSeconds = z.coerce.number().int().min(60).max(86400).parse(rawTtl);
+
+        const declaredLen = req.headers['content-length'] ? Number(req.headers['content-length']) : 0;
+        if (Number.isFinite(declaredLen) && declaredLen > maxBytes) {
+          throw new ApiError(413, 'ARTIFACT_TOO_LARGE', `Artifact exceeds limit of ${maxBytes} bytes`);
+        }
+        if (Number.isFinite(declaredLen) && declaredLen > remainingQuota) {
+          throw new ApiError(413, 'ARTIFACT_QUOTA_EXCEEDED', `Artifact storage quota (${quotaBytes} bytes) exceeded`);
+        }
+
+        if (taskId) {
+          const exists = (await db.query('SELECT 1 FROM link_tasks WHERE id=$1 AND owner_id=$2', [taskId, OWNER_ID])).rowCount;
+          if (!exists) throw new ApiError(404, 'TASK_NOT_FOUND', 'Referenced task does not exist');
+        }
+
+        const written = await streamToDisk(req.body, tmpPath, maxBytes, remainingQuota);
+        sizeBytes = written.size;
+        sha256 = written.sha256;
+        await rename(tmpPath, finalPath);
       } else {
         const parsed = artifactJsonUploadSchema.parse(req.body);
-        data = Buffer.from(parsed.data_base64, 'base64');
+        const data = Buffer.from(parsed.data_base64, 'base64');
         filename = sanitizeFilename(parsed.filename);
         contentType = sanitizeContentType(parsed.content_type);
         taskId = parsed.task_id ?? null;
         ttlSeconds = parsed.ttl_seconds ?? defaultTtl;
+        if (data.length > maxBytes) {
+          throw new ApiError(413, 'ARTIFACT_TOO_LARGE', `Artifact exceeds limit of ${maxBytes} bytes`);
+        }
+        if (data.length > remainingQuota) {
+          throw new ApiError(413, 'ARTIFACT_QUOTA_EXCEEDED', `Artifact storage quota (${quotaBytes} bytes) exceeded`);
+        }
+        if (taskId) {
+          const exists = (await db.query('SELECT 1 FROM link_tasks WHERE id=$1 AND owner_id=$2', [taskId, OWNER_ID])).rowCount;
+          if (!exists) throw new ApiError(404, 'TASK_NOT_FOUND', 'Referenced task does not exist');
+        }
+        sizeBytes = data.length;
+        sha256 = createHash('sha256').update(data).digest('hex');
+        const out = createWriteStream(tmpPath, { mode: 0o600 });
+        await new Promise<void>((resolve, reject) => {
+          out.once('error', reject);
+          out.end(data, () => resolve());
+        });
+        await rename(tmpPath, finalPath);
       }
 
-      if (data.length > maxBytes) {
-        throw new ApiError(413, 'ARTIFACT_TOO_LARGE', `Artifact exceeds limit of ${maxBytes} bytes`);
+      try {
+        const row = (await db.query(
+          `INSERT INTO edge_artifacts(id,owner_id,source_device_id,source_agent_id,task_id,filename,content_type,size_bytes,sha256,data,storage_path,expires_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,now()+$11*interval '1 second')
+           RETURNING id,source_device_id,source_agent_id,task_id,filename,content_type,size_bytes,sha256,created_at,expires_at`,
+          [id, OWNER_ID, me.device_id, me.agent_id, taskId, filename, contentType, sizeBytes, sha256, storageName, ttlSeconds],
+        )).rows[0];
+        return reply.code(201).send({ ...row, size_bytes: Number(row.size_bytes) });
+      } catch (err) {
+        try { unlinkSync(finalPath); } catch {}
+        throw err;
       }
-
-      await pruneExpiredArtifacts(db);
-      const used = Number((await db.query('SELECT COALESCE(SUM(size_bytes),0) AS total FROM edge_artifacts WHERE owner_id=$1 AND expires_at>now()', [OWNER_ID])).rows[0].total);
-      if (used + data.length > quotaBytes) {
-        throw new ApiError(413, 'ARTIFACT_QUOTA_EXCEEDED', `Artifact storage quota (${quotaBytes} bytes) exceeded`);
-      }
-
-      if (taskId) {
-        const exists = (await db.query('SELECT 1 FROM link_tasks WHERE id=$1 AND owner_id=$2', [taskId, OWNER_ID])).rowCount;
-        if (!exists) throw new ApiError(404, 'TASK_NOT_FOUND', 'Referenced task does not exist');
-      }
-
-      const id = randomUUID();
-      const sha256 = createHash('sha256').update(data).digest('hex');
-      const row = (await db.query(
-        `INSERT INTO edge_artifacts(id,owner_id,source_device_id,source_agent_id,task_id,filename,content_type,size_bytes,sha256,data,expires_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()+$11*interval '1 second')
-         RETURNING id,source_device_id,source_agent_id,task_id,filename,content_type,size_bytes,sha256,created_at,expires_at`,
-        [id, OWNER_ID, me.device_id, me.agent_id, taskId, filename, contentType, data.length, sha256, data, ttlSeconds],
-      )).rows[0];
-      return reply.code(201).send(row);
     });
 
     scope.get('/edge/v1/artifacts/:id/meta', async req => {
@@ -115,13 +216,13 @@ export function registerArtifacts(app: FastifyInstance, db: Db, config: Config) 
         [id, OWNER_ID],
       )).rows[0];
       if (!row) throw new ApiError(404, 'ARTIFACT_NOT_FOUND', 'Artifact not found or expired');
-      return row;
+      return { ...row, size_bytes: Number(row.size_bytes) };
     });
 
     scope.get('/edge/v1/artifacts/:id', async (req, reply) => {
       const { id } = idParams.parse(req.params);
       const row = (await db.query(
-        `SELECT id,filename,content_type,size_bytes,sha256,data,expires_at
+        `SELECT id,filename,content_type,size_bytes,sha256,data,storage_path,expires_at
          FROM edge_artifacts WHERE id=$1 AND owner_id=$2 AND expires_at>now()`,
         [id, OWNER_ID],
       )).rows[0];
@@ -134,13 +235,24 @@ export function registerArtifacts(app: FastifyInstance, db: Db, config: Config) 
         .header('X-AnyLink-SHA256', row.sha256)
         .header('X-AnyLink-Filename', safeName)
         .header('Content-Disposition', `attachment; filename*=UTF-8''${safeName}`);
+
+      if (row.storage_path) {
+        const file = safeArtifactFile(artifactDir, String(row.storage_path));
+        if (!file || !existsSync(file)) throw new ApiError(404, 'ARTIFACT_NOT_FOUND', 'Artifact file missing on disk');
+        return reply.send(createReadStream(file));
+      }
       return reply.send(row.data);
     });
 
     scope.delete('/edge/v1/artifacts/:id', async req => {
       const { id } = idParams.parse(req.params);
-      const res = await db.query('DELETE FROM edge_artifacts WHERE id=$1 AND owner_id=$2 RETURNING id', [id, OWNER_ID]);
+      const res = await db.query('DELETE FROM edge_artifacts WHERE id=$1 AND owner_id=$2 RETURNING id,storage_path', [id, OWNER_ID]);
       if (!res.rowCount) throw new ApiError(404, 'ARTIFACT_NOT_FOUND', 'Artifact not found');
+      const sp = res.rows[0].storage_path;
+      if (sp) {
+        const file = safeArtifactFile(artifactDir, String(sp));
+        if (file) await unlink(file).catch(() => {});
+      }
       return { deleted: true, id };
     });
   });

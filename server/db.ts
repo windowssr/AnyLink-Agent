@@ -236,6 +236,15 @@ export async function migrate(db: Db) {
         INSERT INTO schema_migrations(version) VALUES(7);
       `);
     }
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=8')).rowCount) {
+      await c.query(`
+        -- Protocol v3.2 streaming large artifacts: disk-backed storage_path + bigint size_bytes
+        ALTER TABLE edge_artifacts ALTER COLUMN data DROP NOT NULL;
+        ALTER TABLE edge_artifacts ALTER COLUMN size_bytes TYPE bigint;
+        ALTER TABLE edge_artifacts ADD COLUMN IF NOT EXISTS storage_path text;
+        INSERT INTO schema_migrations(version) VALUES(8);
+      `);
+    }
     // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
     await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");
   });
