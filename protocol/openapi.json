@@ -1725,7 +1725,7 @@
     },
     "/edge/v1/artifacts": {
       "post": {
-        "summary": "Upload temporary binary or base64 cross-device artifact (10 MiB max, TTL auto-pruned)",
+        "summary": "Upload temporary binary stream or base64 cross-device artifact (default 200 MiB max, up to 1 GiB, disk-streamed, TTL auto-pruned)",
         "security": [
           {
             "deviceBearer": []

@@ -166,9 +166,31 @@ const done = await client.waitForTask(task.id);
 AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protocol v3）与云端中枢/SDK**。为了方便直接体验，仓库在 [`examples/`](examples/README.md) 目录下额外隔离提供了两款以深海蓝白鲸鱼娘「大肥鱼」为交互卖点的完整展示客户端（核心协议层与角色完全解耦，二次开发可完全不引入 `examples/`）：
 
 1. **电脑端（Mac + OpenClaw 后台常驻 Agent）** — 详见配置文档：[`examples/mac-openclaw/README.md`](examples/mac-openclaw/README.md)
-   - 基于 OpenClaw + Protocol v3.2 插件与并发 WebSocket Worker（`maxConcurrency=2`），由 macOS LaunchAgent 后台常驻运行，支持云端记忆同步、`anylink_invoke` 与 `anylink_task_reply`、默认白名单安全沙箱或 `--full-access` 全权限模式（启动时自动清理历史 `OUTSIDE_ROOT` 陈旧边界记忆）、可选桌面 Live2D 桌宠与本地语音。
+   - 基于 OpenClaw + Protocol v3.2 插件与并发 WebSocket Worker（`maxConcurrency=2`），支持直连公网 HTTPS（无需常驻 SSH 隧道），由 macOS LaunchAgent 后台常驻运行，支持云端记忆同步、`anylink_invoke` / `anylink_task_reply`、**跨设备双向大文件互传**（`anylink_file_send` / `file.deliver`，默认保存至 `~/Downloads/AnyLink/`）、默认白名单安全沙箱或 `--full-access` 全权限模式（启动时自动清理历史 `OUTSIDE_ROOT` 陈旧边界记忆）、可选桌面 Live2D 桌宠与本地语音。
 2. **手机端（Android 原生独立 Agent）** — 详见配置文档：[`examples/android-native/README.md`](examples/android-native/README.md)
-   - 手机本地运行完整对话循环与 SQLite 幂等账本，**不依赖 Mac 在线**；v0.9.0 全新「深海玻璃陪伴」视觉设计：全屏无遮挡 Live2D 舞台（内置 WebGL 像素实测验证，根治闪现消失）+ 陪伴/阅读双视图切换 + 磨砂玻璃完整对话流 + v3.2 高危审批/追问交互卡片 + 预设密码一键登录 + 后台前台服务保活与悬浮球 + 离线 Outbox / SSE 断线续接 + 贴合「蓝色大肥鱼」人设的活泼语音播报。
+   - 手机本地运行完整对话循环与 SQLite 幂等账本，**不依赖 Mac 在线**；v0.9.0 全新「深海玻璃陪伴」视觉设计：全屏无遮挡 Live2D 舞台（内置 WebGL 像素实测验证，根治闪现消失）+ 陪伴/阅读双视图切换 + 磨砂玻璃完整对话流 + v3.2 高危审批/追问交互卡片 + 预设密码一键登录 + 后台前台服务保活、悬浮球与高优先级主动消息弹窗通知 + **📎 一键/指令跨设备双向传文件（200 MiB 流式读写、收件卡片一键打开/分享）** + **手机 Agent 默认 100 步执行上限（可在「保活」设置页切换 `50 / 100 / 200 / 不限`，含循环内自动裁剪旧屏幕与一键「继续执行」）** + 离线 Outbox / SSE 断线续接 + 贴合「蓝色大肥鱼」人设的活泼语音播报。
+
+### 跨设备双向文件互传与上传上限配置
+
+边缘设备之间通过云端临时附件中转（`/edge/v1/artifacts`）+ `file.deliver` 跨设备任务实现**全链路 O(1) 内存流式传输**（边传边算 SHA-256 校验，云端独立磁盘卷落盘，到期自动清理）：
+
+- **手机 → 电脑**：在 Android 对话框左下角点 `📎` 选文件（支持文档、图片、音视频、压缩包等）；**留空附言点「发文件」**直接零延迟传给在线 Mac 并保存到 `~/Downloads/AnyLink/`；也可**附加文字指令**（如"帮我整理这份 PDF 的重点"），手机上传后自动带 `artifact_id` 派发给电脑处理。
+- **电脑 → 手机**：在 Mac 或手机对话中直接让大肥鱼发送本机文件（如"把桌面的周报发到我手机"），Mac 调用 `anylink_file_send` 流式上传并派发 `file.deliver`；手机端自动流式写入 `下载/AnyLink/`，弹出顶部横幅通知并在聊天流生成带「打开文件 / 分享」按钮的文件卡片。
+- **SDK / 服务器脚本节点**：使用 `@anylink-agent/sdk` 的 `client.uploadArtifact(...)` / `client.downloadArtifactToFile(...)` 或直接调用 `POST/GET /edge/v1/artifacts` 流式二进制接口。
+
+#### 上传上限与配额在哪里修改？
+
+| 位置 | 配置项 | 默认值 | 可调范围 / 说明 |
+| :--- | :--- | :--- | :--- |
+| **云端服务端**（本地 `.env` 或服务器 `/opt/anylink-agent/secrets/app.env`） | `ANYLINK_ARTIFACT_MAX_BYTES` | `209715200`（**200 MiB**） | 单文件上传上限，最高支持 `1073741824`（**1 GiB**） |
+| **云端服务端**（同上） | `ANYLINK_ARTIFACT_QUOTA_BYTES` | `2147483648`（**2 GiB**） | 单 Owner 未过期附件总配额，最高支持 `21474836480`（**20 GiB**） |
+| **云端服务端**（同上） | `ANYLINK_ARTIFACT_TTL_SECONDS` | `3600`（1 小时） | 临时附件保留时长（`60`–`86400` 秒），过期自动删除磁盘文件 |
+| **云端服务端**（`deploy/compose.yaml`） | `ANYLINK_ARTIFACT_DIR` | `/data/artifacts` | 容器内附件落盘目录（生产环境默认挂载宿主机 `/opt/anylink-agent/data/artifacts`） |
+| **云端服务端**（可选，同上 `app.env`） | `ANYLINK_MAX_AGENT_RPM` | `60` | 单 Agent 每分钟模型请求限速（最高 `600`），重度多步控屏时可按需调大 |
+| **Mac 端客户端安全阀** | `MAX_ARTIFACT_BYTES` | `200 MiB` | 若服务端调大超过 200 MiB，同步修改 [`examples/mac-openclaw/plugin/index.mjs`](examples/mac-openclaw/plugin/index.mjs) |
+| **Android 端客户端安全阀** | `AnyLinkFiles.MAX_BYTES` | `200 MiB` | 若服务端调大超过 200 MiB，同步修改 [`examples/android-native/overlay/.../AnyLinkFiles.kt`](examples/android-native/overlay/app/src/main/java/ai/openclaw/app/anylink/AnyLinkFiles.kt) 并重新打包 APK |
+
+> 修改服务器 `/opt/anylink-agent/secrets/app.env` 后重启容器生效（例如 `docker compose -f /opt/anylink-agent/current/compose.yaml --env-file /opt/anylink-agent/current/release.env up -d --force-recreate app`）；如前面有自定义 Nginx 反向代理，请同时确保 `client_max_body_size` 不小于该值（项目内置的 Caddy 网关默认不设体积上限）。
 
 ### Mac 端常用控制小技巧
 

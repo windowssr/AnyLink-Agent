@@ -160,9 +160,31 @@ const done = await client.waitForTask(task.id);
 AnyLink's core is the **framework-agnostic Protocol v3, Cloud Hub, SDKs, and MCP Server**. To demonstrate the end-to-end user experience, two companion apps featuring the deep-sea blue whale mascot **"蓝色大肥鱼 (Dafeiyu)"** are cleanly isolated under [`examples/`](examples/README.md) with zero coupling into the core protocol:
 
 1. **macOS Desktop Agent (OpenClaw + Worker)** — Setup Guide: [`examples/mac-openclaw/README.md`](examples/mac-openclaw/README.md)
-   - Runs persistently in the background via macOS LaunchAgent (`com.anylink.openclaw`), integrating Cloud Memory Brain, `anylink_invoke` + `anylink_task_reply`, concurrent WebSocket worker (`maxConcurrency=2`), default directory sandbox or opt-in `--full-access` host permissions with automatic stale-boundary self-healing, and optional Live2D desktop companion.
+   - Runs persistently in the background via macOS LaunchAgent (`com.anylink.openclaw`) over direct HTTPS (no SSH tunnel required), integrating Cloud Memory Brain, `anylink_invoke` + `anylink_task_reply`, **bidirectional streaming file transfer** (`anylink_file_send` / `file.deliver` → `~/Downloads/AnyLink/`), concurrent WebSocket worker (`maxConcurrency=2`), default directory sandbox or opt-in `--full-access` host permissions with automatic stale-boundary self-healing, and optional Live2D desktop companion.
 2. **Android Native Independent Agent** — Setup Guide: [`examples/android-native/README.md`](examples/android-native/README.md)
-   - Runs independently on-device (works even when Mac is offline); **Deep-Sea Glass Companion UI** (full-bleed unobstructed Live2D stage with WebGL pixel verification, Companion ↔ Reading mode toggle, frosted glass full-output chat sheet, and interactive v3.2 approval/choice cards), quick password login, foreground service keep-alive, detached SSE resume, offline SQLite memory outbox, and persona-matched voice feedback.
+   - Runs independently on-device (works even when Mac is offline); **Deep-Sea Glass Companion UI** (full-bleed unobstructed Live2D stage with WebGL pixel verification, Companion ↔ Reading mode toggle, frosted glass full-output chat sheet, and interactive v3.2 approval/choice cards), quick password login, foreground service keep-alive + high-priority proactive notifications, **📎 bidirectional 200 MiB streaming file transfer** (saves to `Downloads/AnyLink` with in-chat Open/Share card), **configurable on-device step budget (`50 / 100 / 200 / Unlimited`, default 100) with in-loop screen pruning and one-tap Continue**, detached SSE resume, offline SQLite memory outbox, and persona-matched voice feedback.
+
+### Cross-Device Bidirectional File Transfer & Upload Limits
+
+Edge devices exchange files end-to-end with **O(1)-RAM HTTP streaming**, SHA-256 verification, disk-backed cloud staging (`/edge/v1/artifacts`), and the `file.deliver` task capability:
+
+- **Android → Mac**: Tap `📎` in the Android composer to pick any file. Leave the message blank and tap **Send File** for instant zero-LLM transfer straight to Mac (`~/Downloads/AnyLink/`), or add an instruction so the Mac Agent processes the uploaded `artifact_id`.
+- **Mac → Android**: Ask the Mac Agent (or send via `anylink_file_send`) to deliver a local file to your phone; the Android worker streams it straight into `Downloads/AnyLink`, posts a heads-up notification, and renders an in-chat File Card with **Open** / **Share** actions.
+- **SDK / Script Nodes**: Use `@anylink-agent/sdk` `client.uploadArtifact(...)` / `client.downloadArtifactToFile(...)` or raw binary `POST/GET /edge/v1/artifacts`.
+
+#### Where to Adjust File Size Limits & Quotas
+
+| Location | Setting | Default | Range / Notes |
+| :--- | :--- | :--- | :--- |
+| **Cloud Hub** (`.env` or `/opt/anylink-agent/secrets/app.env`) | `ANYLINK_ARTIFACT_MAX_BYTES` | `209715200` (**200 MiB**) | Max size per file, configurable up to `1073741824` (**1 GiB**) |
+| **Cloud Hub** (same) | `ANYLINK_ARTIFACT_QUOTA_BYTES` | `2147483648` (**2 GiB**) | Total active artifact quota per owner, up to `21474836480` (**20 GiB**) |
+| **Cloud Hub** (same) | `ANYLINK_ARTIFACT_TTL_SECONDS` | `3600` (1 hour) | Auto-expiry & disk cleanup TTL (`60`–`86400` seconds) |
+| **Cloud Hub** (`deploy/compose.yaml`) | `ANYLINK_ARTIFACT_DIR` | `/data/artifacts` | Disk storage volume inside container (mounted from `/opt/anylink-agent/data/artifacts`) |
+| **Cloud Hub** (optional, same `app.env`) | `ANYLINK_MAX_AGENT_RPM` | `60` | Per-agent model calls/min (max `600`); raise if running intense multi-step phone loops |
+| **Mac Client Cap** | `MAX_ARTIFACT_BYTES` | `200 MiB` | Update in [`examples/mac-openclaw/plugin/index.mjs`](examples/mac-openclaw/plugin/index.mjs) if raising server above 200 MiB |
+| **Android Client Cap** | `AnyLinkFiles.MAX_BYTES` | `200 MiB` | Update in [`examples/android-native/overlay/.../AnyLinkFiles.kt`](examples/android-native/overlay/app/src/main/java/ai/openclaw/app/anylink/AnyLinkFiles.kt) and rebuild APK if raising above 200 MiB |
+
+> Restart the `app` container after editing `/opt/anylink-agent/secrets/app.env`. If you place a custom Nginx reverse proxy in front of AnyLink, make sure `client_max_body_size` is at least your configured limit (the bundled Caddy reverse proxy has no body-size cap).
 
 ### Quick Operations Tips (Mac Background Service)
 

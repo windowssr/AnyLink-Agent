@@ -5,7 +5,8 @@
 Mac 端以 **OpenClaw** 作为本地 Agent 执行引擎，通过 macOS 后台守护服务（LaunchAgent）常驻运行，实现：
 - **云端共享记忆**：每轮对话前自动调用 `POST /edge/v1/memory/assemble` 注入跨设备共享记忆、已学习的设备边界和近期动态；对话结束后异步上报 `POST /edge/v1/memory/ingest`。
 - **Protocol v3.2 并发 WebSocket Worker（`maxConcurrency=2`）**：通过 `/edge/v1/ws` 保持 `ws_online` 长连接、单调游标续传、Fencing Token 租约续期，收到手机或其他设备派发的跨设备指令时毫秒级唤醒本地 `remote` Agent 执行。
-- **跨设备免能力表调用与人机协同**：主对话拥有 `anylink_invoke` 与 `anylink_task_reply` 工具，可直接通过 `@device_slug`（如 `@my-phone`）发指令（含优先级/并发键/在线校验）及回复挂起的追问/审批任务。
+- **跨设备免能力表调用、双向文件互传与人机协同**：主对话拥有 `anylink_invoke`、`anylink_task_reply`、`anylink_file_send`、`anylink_artifact_upload` 与 `anylink_artifact_download` 工具，可直接通过 `@device_slug`（如 `@my-phone`）发指令、回复挂起的追问/审批任务，或与手机互传最高 200 MiB（可配置至 1 GiB）的流式文件；手机发来的 `file.deliver` 文件会自动校验 SHA-256 并保存到 `~/Downloads/AnyLink/`（防覆盖自动重命名）。
+- **直连 HTTPS**：直接连接云端公网 HTTPS 地址（无需常驻 SSH 隧道），断网自动指数退避重连，启动脚本自带 Worker 崩溃自动拉起监控。
 - **可选全权限模式 + 历史边界自愈**：默认只开放白名单目录；个人自用电脑可通过 `--full-access` 显式开放完整电脑（含 `/Users/<用户名>` 主目录）、终端与桌面操控权限。Worker 启动时若检测到 `full_access: true`，会自动清除历史学习到的陈旧 `OUTSIDE_ROOT` 边界记忆并写入最新全权限设备事实，避免 `remote` Agent 误判无权限。
 
 ---

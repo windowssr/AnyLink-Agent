@@ -11,7 +11,12 @@ Any device can also join with the owner **join key**: set `ANYLINK_JOIN_KEY` (mi
 Existing Linux/amd64 deployment scripts target an operator-managed directory at `/opt/anylink-agent`. They are not a first-time server provisioner. Prepare these ignored server secrets first:
 
 - `secrets/postgres.env`: PostgreSQL user/database/password.
-- `secrets/app.env`: `DATABASE_URL`, `OWNER_TOKEN`, `HOST=0.0.0.0`, `PORT=3180`, `APP_ORIGIN`, optional `ANYLINK_JOIN_KEY` (or `ANYLINK_JOIN_KEY_FILE`).
+- `secrets/app.env`: `DATABASE_URL`, `OWNER_TOKEN`, `HOST=0.0.0.0`, `PORT=3180`, `APP_ORIGIN`, optional `ANYLINK_JOIN_KEY` (or `ANYLINK_JOIN_KEY_FILE`), optional `ANYLINK_LOGIN_PASSWORD` (≥6 chars), and optional artifact/rate tuning:
+  - `ANYLINK_ARTIFACT_MAX_BYTES`: max single-file transfer size in bytes (default `209715200` = 200 MiB; max `1073741824` = 1 GiB).
+  - `ANYLINK_ARTIFACT_QUOTA_BYTES`: total active artifact quota per owner in bytes (default `2147483648` = 2 GiB; max `21474836480` = 20 GiB).
+  - `ANYLINK_ARTIFACT_TTL_SECONDS`: artifact auto-expiry TTL in seconds (default `3600`, range `60`–`86400`).
+  - `ANYLINK_ARTIFACT_DIR`: disk directory for streamed artifacts (production `deploy/compose.yaml` mounts `/opt/anylink-agent/data/artifacts:/data/artifacts` owned by UID `1000`).
+  - `ANYLINK_MAX_AGENT_RPM`: per-agent model requests per minute (default `60`, max `600`).
 - `secrets/model.env`: `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`.
 - `secrets/owner-token`: the same owner token for local administrative scripts.
 

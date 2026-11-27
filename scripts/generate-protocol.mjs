@@ -107,7 +107,7 @@ paths['/edge/v1/tasks'].get.parameters.push(
 );
 
 // Binary artifacts (Protocol v3.2)
-route('/edge/v1/artifacts', 'post', { schema: 'ArtifactUpload', summary: 'Upload temporary binary or base64 cross-device artifact (10 MiB max, TTL auto-pruned)', response: 'ArtifactMeta' });
+route('/edge/v1/artifacts', 'post', { schema: 'ArtifactUpload', summary: 'Upload temporary binary stream or base64 cross-device artifact (default 200 MiB max, up to 1 GiB, disk-streamed, TTL auto-pruned)', response: 'ArtifactMeta' });
 route('/edge/v1/artifacts/{id}', 'get', { summary: 'Download binary artifact stream with ETag and X-AnyLink-SHA256 verification' });
 route('/edge/v1/artifacts/{id}/meta', 'get', { summary: 'Read artifact metadata without downloading binary payload', response: 'ArtifactMeta' });
 route('/edge/v1/artifacts/{id}', 'delete', { summary: 'Delete an artifact owned by this deployment' });

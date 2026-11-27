@@ -17,8 +17,12 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 - **弱网韧性与后台保活**：
   - WebSocket 支持 `resume_after_seq` 游标续传、20 秒心跳 + 15 秒 Pong 死链检测、Full Jitter 指数退避、`task.receipt_ack` 回执确认；流式对话支持 `X-AnyLink-Detach-On-Disconnect: on` 断线续接；离线记忆自动写入 SQLite `memory_outbox` 并在重连后自动补发。
   - 连接成功后自动拉起常驻前台服务 `AnyLinkCompanionService`（不强依赖悬浮窗权限），开启悬浮窗权限后退后台显示轻量化原生大肥鱼悬浮球（点按说话、长按回 App、拖动换位、拖至底部 `×` 隐藏）。
-- **跨设备联动 + 贴合「蓝色大肥鱼」人设的语音播报**：
-  - 支持免能力表 `task_invoke`（如 `@home-mac`）、`task_reply`、`task_create`、`link_directory`；Mac 完成任务或拒绝（`declined`）后实时推送并经服务端「蓝色大肥鱼」人设口语化改写与活泼韵律（`+10%` 语速 / `+6Hz` 音调）语音播报。
+- **跨设备双向传文件（200 MiB O(1) 内存流式）**：
+  - 输入栏左侧点 `📎` 通过系统文件选择器选任意文件：留空文字点「发文件」直接一键流式发往 Mac（`~/Downloads/AnyLink/`）；输入附言则上传后自动携带 `artifact_id` 交由电脑 Agent 处理。
+  - 接收 Mac 发来的文件时自动流式写入手机「下载/AnyLink」（`MediaStore.Downloads`）并校验 SHA-256，弹出高优先级横幅通知并在聊天流生成带「打开文件 / 分享」按钮的文件卡片。
+- **跨设备联动 + 可配置执行步数上限 + 主动弹窗通知 + 贴合人设的语音播报**：
+  - 支持免能力表 `task_invoke`（如 `@home-mac`）、`task_reply`、`task_create`、`file_send`、`link_directory`；Mac 主动发来消息、文件或完成任务时通过 `IMPORTANCE_HIGH` 渠道「大肥鱼主动消息」弹出顶部横幅通知，并经服务端「蓝色大肥鱼」人设口语化改写与活泼韵律（`+10%` 语速 / `+6Hz` 音调）语音播报。
+  - 手机 Agent 默认单轮上限 **100 步**（可在顶栏「保活」设置中切换 `50 步 / 100 步 / 200 步 / 不限`），控屏循环内每步实时裁剪旧屏幕防上下文膨胀，历史对话超长自动滑动压缩，跑满上限后一键点「继续执行」无缝续跑。
   - 可选开启无障碍服务（`AnyLinkAccessibilityService`），让手机大肥鱼本机读屏、点按、输入、滚动与打开应用（控屏工具仅限本机对话，不对外暴露为远程能力）。
 
 ---
