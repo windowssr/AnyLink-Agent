@@ -106,7 +106,7 @@ export const MCP_TOOLS = [
   },
   {
     name: 'anylink_invoke',
-    description: 'Send a natural-language task or instruction to another device/agent in the personal network. No prior capability table is required; if the target cannot do it, it will decline with a reason that Cloud Memory automatically learns.',
+    description: 'Send a natural-language task or instruction to another device/agent in the personal network. Supports priority, require_online fast-fail, and concurrency_key.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,6 +118,10 @@ export const MCP_TOOLS = [
         target_agent_key: { type: 'string', description: 'Target agent key, e.g. "mac-openclaw"' },
         capability: { type: 'string', description: 'Optional structured capability name; defaults to agent.invoke' },
         input: { type: 'object', description: 'Optional structured input payload' },
+        priority: { type: 'integer', minimum: 0, maximum: 10 },
+        require_online: { type: 'boolean', description: 'Fail fast (409 TARGET_OFFLINE) if target is offline' },
+        concurrency_key: { type: 'string' },
+        execution_timeout_seconds: { type: 'integer', minimum: 10, maximum: 86400 },
         wait: { type: 'boolean', description: 'Wait for the task to finish (default false)' },
         timeout_ms: { type: 'integer', minimum: 1000, maximum: 300000 },
       },
@@ -127,7 +131,7 @@ export const MCP_TOOLS = [
   },
   {
     name: 'anylink_task_status',
-    description: 'Check the status, progress, and result of a cross-device task.',
+    description: 'Check the status, progress, pending interaction, and result of a cross-device task.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -136,8 +140,49 @@ export const MCP_TOOLS = [
     },
   },
   {
+    name: 'anylink_task_reply',
+    description: 'Reply to or approve/reject a suspended cross-device task (awaiting_input or awaiting_approval).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        message: { type: 'string' },
+        choice: { type: 'string' },
+        approved: { type: 'boolean' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'anylink_task_cancel',
-    description: 'Cancel a queued task or send cooperative cancellation to a running task.',
+    description: 'Cancel a queued/suspended task or send cooperative cancellation to a running task.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'anylink_artifact_upload',
+    description: 'Upload a temporary base64-encoded binary artifact (up to 10 MiB) to share across devices.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string' },
+        content_type: { type: 'string' },
+        data_base64: { type: 'string' },
+        task_id: { type: 'string' },
+        ttl_seconds: { type: 'integer', minimum: 60, maximum: 86400 },
+      },
+      required: ['filename', 'data_base64'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'anylink_artifact_download',
+    description: 'Download a cross-device artifact by id as base64 + metadata.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -147,7 +192,7 @@ export const MCP_TOOLS = [
   },
 ];
 
-export function createMcpHandler(client, { serverInfo = { name: 'anylink-mcp', version: '0.3.0' } } = {}) {
+export function createMcpHandler(client, { serverInfo = { name: 'anylink-mcp', version: '0.9.0' } } = {}) {
   async function callTool(name, args = {}) {
     if (name === 'anylink_memory_assemble') return client.assembleMemory(args);
     if (name === 'anylink_memory_ingest') return client.ingestMemory(args);
@@ -160,7 +205,30 @@ export function createMcpHandler(client, { serverInfo = { name: 'anylink-mcp', v
     if (name === 'anylink_memory_delete') return client.deleteMemory(args.id, args.revision);
     if (name === 'anylink_directory') return client.directory();
     if (name === 'anylink_task_status') return client.task(args.id);
+    if (name === 'anylink_task_reply') {
+      const { id, ...body } = args;
+      return client.replyTask(id, body);
+    }
     if (name === 'anylink_task_cancel') return client.cancelTask(args.id);
+    if (name === 'anylink_artifact_upload') {
+      return client.uploadArtifact({
+        data: Buffer.from(args.data_base64, 'base64'),
+        filename: args.filename,
+        contentType: args.content_type ?? 'application/octet-stream',
+        taskId: args.task_id,
+        ttlSeconds: args.ttl_seconds,
+      });
+    }
+    if (name === 'anylink_artifact_download') {
+      const out = await client.downloadArtifact(args.id);
+      return {
+        filename: out.filename,
+        content_type: out.contentType,
+        sha256: out.sha256,
+        size_bytes: out.data.length,
+        data_base64: out.data.toString('base64'),
+      };
+    }
     if (name === 'anylink_invoke') {
       const target = args.target_agent_id ? { agent_id: args.target_agent_id }
         : args.target_device_id ? { device_id: args.target_device_id }
@@ -173,6 +241,10 @@ export function createMcpHandler(client, { serverInfo = { name: 'anylink-mcp', v
         instruction: args.instruction,
         capability: args.capability,
         input: args.input,
+        priority: args.priority,
+        requireOnline: args.require_online,
+        concurrencyKey: args.concurrency_key,
+        executionTimeoutSeconds: args.execution_timeout_seconds,
       });
       if (args.wait) {
         return client.waitForTask(created.id, { timeoutMs: args.timeout_ms ?? 60000 });

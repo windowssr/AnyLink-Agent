@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import httpx
 import websockets
@@ -33,10 +34,23 @@ def _check_base_url(base_url: str) -> str:
     return base_url.rstrip("/") + "/"
 
 
-class AnyLinkSocket:
-    """Real-time WebSocket client for AnyLink Protocol v3 (/edge/v1/ws)."""
+def _full_jitter(attempt: int, base: float = 1.0, cap: float = 30.0) -> float:
+    return max(0.1, random.uniform(0.0, min(cap, base * (2 ** min(attempt, 5)))))
 
-    def __init__(self, ws_url: str, token: str) -> None:
+
+class AnyLinkSocket:
+    """Real-time WebSocket client for AnyLink Protocol v3.2 (/edge/v1/ws) with auto-reconnect, pong watchdog, and seq cursor resume."""
+
+    def __init__(
+        self,
+        ws_url: str,
+        token: str,
+        *,
+        resume_after_seq: int = 0,
+        ping_interval: float = 20.0,
+        pong_timeout: float = 15.0,
+        auto_reconnect: bool = True,
+    ) -> None:
         self._ws_url = ws_url
         self._token = token
         self._ws: Any = None
@@ -45,10 +59,21 @@ class AnyLinkSocket:
         self._listeners: dict[str, list[Callable[[dict[str, Any]], Any]]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._ping_task: asyncio.Task[None] | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
+        self._last_seq: int = max(0, int(resume_after_seq))
+        self._ping_interval = ping_interval
+        self._pong_timeout = pong_timeout
+        self._auto_reconnect = auto_reconnect
+        self._attempt = 0
+        self._pong_event = asyncio.Event()
 
     @property
     def connected(self) -> bool:
         return self._ws is not None and not self._closed
+
+    @property
+    def last_seq(self) -> int:
+        return self._last_seq
 
     def on(self, event_type: str, listener: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
         self._listeners.setdefault(event_type, []).append(listener)
@@ -66,36 +91,56 @@ class AnyLinkSocket:
             if asyncio.iscoroutine(res):
                 asyncio.create_task(res)
 
-    async def connect(self, *, timeout: float = 15.0) -> AnyLinkSocket:
-        self._closed = False
-        self._ws = await asyncio.wait_for(
+    async def _open_once(self, *, timeout: float = 15.0) -> dict[str, Any]:
+        url = self._ws_url
+        if self._last_seq > 0:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}resume_after_seq={self._last_seq}"
+        ws = await asyncio.wait_for(
             websockets.connect(
-                self._ws_url,
+                url,
                 additional_headers={"Authorization": f"Bearer {self._token}"},
                 ping_interval=None,
             ),
             timeout=timeout,
         )
-        raw_hello = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+        raw_hello = await asyncio.wait_for(ws.recv(), timeout=timeout)
         hello = json.loads(raw_hello)
         if hello.get("type") != "hello":
-            await self.close()
+            await ws.close()
             raise AnyLinkError(
                 hello.get("message", "WebSocket handshake failed"),
                 code=hello.get("code", "WS_AUTH_FAILED"),
             )
-        self._reader_task = asyncio.create_task(self._read_loop())
+        self._ws = ws
+        self._attempt = 0
+        if self._last_seq == 0 and isinstance(hello.get("latest_event_seq"), int):
+            self._last_seq = hello["latest_event_seq"]
+        self._reader_task = asyncio.create_task(self._read_loop(timeout=timeout))
         self._ping_task = asyncio.create_task(self._ping_loop())
         self._emit("hello", hello)
+        return hello
+
+    async def connect(self, *, timeout: float = 15.0, auto_reconnect: bool | None = None) -> AnyLinkSocket:
+        self._closed = False
+        if auto_reconnect is not None:
+            self._auto_reconnect = auto_reconnect
+        await self._open_once(timeout=timeout)
         return self
 
-    async def _read_loop(self) -> None:
+    async def _read_loop(self, *, timeout: float = 15.0) -> None:
+        close_code: int | None = None
         try:
+            assert self._ws is not None
             async for raw in self._ws:
+                self._pong_event.set()
                 try:
                     frame = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                seq = frame.get("seq")
+                if isinstance(seq, int) and seq > self._last_seq:
+                    self._last_seq = seq
                 req_id = frame.get("request_id")
                 if req_id and req_id in self._pending:
                     fut = self._pending.pop(req_id)
@@ -113,11 +158,14 @@ class AnyLinkSocket:
                 if isinstance(frame_type, str):
                     self._emit(frame_type, frame)
                 self._emit("frame", frame)
+            close_code = getattr(self._ws, "close_code", None)
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            close_code = getattr(self._ws, "close_code", None) if self._ws is not None else None
         finally:
+            if self._ping_task and not self._ping_task.done():
+                self._ping_task.cancel()
             self._ws = None
             for req_id, fut in list(self._pending.items()):
                 self._pending.pop(req_id, None)
@@ -125,14 +173,43 @@ class AnyLinkSocket:
                     fut.set_exception(
                         AnyLinkError("WebSocket closed", code="WS_CLOSED", submission_unknown=True)
                     )
-            self._emit("close", {"type": "close"})
+            if close_code in (4001, 4003):
+                self._closed = True
+                self._emit("auth_error", {"type": "auth_error", "code": close_code})
+            self._emit("close", {"type": "close", "code": close_code})
+            if not self._closed and self._auto_reconnect:
+                self._reconnect_task = asyncio.create_task(self._reconnect_loop(timeout=timeout))
+
+    async def _reconnect_loop(self, *, timeout: float = 15.0) -> None:
+        try:
+            while not self._closed and not self.connected:
+                delay_sec = _full_jitter(self._attempt)
+                self._attempt += 1
+                await asyncio.sleep(delay_sec)
+                if self._closed or self.connected:
+                    return
+                try:
+                    await self._open_once(timeout=timeout)
+                    return
+                except Exception:
+                    continue
+        except asyncio.CancelledError:
+            raise
 
     async def _ping_loop(self) -> None:
         try:
-            while self.connected:
-                await asyncio.sleep(20)
-                if self._ws is not None:
-                    await self._ws.send(json.dumps({"type": "ping"}))
+            while self.connected and self._ws is not None:
+                await asyncio.sleep(self._ping_interval)
+                if not self.connected or self._ws is None:
+                    break
+                self._pong_event.clear()
+                await self._ws.send(json.dumps({"type": "ping"}))
+                try:
+                    await asyncio.wait_for(self._pong_event.wait(), timeout=self._pong_timeout)
+                except asyncio.TimeoutError:
+                    if self._ws is not None:
+                        await self._ws.close(code=4000, reason="Pong timeout")
+                    break
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -166,25 +243,65 @@ class AnyLinkSocket:
         return await self.send_rpc(frame)
 
     async def heartbeat_task(
-        self, task_id: str, *, extend_seconds: int | None = None
+        self,
+        task_id: str,
+        *,
+        extend_seconds: int | None = None,
+        lease_token: str | None = None,
     ) -> dict[str, Any]:
         frame: dict[str, Any] = {"type": "task.heartbeat", "task_id": task_id}
         if extend_seconds is not None:
             frame["extend_seconds"] = extend_seconds
+        if lease_token is not None:
+            frame["lease_token"] = lease_token
         return await self.send_rpc(frame)
 
-    async def report_progress(self, task_id: str, progress: dict[str, Any]) -> dict[str, Any]:
-        return await self.send_rpc({"type": "task.progress", "task_id": task_id, "progress": progress})
+    async def report_progress(
+        self, task_id: str, progress: dict[str, Any], *, lease_token: str | None = None
+    ) -> dict[str, Any]:
+        frame: dict[str, Any] = {"type": "task.progress", "task_id": task_id, "progress": progress}
+        if lease_token is not None:
+            frame["lease_token"] = lease_token
+        return await self.send_rpc(frame)
+
+    async def suspend_task(
+        self, task_id: str, body: dict[str, Any], *, lease_token: str | None = None
+    ) -> dict[str, Any]:
+        frame: dict[str, Any] = {"type": "task.suspend", "task_id": task_id, **body}
+        if lease_token is not None:
+            frame["lease_token"] = lease_token
+        return await self.send_rpc(frame)
+
+    async def reply_task(
+        self, task_id: str, body: dict[str, Any], *, idempotency_key: str | None = None
+    ) -> dict[str, Any]:
+        return await self.send_rpc(
+            {
+                "type": "task.reply",
+                "task_id": task_id,
+                "idempotency_key": idempotency_key or str(uuid.uuid4()),
+                **body,
+            }
+        )
+
+    async def ack_receipt(self, task_id: str) -> dict[str, Any]:
+        return await self.send_rpc({"type": "task.receipt_ack", "task_id": task_id})
 
     async def complete_task(
-        self, task_id: str, result: dict[str, Any], *, idempotency_key: str | None = None
+        self,
+        task_id: str,
+        result: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+        lease_token: str | None = None,
     ) -> dict[str, Any]:
+        payload = {**result, "lease_token": lease_token} if lease_token else result
         return await self.send_rpc(
             {
                 "type": "task.result",
                 "task_id": task_id,
                 "idempotency_key": idempotency_key or f"result:{task_id}",
-                "result": result,
+                "result": payload,
             }
         )
 
@@ -201,7 +318,7 @@ class AnyLinkSocket:
 
     async def close(self) -> None:
         self._closed = True
-        for task in (self._ping_task, self._reader_task):
+        for task in (self._reconnect_task, self._ping_task, self._reader_task):
             if task and not task.done():
                 task.cancel()
         if self._ws is not None:
@@ -213,7 +330,7 @@ class AnyLinkSocket:
 
 
 class AnyLinkClient:
-    """Async HTTP + WebSocket client for AnyLink Protocol v3."""
+    """Async HTTP + WebSocket client for AnyLink Protocol v3.2."""
 
     def __init__(
         self,
@@ -300,20 +417,37 @@ class AnyLinkClient:
         scheme = "wss" if parsed.scheme == "https" else "ws"
         return f"{scheme}://{parsed.netloc}{parsed.path}edge/v1/ws"
 
-    async def connect_websocket(self, *, timeout: float = 15.0) -> AnyLinkSocket:
-        sock = AnyLinkSocket(self.ws_url(), self._token)
-        return await sock.connect(timeout=timeout)
+    async def connect_websocket(
+        self,
+        *,
+        timeout: float = 15.0,
+        resume_after_seq: int = 0,
+        auto_reconnect: bool = True,
+        ping_interval: float = 20.0,
+        pong_timeout: float = 15.0,
+    ) -> AnyLinkSocket:
+        sock = AnyLinkSocket(
+            self.ws_url(),
+            self._token,
+            resume_after_seq=resume_after_seq,
+            ping_interval=ping_interval,
+            pong_timeout=pong_timeout,
+            auto_reconnect=auto_reconnect,
+        )
+        return await sock.connect(timeout=timeout, auto_reconnect=auto_reconnect)
 
     async def _request(
         self,
         method: str,
         path: str,
-        body: dict[str, Any] | None = None,
+        body: dict[str, Any] | bytes | None = None,
         *,
         idempotency_key: str | None | bool = None,
         headers: dict[str, str] | None = None,
         params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        safe_retry: bool = False,
+        raw: bool = False,
+    ) -> Any:
         writing = method.upper() not in ("GET", "HEAD")
         key: str | None = None
         if writing and idempotency_key is not False:
@@ -321,40 +455,47 @@ class AnyLinkClient:
         req_headers = {"Authorization": f"Bearer {self._token}", **(headers or {})}
         if key:
             req_headers["Idempotency-Key"] = key
-        try:
-            res = await self._http.request(
-                method,
-                path,
-                json=body,
-                headers=req_headers,
-                params=params,
-            )
-        except httpx.HTTPError as exc:
-            raise AnyLinkError(
-                "Submission outcome is unknown; do not repeat execution blindly"
-                if writing
-                else "AnyLink request failed",
-                code="SUBMISSION_UNKNOWN" if writing else "TRANSPORT_ERROR",
-                idempotency_key=key,
-                submission_unknown=writing,
-            ) from exc
-        request_id = res.headers.get("x-anylink-request-id")
-        if res.status_code >= 400:
+        retryable = (not writing) or safe_retry
+        max_attempts = 3 if retryable else 1
+
+        for attempt in range(max_attempts):
             try:
-                data = res.json()
-                err = data.get("error", {})
-            except Exception:
-                data, err = {}, {}
-            code = err.get("code", "HTTP_ERROR")
-            raise AnyLinkError(
-                err.get("message", f"AnyLink HTTP {res.status_code}"),
-                code=code,
-                status=res.status_code,
-                request_id=data.get("request_id") or request_id,
-                idempotency_key=key,
-                submission_unknown=writing and res.status_code >= 500 and code != "PROVIDER_NOT_CONFIGURED",
-            )
-        return res.json()
+                if isinstance(body, bytes):
+                    res = await self._http.request(method, path, content=body, headers=req_headers, params=params)
+                else:
+                    res = await self._http.request(method, path, json=body, headers=req_headers, params=params)
+            except httpx.HTTPError as exc:
+                if retryable and attempt + 1 < max_attempts:
+                    await asyncio.sleep(_full_jitter(attempt, 0.2, 1.0))
+                    continue
+                raise AnyLinkError(
+                    "Submission outcome is unknown; do not repeat execution blindly"
+                    if writing
+                    else "AnyLink request failed",
+                    code="SUBMISSION_UNKNOWN" if writing else "TRANSPORT_ERROR",
+                    idempotency_key=key,
+                    submission_unknown=writing,
+                ) from exc
+            if retryable and res.status_code in (502, 503, 504) and attempt + 1 < max_attempts:
+                await asyncio.sleep(_full_jitter(attempt, 0.2, 1.0))
+                continue
+            request_id = res.headers.get("x-anylink-request-id")
+            if res.status_code >= 400:
+                try:
+                    data = res.json()
+                    err = data.get("error", {})
+                except Exception:
+                    data, err = {}, {}
+                code = err.get("code", "HTTP_ERROR")
+                raise AnyLinkError(
+                    err.get("message", f"AnyLink HTTP {res.status_code}"),
+                    code=code,
+                    status=res.status_code,
+                    request_id=data.get("request_id") or request_id,
+                    idempotency_key=key,
+                    submission_unknown=writing and res.status_code >= 500 and code != "PROVIDER_NOT_CONFIGURED",
+                )
+            return res if raw else res.json()
 
     # Identity & discovery
     async def protocol(self) -> dict[str, Any]:
@@ -365,6 +506,9 @@ class AnyLinkClient:
 
     async def directory(self) -> dict[str, Any]:
         return await self._request("GET", "edge/v1/directory")
+
+    async def events(self, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
+        return await self._request("GET", "edge/v1/events", params={"after_seq": after_seq, "limit": limit})
 
     async def persona(self) -> dict[str, Any]:
         return await self._request("GET", "edge/v1/persona")
@@ -411,7 +555,7 @@ class AnyLinkClient:
             body["query"] = query
         if include_scopes is not None:
             body["include_scopes"] = include_scopes
-        return await self._request("POST", "edge/v1/memory/assemble", body, idempotency_key=False)
+        return await self._request("POST", "edge/v1/memory/assemble", body, idempotency_key=False, safe_retry=True)
 
     async def ingest_memory(
         self,
@@ -452,7 +596,7 @@ class AnyLinkClient:
             for k, v in {"q": q, "scope": scope, "kind": kind, "device_id": device_id, "limit": limit}.items()
             if v is not None
         }
-        return await self._request("POST", "edge/v1/memories/search", body, idempotency_key=False)
+        return await self._request("POST", "edge/v1/memories/search", body, idempotency_key=False, safe_retry=True)
 
     async def save_memory(
         self,
@@ -508,9 +652,48 @@ class AnyLinkClient:
             idempotency_key=idempotency_key,
         )
 
+    # Binary Artifacts (Protocol v3.2)
+    async def upload_artifact(
+        self,
+        data: bytes,
+        *,
+        filename: str = "attachment.bin",
+        content_type: str = "application/octet-stream",
+        task_id: str | None = None,
+        ttl_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        headers = {
+            "Content-Type": content_type,
+            "X-AnyLink-Filename": quote(filename),
+        }
+        if task_id:
+            headers["X-AnyLink-Task-Id"] = task_id
+        if ttl_seconds is not None:
+            headers["X-AnyLink-TTL"] = str(ttl_seconds)
+        return await self._request("POST", "edge/v1/artifacts", data, idempotency_key=False, headers=headers)
+
+    async def artifact_meta(self, artifact_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"edge/v1/artifacts/{artifact_id}/meta")
+
+    async def download_artifact(self, artifact_id: str) -> dict[str, Any]:
+        res: httpx.Response = await self._request("GET", f"edge/v1/artifacts/{artifact_id}", raw=True)
+        raw_name = res.headers.get("x-anylink-filename")
+        return {
+            "data": res.content,
+            "filename": unquote(raw_name) if raw_name else "attachment.bin",
+            "content_type": res.headers.get("content-type", "application/octet-stream"),
+            "sha256": res.headers.get("x-anylink-sha256"),
+        }
+
+    async def delete_artifact(self, artifact_id: str) -> dict[str, Any]:
+        return await self._request("DELETE", f"edge/v1/artifacts/{artifact_id}", idempotency_key=False)
+
     # Multi-Model Gateway
     async def models(self) -> dict[str, Any]:
         return await self._request("GET", "model/v1/models")
+
+    async def model_request(self, request_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"model/v1/requests/{request_id}")
 
     async def chat_completions(
         self,
@@ -518,11 +701,14 @@ class AnyLinkClient:
         model: str = "default",
         messages: list[dict[str, Any]],
         auto_memory: bool | None = None,
+        detach_on_disconnect: bool | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         headers = {}
         if auto_memory is not None:
             headers["X-AnyLink-Auto-Memory"] = "on" if auto_memory else "off"
+        if detach_on_disconnect is not None:
+            headers["X-AnyLink-Detach-On-Disconnect"] = "on" if detach_on_disconnect else "off"
         return await self._request(
             "POST",
             "model/v1/chat/completions",
@@ -537,17 +723,24 @@ class AnyLinkClient:
         model: str = "default",
         messages: list[dict[str, Any]],
         auto_memory: bool | None = None,
+        detach_on_disconnect: bool | None = None,
+        on_request_id: Callable[[str], None] | None = None,
         **extra: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         headers = {"Authorization": f"Bearer {self._token}"}
         if auto_memory is not None:
             headers["X-AnyLink-Auto-Memory"] = "on" if auto_memory else "off"
+        if detach_on_disconnect is not None:
+            headers["X-AnyLink-Detach-On-Disconnect"] = "on" if detach_on_disconnect else "off"
         async with self._http.stream(
             "POST",
             "model/v1/chat/completions",
             headers=headers,
             json={"model": model, "messages": messages, "stream": True, **extra},
         ) as res:
+            req_id = res.headers.get("x-anylink-request-id")
+            if req_id and on_request_id:
+                on_request_id(req_id)
             if res.status_code >= 400:
                 raw = await res.aread()
                 try:
@@ -558,6 +751,7 @@ class AnyLinkClient:
                     err.get("message", f"Model HTTP {res.status_code}"),
                     code=err.get("code", "HTTP_ERROR"),
                     status=res.status_code,
+                    request_id=req_id,
                     submission_unknown=res.status_code >= 500,
                 )
             done = False
@@ -574,10 +768,11 @@ class AnyLinkClient:
                 raise AnyLinkError(
                     "Model stream ended without [DONE]; it will not be retried",
                     code="STREAM_INCOMPLETE",
+                    request_id=req_id,
                     submission_unknown=True,
                 )
 
-    # Cross-device tasks (capability-free)
+    # Cross-device tasks (Protocol v3.2)
     async def invoke(
         self,
         instruction: str,
@@ -587,6 +782,15 @@ class AnyLinkClient:
         input_data: dict[str, Any] | None = None,
         ttl_seconds: int = 1800,
         lease_seconds: int = 120,
+        execution_timeout_seconds: int | None = None,
+        priority: int | None = None,
+        require_online: bool | None = None,
+        idempotent: bool | None = None,
+        max_retries: int | None = None,
+        concurrency_key: str | None = None,
+        trace_id: str | None = None,
+        parent_task_id: str | None = None,
+        allow_reentry: bool | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -594,12 +798,22 @@ class AnyLinkClient:
             "ttl_seconds": ttl_seconds,
             "lease_seconds": lease_seconds,
         }
-        if target:
-            body["target"] = target
-        if capability:
-            body["capability"] = capability
-        if input_data is not None:
-            body["input"] = input_data
+        for k, v in {
+            "target": target,
+            "capability": capability,
+            "input": input_data,
+            "execution_timeout_seconds": execution_timeout_seconds,
+            "priority": priority,
+            "require_online": require_online,
+            "idempotent": idempotent,
+            "max_retries": max_retries,
+            "concurrency_key": concurrency_key,
+            "trace_id": trace_id,
+            "parent_task_id": parent_task_id,
+            "allow_reentry": allow_reentry,
+        }.items():
+            if v is not None:
+                body[k] = v
         return await self._request("POST", "edge/v1/tasks", body, idempotency_key=idempotency_key)
 
     async def create_task(
@@ -623,25 +837,60 @@ class AnyLinkClient:
         return await self._request("POST", "edge/v1/tasks/claim", body, idempotency_key=idempotency_key)
 
     async def heartbeat_task(
-        self, task_id: str, *, extend_seconds: int | None = None
+        self,
+        task_id: str,
+        *,
+        extend_seconds: int | None = None,
+        lease_token: str | None = None,
     ) -> dict[str, Any]:
-        body = {"extend_seconds": extend_seconds} if extend_seconds is not None else {}
+        body: dict[str, Any] = {}
+        if extend_seconds is not None:
+            body["extend_seconds"] = extend_seconds
+        if lease_token is not None:
+            body["lease_token"] = lease_token
         return await self._request(
             "POST", f"edge/v1/tasks/{task_id}/heartbeat", body, idempotency_key=False
         )
 
-    async def report_progress(self, task_id: str, progress: dict[str, Any]) -> dict[str, Any]:
+    async def report_progress(
+        self, task_id: str, progress: dict[str, Any], *, lease_token: str | None = None
+    ) -> dict[str, Any]:
+        body = {**progress, "lease_token": lease_token} if lease_token else progress
         return await self._request(
-            "POST", f"edge/v1/tasks/{task_id}/progress", progress, idempotency_key=False
+            "POST", f"edge/v1/tasks/{task_id}/progress", body, idempotency_key=False
         )
 
-    async def complete_task(
-        self, task_id: str, result: dict[str, Any], *, idempotency_key: str | None = None
+    async def suspend_task(
+        self, task_id: str, body: dict[str, Any], *, lease_token: str | None = None
     ) -> dict[str, Any]:
+        payload = {**body, "lease_token": lease_token} if lease_token else body
+        return await self._request(
+            "POST", f"edge/v1/tasks/{task_id}/suspend", payload, idempotency_key=False
+        )
+
+    async def reply_task(
+        self, task_id: str, body: dict[str, Any], *, idempotency_key: str | None = None
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST", f"edge/v1/tasks/{task_id}/reply", body, idempotency_key=idempotency_key
+        )
+
+    async def ack_receipt(self, task_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"edge/v1/tasks/{task_id}/ack", {}, idempotency_key=False)
+
+    async def complete_task(
+        self,
+        task_id: str,
+        result: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+        lease_token: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {**result, "lease_token": lease_token} if lease_token else result
         return await self._request(
             "POST",
             f"edge/v1/tasks/{task_id}/result",
-            result,
+            payload,
             idempotency_key=idempotency_key or f"result:{task_id}",
         )
 
@@ -670,10 +919,43 @@ class AnyLinkClient:
         timeout: float = 120.0,
         poll_interval: float = 1.0,
         on_progress: Callable[[dict[str, Any]], Any] | None = None,
+        on_interaction: Callable[[dict[str, Any]], Any] | None = None,
+        auto_ack: bool = True,
     ) -> dict[str, Any]:
-        if socket is not None and socket.connected:
+        async def _finalize(task: dict[str, Any]) -> dict[str, Any]:
+            if auto_ack:
+                try:
+                    if socket is not None and socket.connected:
+                        await socket.ack_receipt(task["id"])
+                    else:
+                        await self.ack_receipt(task["id"])
+                except Exception:
+                    pass
+            return task
+
+        if socket is not None:
             loop = asyncio.get_running_loop()
             done_fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+            fallback_task: asyncio.Task[None] | None = None
+
+            async def _check_once() -> None:
+                if done_fut.done():
+                    return
+                try:
+                    cur = await self.get_task(task_id)
+                    if cur.get("progress") and on_progress:
+                        on_progress(cur["progress"])
+                    if cur.get("state") in ("awaiting_input", "awaiting_approval") and on_interaction:
+                        on_interaction(cur)
+                    if cur.get("state") in TERMINAL_TASK_STATES and not done_fut.done():
+                        done_fut.set_result(cur)
+                except Exception:
+                    pass
+
+            async def _poll_while_disconnected() -> None:
+                while not done_fut.done():
+                    await asyncio.sleep(max(poll_interval, 1.5))
+                    await _check_once()
 
             def _on_complete(frame: dict[str, Any]) -> None:
                 task = frame.get("task")
@@ -684,25 +966,54 @@ class AnyLinkClient:
                 if frame.get("task_id") == task_id and on_progress:
                     on_progress(frame.get("progress", {}))
 
+            def _on_interaction(frame: dict[str, Any]) -> None:
+                if frame.get("task_id") == task_id and on_interaction and frame.get("task"):
+                    on_interaction(frame["task"])
+
+            def _on_hello(_: dict[str, Any]) -> None:
+                nonlocal fallback_task
+                if fallback_task and not fallback_task.done():
+                    fallback_task.cancel()
+                    fallback_task = None
+                asyncio.create_task(_check_once())
+
+            def _on_close(_: dict[str, Any]) -> None:
+                nonlocal fallback_task
+                if fallback_task is None or fallback_task.done():
+                    fallback_task = asyncio.create_task(_poll_while_disconnected())
+
             off_c = socket.on("task.completed", _on_complete)
             off_p = socket.on("task.progress", _on_progress)
+            off_i = socket.on("task.awaiting_input", _on_interaction)
+            off_a = socket.on("task.awaiting_approval", _on_interaction)
+            off_h = socket.on("hello", _on_hello)
+            off_cl = socket.on("close", _on_close)
             try:
-                cur = await self.get_task(task_id)
-                if cur.get("state") in TERMINAL_TASK_STATES:
-                    return cur
-                return await asyncio.wait_for(done_fut, timeout=timeout)
+                if not socket.connected:
+                    fallback_task = asyncio.create_task(_poll_while_disconnected())
+                await _check_once()
+                result = await asyncio.wait_for(done_fut, timeout=timeout)
+                return await _finalize(result)
             except asyncio.TimeoutError as exc:
                 raise AnyLinkError("Timed out waiting for task", code="TASK_WAIT_TIMEOUT") from exc
             finally:
                 off_c()
                 off_p()
+                off_i()
+                off_a()
+                off_h()
+                off_cl()
+                if fallback_task and not fallback_task.done():
+                    fallback_task.cancel()
 
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
             cur = await self.get_task(task_id)
             if cur.get("progress") and on_progress:
                 on_progress(cur["progress"])
+            if cur.get("state") in ("awaiting_input", "awaiting_approval") and on_interaction:
+                on_interaction(cur)
             if cur.get("state") in TERMINAL_TASK_STATES:
-                return cur
+                return await _finalize(cur)
             await asyncio.sleep(min(poll_interval, max(0.05, deadline - asyncio.get_running_loop().time())))
         raise AnyLinkError("Timed out waiting for task", code="TASK_WAIT_TIMEOUT")

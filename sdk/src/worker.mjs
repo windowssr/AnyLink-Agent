@@ -70,23 +70,25 @@ export class FileJournal {
     }
   }
 
-  markStarted(taskId) {
-    if (this.#records.has(taskId)) return false;
-    const entry = { type: 'exec', task_id: taskId, state: 'started', result: null };
+  markStarted(taskId, attempt = 1) {
+    const prev = this.#records.get(taskId);
+    if (prev && (prev.attempt ?? 1) >= attempt) return false;
+    const entry = { type: 'exec', task_id: taskId, attempt, state: 'started', result: null };
     this.#records.set(taskId, entry);
     this.#append(entry);
     return true;
   }
 
-  markFinished(taskId, result) {
-    const entry = { type: 'exec', task_id: taskId, state: 'finished', result };
+  markFinished(taskId, result, leaseToken) {
+    const prev = this.#records.get(taskId);
+    const entry = { type: 'exec', task_id: taskId, attempt: prev?.attempt ?? 1, lease_token: leaseToken ?? null, state: 'finished', result };
     this.#records.set(taskId, entry);
     this.#append(entry);
   }
 
   markReported(taskId) {
     const prev = this.#records.get(taskId);
-    const entry = { type: 'exec', task_id: taskId, state: 'reported', result: prev?.result ?? null };
+    const entry = { type: 'exec', task_id: taskId, attempt: prev?.attempt ?? 1, lease_token: prev?.lease_token ?? null, state: 'reported', result: prev?.result ?? null };
     this.#records.set(taskId, entry);
     this.#append(entry);
   }
@@ -94,7 +96,7 @@ export class FileJournal {
   unfinishedResults() {
     const out = [];
     for (const r of this.#records.values()) {
-      if (r.state === 'finished' && r.result) out.push({ task_id: r.task_id, result: r.result });
+      if (r.state === 'finished' && r.result) out.push({ task_id: r.task_id, result: r.result, lease_token: r.lease_token ?? undefined });
     }
     return out;
   }
@@ -102,8 +104,10 @@ export class FileJournal {
   close() {}
 }
 
-/** Edge task worker supporting Protocol v3 WebSocket push, automatic lease heartbeats,
- * capability-free `onInvoke` handling, explicit `TaskDeclined`, and durable crash-safe journaling. */
+const FENCE_ERROR_CODES = new Set(['TASK_NOT_ACTIVE', 'LEASE_FENCED', 'TASK_TERMINAL']);
+
+/** Edge task worker supporting Protocol v3.2 WebSocket push, fencing lease heartbeats, concurrent slots,
+ * interactive suspend/reply (askInput / requestApproval), explicit TaskDeclined, and crash-safe journaling. */
 export class AnyLinkWorker {
   #client; #handlers; #onInvoke; #journal; #binding;
 
@@ -136,19 +140,22 @@ export class AnyLinkWorker {
   }
 
   async #executeClaimed(task, { signal, socket } = {}) {
-    if (!this.#journal.markStarted(task.id)) return { task, replayed: true, execution_unknown: true };
+    const attempt = task.attempt ?? 1;
+    const leaseToken = task.lease_token ?? undefined;
+    if (!this.#journal.markStarted(task.id, attempt)) return { task, replayed: true, execution_unknown: true };
+
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason);
     if (signal?.aborted) abort();
     else signal?.addEventListener('abort', abort, { once: true });
 
     let active = true;
+    let suspended = false;
     const offCancel = socket?.on('task.cancel', frame => {
       if (frame.task_id === task.id) controller.abort(new Error('Task cancelled'));
     });
 
-    // Periodic lease heartbeat: extends lease on the server AND detects cooperative cancellation.
-    // Transient network blips do NOT abort a running handler (fixes v2 watch bug).
+    // Periodic fencing lease heartbeat: extends lease, checks cooperative cancel, and aborts immediately if fenced (409).
     const hbIntervalMs = Math.max(2000, Math.floor(((task.lease_seconds ?? 120) * 1000) / 3));
     const heartbeatLoop = (async () => {
       while (active && !controller.signal.aborted) {
@@ -158,13 +165,18 @@ export class AnyLinkWorker {
           break;
         }
         if (!active || controller.signal.aborted) break;
+        if (suspended) continue;
         try {
           const hb = socket?.connected
-            ? (await socket.heartbeatTask(task.id)).heartbeat
-            : await this.#client.heartbeatTask(task.id, { signal: controller.signal });
+            ? (await socket.heartbeatTask(task.id, { leaseToken })).heartbeat
+            : await this.#client.heartbeatTask(task.id, { leaseToken, signal: controller.signal });
           if (hb?.cancel_requested) controller.abort(new Error('Task cancelled'));
-        } catch {
-          // Transient heartbeat error: retry next interval rather than killing in-flight work.
+        } catch (err) {
+          if (err?.status === 409 || FENCE_ERROR_CODES.has(err?.code)) {
+            controller.abort(err);
+            break;
+          }
+          // Transient network blip: retry next interval rather than killing healthy in-flight work.
         }
       }
     })();
@@ -172,22 +184,76 @@ export class AnyLinkWorker {
     const reportProgress = async progress => {
       if (!active) return;
       try {
-        if (socket?.connected) await socket.reportProgress(task.id, progress);
-        else await this.#client.reportProgress(task.id, progress, { signal: controller.signal });
+        if (socket?.connected) await socket.reportProgress(task.id, progress, { leaseToken });
+        else await this.#client.reportProgress(task.id, progress, { leaseToken, signal: controller.signal });
       } catch {}
     };
 
-    const resultKey = `result:${task.id}`;
+    const waitForInteraction = async (state, payload, timeoutSeconds = 600) => {
+      suspended = true;
+      try {
+        if (socket?.connected) {
+          await socket.suspendTask(task.id, { state, ...payload, timeout_seconds: timeoutSeconds }, { leaseToken });
+        } else {
+          await this.#client.suspendTask(task.id, { state, ...payload, timeout_seconds: timeoutSeconds }, { leaseToken, signal: controller.signal });
+        }
+
+        const deadline = Date.now() + timeoutSeconds * 1000;
+        const reply = await new Promise((resolve, reject) => {
+          let done = false;
+          const finish = (fn, val) => {
+            if (done) return;
+            done = true;
+            offResumed?.();
+            clearInterval(poller);
+            clearTimeout(timer);
+            controller.signal.removeEventListener('abort', onAbort);
+            fn(val);
+          };
+          const onAbort = () => finish(reject, new Error('Task aborted while awaiting interaction'));
+          const timer = setTimeout(() => finish(reject, new TaskFailure('INTERACTION_TIMEOUT', 'Timed out waiting for reply')), Math.max(1000, deadline - Date.now()));
+          const offResumed = socket?.on('task.resumed', frame => {
+            if (frame.task_id === task.id) finish(resolve, frame.reply ?? frame.task?.pending_interaction?.reply ?? {});
+          });
+          const poller = setInterval(() => {
+            this.#client.task(task.id, { signal: controller.signal }).then(cur => {
+              if (cur.state === 'running' && cur.pending_interaction?.resolved) {
+                finish(resolve, cur.pending_interaction.reply ?? {});
+              } else if (cur.state === 'declined') {
+                finish(resolve, { approved: false, message: cur.result?.error?.message ?? 'Declined' });
+              } else if (['cancelled', 'expired', 'unknown', 'failed'].includes(cur.state)) {
+                finish(reject, new TaskFailure(cur.result?.error?.code ?? 'INTERACTION_ENDED', cur.result?.error?.message ?? `Task ended (${cur.state})`));
+              }
+            }).catch(() => {});
+          }, 1500);
+          poller.unref?.();
+          controller.signal.addEventListener('abort', onAbort, { once: true });
+        });
+        return reply;
+      } finally {
+        suspended = false;
+      }
+    };
+
+    const askInput = (prompt, { choices, timeoutSeconds = 600 } = {}) =>
+      waitForInteraction('awaiting_input', { prompt, ...(choices ? { choices } : {}) }, timeoutSeconds);
+
+    const requestApproval = async (prompt, { riskLevel = 'medium', timeoutSeconds = 600 } = {}) => {
+      const reply = await waitForInteraction('awaiting_approval', { prompt, risk_level: riskLevel }, timeoutSeconds);
+      return { approved: reply?.approved !== false, message: reply?.message ?? '', data: reply?.data };
+    };
+
+    const resultKey = attempt > 1 ? `result:${task.id}:${attempt}` : `result:${task.id}`;
     try {
       const handler = this.#handlers[task.capability];
       let result;
       try {
         controller.signal.throwIfAborted();
         if (handler) {
-          const output = await handler.execute(task.input, { task, signal: controller.signal, reportProgress });
+          const output = await handler.execute(task.input, { task, signal: controller.signal, reportProgress, askInput, requestApproval });
           result = { state: 'succeeded', output: output ?? {} };
         } else if (this.#onInvoke) {
-          const output = await this.#onInvoke(task, { signal: controller.signal, reportProgress });
+          const output = await this.#onInvoke(task, { signal: controller.signal, reportProgress, askInput, requestApproval });
           result = { state: 'succeeded', output: typeof output === 'string' ? { reply: output } : (output ?? {}) };
         } else {
           result = {
@@ -221,18 +287,28 @@ export class AnyLinkWorker {
         }
       }
 
-      this.#journal.markFinished(task.id, result);
+      this.#journal.markFinished(task.id, result, leaseToken);
       let completed;
-      if (socket?.connected) {
-        try {
-          completed = (await socket.completeTask(task.id, result, { idempotencyKey: resultKey })).task;
-        } catch {
-          completed = await this.#client.completeTask(task.id, result, { idempotencyKey: resultKey });
+      try {
+        if (socket?.connected) {
+          try {
+            completed = (await socket.completeTask(task.id, result, { idempotencyKey: resultKey, leaseToken })).task;
+          } catch (wsErr) {
+            if (FENCE_ERROR_CODES.has(wsErr?.code)) throw wsErr;
+            completed = await this.#client.completeTask(task.id, result, { idempotencyKey: resultKey, leaseToken });
+          }
+        } else {
+          completed = await this.#client.completeTask(task.id, result, { idempotencyKey: resultKey, leaseToken });
         }
-      } else {
-        completed = await this.#client.completeTask(task.id, result, { idempotencyKey: resultKey });
+        this.#journal.markReported(task.id);
+      } catch (err) {
+        if (err?.status === 409 || FENCE_ERROR_CODES.has(err?.code)) {
+          // Server already finalized/fenced this attempt (e.g. approval declined or lease expired); mark reported so we never spam retries.
+          this.#journal.markReported(task.id);
+          return { task, replayed: false, fenced: true, execution_unknown: result.state === 'unknown' };
+        }
+        throw err;
       }
-      this.#journal.markReported(task.id);
       return { task: completed, replayed: false, execution_unknown: result.state === 'unknown' };
     } finally {
       active = false;
@@ -263,16 +339,27 @@ export class AnyLinkWorker {
     await this.#bound();
     const results = [];
     for (const row of this.#journal.unfinishedResults()) {
-      results.push(await this.#client.completeTask(row.task_id, row.result, { idempotencyKey: `result:${row.task_id}` }));
-      this.#journal.markReported(row.task_id);
+      try {
+        results.push(await this.#client.completeTask(row.task_id, row.result, { idempotencyKey: `result:${row.task_id}`, leaseToken: row.lease_token }));
+        this.#journal.markReported(row.task_id);
+      } catch (err) {
+        if (err?.status === 409 || FENCE_ERROR_CODES.has(err?.code)) {
+          this.#journal.markReported(row.task_id);
+        } else {
+          throw err;
+        }
+      }
     }
     return results;
   }
 
-  /** Main worker loop: connects over WebSocket for instant task dispatch, falling back cleanly to HTTP polling. */
-  async run({ signal, pollIntervalMs = 2000, useWebSocket = true } = {}) {
+  /** Main worker loop: recovers pending results on start & reconnect, dispatches concurrently up to maxConcurrency over WS (with HTTP fallback). */
+  async run({ signal, pollIntervalMs = 2000, useWebSocket = true, maxConcurrency = 2 } = {}) {
     if (Object.keys(this.#handlers).length > 0) await this.advertise({ signal });
     else await this.#bound();
+    await this.recoverResults().catch(() => {});
+
+    const concurrency = Math.max(1, Math.min(16, Number(maxConcurrency) || 1));
 
     if (useWebSocket && typeof globalThis.WebSocket === 'function') {
       let socket = null;
@@ -283,20 +370,42 @@ export class AnyLinkWorker {
       }
       if (socket) {
         let wakeup = null;
+        const inFlight = new Set();
         const trigger = () => { if (wakeup) { const fn = wakeup; wakeup = null; fn(); } };
         const offAvail = socket.on('task.available', trigger);
-        const offHello = socket.on('hello', trigger);
+        const offHello = socket.on('hello', () => {
+          void this.recoverResults().catch(() => {});
+          trigger();
+        });
         const onAbort = () => { trigger(); socket.close(); };
         signal?.addEventListener('abort', onAbort, { once: true });
         try {
           while (!signal?.aborted) {
-            const ran = await this.runNext({ signal, socket }).catch(() => null);
-            if (ran) continue;
+            let claimedAny = false;
+            while (!signal?.aborted && inFlight.size < concurrency) {
+              let task = null;
+              try {
+                const claimed = socket.connected
+                  ? await socket.claimTask()
+                  : await this.#client.claimTask({ signal });
+                task = claimed?.task ?? null;
+              } catch {
+                task = null;
+              }
+              if (!task) break;
+              claimedAny = true;
+              const job = this.#executeClaimed(task, { signal, socket })
+                .catch(() => {})
+                .finally(() => { inFlight.delete(job); trigger(); });
+              inFlight.add(job);
+            }
+            if (claimedAny && inFlight.size < concurrency) continue;
             await Promise.race([
               new Promise(resolve => { wakeup = resolve; }),
               delay(Math.max(pollIntervalMs, 15000), undefined, { signal }).catch(() => {}),
             ]);
           }
+          await Promise.allSettled([...inFlight]);
         } finally {
           offAvail();
           offHello();

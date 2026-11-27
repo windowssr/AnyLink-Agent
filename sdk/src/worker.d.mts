@@ -15,20 +15,20 @@ export class TaskDeclined extends Error {
 
 export interface JournalStore {
   bind(server: string, deviceId: string, agentId: string | null): void;
-  markStarted(taskId: string): boolean;
-  markFinished(taskId: string, result: unknown): void;
+  markStarted(taskId: string, attempt?: number): boolean;
+  markFinished(taskId: string, result: unknown, leaseToken?: string): void;
   markReported(taskId: string): void;
-  unfinishedResults(): Array<{ task_id: string; result: any }>;
+  unfinishedResults(): Array<{ task_id: string; result: any; lease_token?: string }>;
   close(): void;
 }
 
 export class FileJournal implements JournalStore {
   constructor(journalPath: string);
   bind(server: string, deviceId: string, agentId: string | null): void;
-  markStarted(taskId: string): boolean;
-  markFinished(taskId: string, result: unknown): void;
+  markStarted(taskId: string, attempt?: number): boolean;
+  markFinished(taskId: string, result: unknown, leaseToken?: string): void;
   markReported(taskId: string): void;
-  unfinishedResults(): Array<{ task_id: string; result: any }>;
+  unfinishedResults(): Array<{ task_id: string; result: any; lease_token?: string }>;
   close(): void;
 }
 
@@ -36,6 +36,8 @@ export interface HandlerContext {
   task: LinkTask;
   signal: AbortSignal;
   reportProgress: (progress: { stage?: string; message?: string; percent?: number; data?: Record<string, unknown> }) => Promise<void>;
+  askInput: (prompt: string, options?: { choices?: string[]; timeoutSeconds?: number }) => Promise<{ message?: string; choice?: string; data?: Record<string, unknown> }>;
+  requestApproval: (prompt: string, options?: { riskLevel?: 'low' | 'medium' | 'high'; timeoutSeconds?: number }) => Promise<{ approved: boolean; message: string; data?: Record<string, unknown> }>;
 }
 
 export interface TaskHandler {
@@ -47,13 +49,13 @@ export class AnyLinkWorker {
   constructor(options: {
     client: AnyLinkClient;
     handlers?: Record<string, TaskHandler>;
-    onInvoke?: (task: LinkTask, context: { signal: AbortSignal; reportProgress: HandlerContext['reportProgress'] }) => Promise<Record<string, unknown> | string>;
+    onInvoke?: (task: LinkTask, context: Omit<HandlerContext, 'task'>) => Promise<Record<string, unknown> | string>;
     journalPath?: string;
     journal?: JournalStore;
   });
   advertise(options?: { signal?: AbortSignal; idempotencyKey?: string }): Promise<{ capabilities: any[] }>;
-  runNext(options?: { signal?: AbortSignal; taskId?: string; socket?: AnyLinkSocket }): Promise<{ task: LinkTask; replayed: boolean; execution_unknown: boolean } | null>;
+  runNext(options?: { signal?: AbortSignal; taskId?: string; socket?: AnyLinkSocket }): Promise<{ task: LinkTask; replayed: boolean; fenced?: boolean; execution_unknown: boolean } | null>;
   recoverResults(): Promise<LinkTask[]>;
-  run(options?: { signal?: AbortSignal; pollIntervalMs?: number; useWebSocket?: boolean }): Promise<void>;
+  run(options?: { signal?: AbortSignal; pollIntervalMs?: number; useWebSocket?: boolean; maxConcurrency?: number }): Promise<void>;
   close(): void;
 }

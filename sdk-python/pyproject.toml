@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anylink-agent"
-version = "0.3.0"
-description = "Python SDK for AnyLink Protocol v3 — Personal Agent Network with Cloud Memory Brain, Multi-Model Gateway, and real-time WebSocket cross-device tasks"
+version = "0.9.0"
+description = "Python SDK for AnyLink Protocol v3.2 — Personal Agent Network with Cloud Memory Brain, Multi-Model Gateway, resilient WebSocket bus, interactive tasks, and binary artifacts"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
