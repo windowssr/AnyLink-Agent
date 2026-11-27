@@ -25,13 +25,19 @@ const env={...process.env,PATH:path.dirname(node)+':'+(process.env.PATH??'/usr/b
 // DeepSeek credentials never enter this process; OpenClaw owns the Agent loop.
 delete env.DEEPSEEK_API_KEY;
 const gateway=spawn(node,[cli,'gateway','--port','18791','--bind','loopback'],{env,stdio:'inherit',cwd:paths.workspace});
-// Generic cloud task worker is independent of OpenClaw chat and uses the same
-// Mac-owned read-only roots. It never executes model-generated shell commands.
-const worker=spawn(node,[path.join(paths.root,'examples/mac-openclaw/peer/link-worker.mjs')],{env,stdio:'inherit',cwd:paths.root});
-worker.on('error',()=>log('link_worker_start_failed'));
+// Generic cloud task worker is independent of OpenClaw chat and runs with automatic restart supervision.
+let worker,workerReconnect;
+function startWorker(){
+  if(stopping)return;
+  worker=spawn(node,[path.join(paths.root,'examples/mac-openclaw/peer/link-worker.mjs')],{env,stdio:'inherit',cwd:paths.root});
+  let scheduled=false;
+  const retry=(code,sig)=>{if(stopping||scheduled)return;scheduled=true;log(`link_worker_restarting_${code??sig??'err'}`);workerReconnect=setTimeout(startWorker,3000);};
+  worker.on('error',()=>retry('error'));worker.on('exit',retry);
+}
+startWorker();
 
 // Keep the model connection available until the native Gateway has drained its owned work.
-const shutdown=()=>{if(stopping)return;stopping=true;clearTimeout(reconnect);worker.kill('SIGTERM');gateway.kill('SIGTERM');};
+const shutdown=()=>{if(stopping)return;stopping=true;clearTimeout(reconnect);clearTimeout(workerReconnect);worker?.kill('SIGTERM');gateway.kill('SIGTERM');};
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
 gateway.on('error',()=>{log('local_openclaw_start_failed');shutdown();process.exitCode=1;});
-await new Promise(resolve=>gateway.on('close',code=>{if(!stopping)process.exitCode=code??1;stopping=true;clearTimeout(reconnect);worker.kill('SIGTERM');tunnel?.kill('SIGTERM');resolve();}));
+await new Promise(resolve=>gateway.on('close',code=>{if(!stopping)process.exitCode=code??1;stopping=true;clearTimeout(reconnect);clearTimeout(workerReconnect);worker?.kill('SIGTERM');tunnel?.kill('SIGTERM');resolve();}));

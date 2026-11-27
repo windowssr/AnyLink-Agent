@@ -72,3 +72,19 @@ test('v3 helpers: assembleMemory, ingestMemory, invoke, and autoMemory header', 
   assert.equal(calls[3].headers['X-AnyLink-Auto-Memory'], 'on');
   assert.equal(client.wsUrl(), 'wss://example.test/edge/v1/ws');
 });
+
+test('read-only retry backoff keeps Node event loop alive (no exit 13 unsettled top-level await)', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const script = `
+    import { AnyLinkClient } from './sdk/src/client.mjs';
+    let calls = 0;
+    const client = new AnyLinkClient({
+      baseUrl: 'http://127.0.0.1:1',
+      token: 'ak_' + 'x'.repeat(32),
+      fetch: async () => { calls++; throw new Error('ECONNREFUSED'); },
+    });
+    try { await client.identity(); } catch (e) { console.log('CAUGHT:' + e.code + ':' + calls); }
+  `;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10000 });
+  assert.match(out, /CAUGHT:TRANSPORT_ERROR:3/);
+});

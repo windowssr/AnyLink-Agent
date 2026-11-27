@@ -24,12 +24,13 @@ const fullJitterDelay = (attempt, baseMs = 1000, capMs = 30000) =>
   Math.max(100, Math.floor(Math.random() * Math.min(capMs, baseMs * Math.pow(2, Math.min(attempt, 5)))));
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
-  const t = setTimeout(resolve, ms);
-  t.unref?.();
-  if (signal) {
-    if (signal.aborted) { clearTimeout(t); reject(signal.reason); return; }
-    signal.addEventListener('abort', () => { clearTimeout(t); reject(signal.reason); }, { once: true });
-  }
+  if (signal?.aborted) { reject(signal.reason); return; }
+  const onAbort = () => { clearTimeout(t); reject(signal.reason); };
+  const t = setTimeout(() => {
+    signal?.removeEventListener('abort', onAbort);
+    resolve();
+  }, ms);
+  signal?.addEventListener('abort', onAbort, { once: true });
 });
 
 /** Persistent JSONL offline outbox for edge memory ingestion when the network is temporarily unreachable. */

@@ -82,10 +82,16 @@ export function createMacAskWorker({ connection, journalPath, gatewayToken, gate
   });
 }
 
-async function loop(worker, abort, maxConcurrency = 2) {
+async function loop(worker, abort, maxConcurrency = 2, onConnected = null) {
+  let connectedOnce = false;
   while (!abort.signal.aborted) {
     try {
       await worker.recoverResults();
+      if (!connectedOnce) {
+        connectedOnce = true;
+        process.stdout.write('{"event":"link_worker_connected"}\n');
+        if (onConnected) void onConnected().catch(() => {});
+      }
       await worker.run({ signal: abort.signal, pollIntervalMs: 3000, useWebSocket: true, maxConcurrency });
     } catch {
       if (!abort.signal.aborted) process.stdout.write('{"event":"link_worker_connection_unavailable_no_execution_replay"}\n');
@@ -107,22 +113,21 @@ async function main() {
     const gatewayToken = fs.readFileSync(path.join(root, 'secrets/mac-gateway-token'), 'utf8').trim();
     workers.push(createMacAskWorker({ connection, journalPath: path.join(directory, `executions-${connection.agent_id}.jsonl`), gatewayToken }));
   }
-  // Automatically clear stale sandbox OUTSIDE_ROOT boundary memories when full_access is active.
-  try {
+
+  // Automatically clear stale sandbox OUTSIDE_ROOT boundary memories once cloud connection is ready.
+  const runBoundaryHeal = async () => {
     const currentPolicy = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
-    if (currentPolicy?.full_access === true) {
-      const healClient = new AnyLinkClient({ baseUrl: connection.server, token: connection.token, timeoutMs: 15000 });
-      void healStaleBoundaries(healClient, currentPolicy).then(res => {
-        if (res.healed > 0 || res.recorded) process.stdout.write(JSON.stringify({ event: 'mac_full_access_boundaries_healed', ...res }) + '\n');
-      }).catch(() => {});
-    }
-  } catch {}
+    if (currentPolicy?.full_access !== true) return;
+    const healClient = new AnyLinkClient({ baseUrl: connection.server, token: connection.token, timeoutMs: 15000 });
+    const res = await healStaleBoundaries(healClient, currentPolicy);
+    if (res.healed > 0 || res.recorded) process.stdout.write(JSON.stringify({ event: 'mac_full_access_boundaries_healed', ...res }) + '\n');
+  };
 
   const abort = new AbortController();
   const stop = () => abort.abort();
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
-  try { await Promise.all(workers.map(w => loop(w, abort, 2).finally(() => w.close()))); }
+  try { await Promise.all(workers.map((w, idx) => loop(w, abort, 2, idx === 0 ? runBoundaryHeal : null).finally(() => w.close()))); }
   finally { process.off('SIGTERM', stop); process.off('SIGINT', stop); }
 }
 
