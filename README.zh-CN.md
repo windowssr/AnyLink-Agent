@@ -166,9 +166,12 @@ const done = await client.waitForTask(task.id);
 AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protocol v3）与云端中枢/SDK**。为了方便直接体验，仓库在 [`examples/`](examples/README.md) 目录下额外隔离提供了两款以深海蓝白鲸鱼娘「大肥鱼」为交互卖点的完整展示客户端（核心协议层与角色完全解耦，二次开发可完全不引入 `examples/`）：
 
 1. **电脑端（Mac + OpenClaw 后台常驻 Agent）** — 详见配置文档：[`examples/mac-openclaw/README.md`](examples/mac-openclaw/README.md)
-   - 基于 OpenClaw + Protocol v3.2 插件与并发 WebSocket Worker（`maxConcurrency=2`），支持直连公网 HTTPS（无需常驻 SSH 隧道），由 macOS LaunchAgent 后台常驻运行，支持云端记忆同步、`anylink_invoke` / `anylink_task_reply`、**跨设备双向大文件互传**（`anylink_file_send` / `file.deliver`，默认保存至 `~/Downloads/AnyLink/`）、默认白名单安全沙箱或 `--full-access` 全权限模式（启动时自动清理历史 `OUTSIDE_ROOT` 陈旧边界记忆）、可选桌面 Live2D 桌宠与本地语音。
+   - 基于 OpenClaw + Protocol v3.2 插件与并发 WebSocket Worker（`maxConcurrency=2`），支持直连公网 HTTPS（无需常驻 SSH 隧道），由 macOS LaunchAgent 后台常驻运行，支持云端记忆同步、`anylink_invoke` / `anylink_task_reply`、**跨设备双向大文件互传**（`anylink_file_send` / `file.deliver`，默认保存至 `~/Downloads/AnyLink/`）、默认白名单安全沙箱或 `--full-access` 全权限模式（启动时自动清理历史 `OUTSIDE_ROOT` 陈旧边界记忆）、Peekaboo 电脑操控（自动禁用 App Nap 并优先启动独立官方签名 `Peekaboo.app`，避免重编 `AnyLink.app` 导致录屏权限失效）、可选桌面 Live2D 桌宠与本地语音。
 2. **手机端（Android 原生独立 Agent）** — 详见配置文档：[`examples/android-native/README.md`](examples/android-native/README.md)
-   - 手机本地运行完整对话循环与 SQLite 幂等账本，**不依赖 Mac 在线**；v0.9.0 全新「深海玻璃陪伴」视觉设计：全屏无遮挡 Live2D 舞台（内置 WebGL 像素实测验证，根治闪现消失）+ 陪伴/阅读双视图切换 + 磨砂玻璃完整对话流 + v3.2 高危审批/追问交互卡片 + 预设密码一键登录 + 后台前台服务保活、悬浮球与高优先级主动消息弹窗通知 + **📎 一键/指令跨设备双向传文件（200 MiB 流式读写、收件卡片一键打开/分享）** + **手机 Agent 默认 100 步执行上限（可在「保活」设置页切换 `50 / 100 / 200 / 不限`，含循环内自动裁剪旧屏幕与一键「继续执行」）** + 离线 Outbox / SSE 断线续接 + 贴合「蓝色大肥鱼」人设的活泼语音播报。
+   - 手机本地运行完整对话循环与 SQLite 幂等账本，**不依赖 Mac 在线**；全新「深海玻璃陪伴」视觉设计：全屏无遮挡 Live2D 舞台（纯 ASCII 模型资产路径 + 无遮挡 WebView 渲染 +「保活」内实时引擎状态诊断与一键重载）+ 陪伴/阅读双视图切换 + **原生 Compose Markdown 渲染**（标题、加粗、行内/多行代码块、列表、引用、表格、可点链接）+ v3.2 高危审批/追问交互卡片 + 预设密码一键登录 + 后台保活与高优先级主动消息弹窗通知；
+   - **双向跨设备操控**：与 Mac 完全对等，收到来自电脑的 `agent.invoke` 后直接调用手机无障碍工具（打开 App、看屏、点击、输入、滚动等）实际执行并实时汇报进度（可在「保活」页一键开关远程操控权限）；
+   - **双引擎语音输入 + 全屏 Live2D 实时通话 + 人设精炼口播**：输入框常驻 `🎤` 语音输入按钮（系统在线/厂商识别 + `AudioRecord` 回声消除/VAD 云端识别 `POST /model/v1/audio/transcriptions` 自动兜底，兼容国产无 GMS 机型）；顶栏一键 **「📞 通话」** 进入全屏 Live2D 实时通话（免手连续多轮、逐句流式抢先播报、实时口型联动、随时打断、静音与扬声器/听筒切换）；普通回复播报统一经独立人设改写 API 提炼为 1–2 句核心口语；
+   - **📎 跨设备双向传文件**（200 MiB 流式读写、事前能力/容量协商、大文件确认弹窗与收件卡片）+ **手机 Agent 默认 100 步执行上限**（`50 / 100 / 200 / 不限`、循环内自动裁剪旧屏幕与一键「继续执行」）+ 离线 Outbox / SSE 断线续接。
 
 ### 跨设备双向文件互传、能力协商与上传上限配置
 
@@ -192,6 +195,7 @@ AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protoc
 | **云端服务端**（同上） | `ANYLINK_ARTIFACT_TTL_SECONDS` | `3600`（1 小时） | 临时附件保留时长（`60`–`86400` 秒），过期自动删除磁盘文件 |
 | **云端服务端**（`deploy/compose.yaml`） | `ANYLINK_ARTIFACT_DIR` | `/data/artifacts` | 容器内附件落盘目录（生产环境默认挂载宿主机 `/opt/anylink-agent/data/artifacts`） |
 | **云端服务端**（可选，同上 `app.env`） | `ANYLINK_MAX_AGENT_RPM` | `60` | 单 Agent 每分钟模型请求限速（最高 `600`），重度多步控屏时可按需调大 |
+| **云端服务端**（可选，同上 `app.env`） | `ANYLINK_ASR_BASE_URL` / `ANYLINK_ASR_API_KEY` / `ANYLINK_ASR_MODEL` | 未启用（默认模型 `FunAudioLLM/SenseVoiceSmall`） | 启用 `POST /model/v1/audio/transcriptions` 云端语音转文字，兼容硅基流动、Groq/OpenAI Whisper 或本地 Whisper，让无 GMS 国产手机也能直接语音输入与实时通话 |
 | **Mac 端客户端安全阀** | `MAX_ARTIFACT_BYTES` | `200 MiB` | 若服务端调大超过 200 MiB，同步修改 [`examples/mac-openclaw/plugin/index.mjs`](examples/mac-openclaw/plugin/index.mjs) |
 | **Android 端客户端安全阀** | `AnyLinkFiles.MAX_BYTES` | `200 MiB` | 若服务端调大超过 200 MiB，同步修改 [`examples/android-native/overlay/.../AnyLinkFiles.kt`](examples/android-native/overlay/app/src/main/java/ai/openclaw/app/anylink/AnyLinkFiles.kt) 并重新打包 APK |
 

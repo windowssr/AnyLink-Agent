@@ -44,6 +44,7 @@ Identity hierarchy: `Owner → Device → Agent`.
   - **Optional Auto-Memory Mode**: Pass `X-AnyLink-Auto-Memory: on` (or enable `ANYLINK_AUTO_MEMORY_DEFAULT=true` on the server) to automatically assemble relevant shared memory into the request context and ingest the completed turn into the Cloud Memory Brain in the background.
   - **Detached SSE Resume (`3.2`)**: Pass `X-AnyLink-Detach-On-Disconnect: on` to receive `X-AnyLink-Request-Id` in the response header. If the client connection drops mid-stream, the hub finishes reading upstream, persists `response_snapshot`, and lets the client recover the full result via **`GET /model/v1/requests/:id`** (15-minute retention).
 - **`POST /model/v1/speech`**: Optional TTS endpoint supporting `style` (`neutral` | `persona`), `rewrite` (`auto` | `always` | `never`), `voice`, `rate`, and `pitch`.
+- **`POST /model/v1/audio/transcriptions` & `GET /model/v1/audio/status`**: Optional cloud ASR proxy and capability probe; accepts `audio_base64` (`wav`/`m4a`/`mp3`/`ogg`/`webm`, ≤8 MiB) and forwards to any configured OpenAI-compatible ASR upstream (`ANYLINK_ASR_BASE_URL` / `ANYLINK_ASR_API_KEY` / `ANYLINK_ASR_MODEL`), returning `503 ASR_NOT_CONFIGURED` when unconfigured.
 
 ## 4. Cross-Device Invocation, Interactive Suspend & WebSocket Bus (`3.2`)
 

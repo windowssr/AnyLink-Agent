@@ -39,6 +39,7 @@ AnyLink 是面向**个人 Agent 网络（Personal Agent Network）**的引擎无
   - **可选自动记忆模式（1A）**：携带请求头 `X-AnyLink-Auto-Memory: on`（或服务端开启 `ANYLINK_AUTO_MEMORY_DEFAULT=true`），网关会在推理前自动组装共享记忆注入上下文，并在回复完成后异步摄入记忆大脑。
   - **SSE 断线脱钩续接（`3.2`）**：携带请求头 `X-AnyLink-Detach-On-Disconnect: on` 后，响应头会返回 `X-AnyLink-Request-Id`；若中途手机/边缘断线，云端将继续跑完上游生成并缓存 15 分钟，重连后调用 **`GET /model/v1/requests/:id`** 即可拉回完整响应。
 - **`POST /model/v1/speech`**：可选语音播报端点，支持 `style`（`neutral` / `persona`）、`rewrite`（`auto` / `always` / `never`）、音色与语速音调参数。
+- **`POST /model/v1/audio/transcriptions` & `GET /model/v1/audio/status`**：可选云端语音转文字（ASR）网关与可用性查询，接收 `audio_base64`（WAV/M4A/MP3/OGG/WebM，≤8 MiB）并转发至配置的 OpenAI 兼容 ASR 服务（`ANYLINK_ASR_BASE_URL` / `ANYLINK_ASR_API_KEY` / `ANYLINK_ASR_MODEL`），未配置时返回 `503 ASR_NOT_CONFIGURED`。
 
 ## 4. 跨设备任务、人机协同与 WebSocket 实时总线（`3.2`）
 
