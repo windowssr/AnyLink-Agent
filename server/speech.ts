@@ -11,7 +11,7 @@ export const SUMMARIZE_SYSTEM = `You are a concise spoken-reply rewriter. Rewrit
 
 export const PERSONA_SPEECH_SYSTEM = `你是「大肥鱼」（住在数据海里的深海蓝白鲸鱼娘），负责把要给主人听的文字精炼改写成 1-2 句适合直接语音播报的简短中文口语：
 - 只提炼最核心的结论、关键结果或明确原因，绝不编造未发生的结果；代码、Markdown 格式、完整文件路径、URL、JSON、表格、分点列表和英文报错码留在屏幕上，嘴上只用人话讲核心重点。
-- 严格贴合「蓝色大肥鱼」人设：聪明惜力、软糯轻快、带一点傲娇和熟人感；日常称用户「主人」（若原文里习惯称呼「宝宝」则保留亲近口吻），可偶尔自然带一两个「哼」「唔」「嘛」「哦」但不要堆砌；绝不使用客服套话、播音腔、括号动作描写、颜文字、或猫娘「喵」。
+- 表达遵循共享人设：自然、亲近、软糯轻快，保留原文的称呼和语气；不要主动添加「主人」「宝宝」「哼」等原文没有的称呼或语气词。绝不使用客服套话、播音腔、括号动作描写、颜文字或「喵」。
 - 务必简短利落（不超过 65 个中文字），只输出最终要念出来的纯口播文本，不要任何前缀、引号或解释。`;
 
 const CODE_FENCE = /```[\s\S]*?```|~~~[\s\S]*?~~~/g;
@@ -186,7 +186,7 @@ export function createTranscriber(config: Pick<Config, 'asrBaseUrl' | 'asrApiKey
   };
 }
 
-export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize; qwenSynthesize?: (text: string, signal?: AbortSignal) => Promise<Buffer>; transcribe?: Transcribe | null } = {}) {
+export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize; qwenSynthesize?: (text: string, signal?: AbortSignal, onPcm?: (pcm: Buffer) => void) => Promise<Buffer>; transcribe?: Transcribe | null } = {}) {
   const summarize = deps.summarize ?? createSummarizer(config);
   const synthesize = deps.synthesize ?? createSynthesizer({ config });
   const qwen = deps.qwenSynthesize ?? (config.ttsProvider === 'qwen' && config.qwenTtsApiKey ? createQwenSpeech({
@@ -197,6 +197,7 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
     asr_enabled: Boolean(transcribe),
     asr_model: transcribe ? (config.asrModel || 'FunAudioLLM/SenseVoiceSmall') : null,
     tts_enabled: true,
+    tts_streaming: Boolean(qwen),
     tts_provider: qwen ? 'qwen' : 'microsoft',
     tts_voice: qwen ? (config.qwenTtsVoice || 'Momo') : (config.ttsVoice || VOICES['sweet-lively'].voice),
     tts_fallbacks: qwen ? ['microsoft', 'system'] : ['system'],
@@ -243,24 +244,52 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
       }
     }
     let audio: Buffer;
-    let provider = 'microsoft', format = 'mp3', fallback = false;
-    const useQwen = Boolean(qwen) && input.voice === 'sweet-lively';
+    let provider = 'microsoft', format = 'mp3', fallback = req.headers['x-anylink-speech-provider'] === 'microsoft' && Boolean(qwen), reason = fallback ? 'TTS_TURN_PINNED' : '', streaming = false, firstAudioMs = 0, pcmBytes = 0;
+    const useQwen = Boolean(qwen) && input.voice === 'sweet-lively' && req.headers['x-anylink-speech-provider'] !== 'microsoft';
+    const wantsStream = String(req.headers.accept ?? '').split(',').some(v => v.trim() === 'application/x-ndjson');
+    const source = ['chat', 'call', 'notification', 'preview'].includes(String(req.headers['x-anylink-speech-source'])) ? String(req.headers['x-anylink-speech-source']) : 'other';
     const started = Date.now();
+    const voice = () => provider === 'qwen' ? (config.qwenTtsVoice || 'Momo') : (input.voice === 'sweet-lively' ? (config.ttsVoice || VOICES[input.voice].voice) : VOICES[input.voice].voice);
+    const record = (outcome: string) => app.log.info({ event: 'speech_synthesis', request_id: req.id, source, provider, resolved_voice: voice(), fallback, reason, rewritten, text_chars: spoken.length, first_audio_ms: firstAudioMs || undefined, synthesis_ms: Date.now() - started, outcome }, 'Speech synthesis');
+    const emit = (event: Record<string, unknown>) => {
+      if (cancellation.signal.aborted || reply.raw.destroyed) throw new Error('TTS_CANCELLED');
+      reply.raw.write(JSON.stringify(event) + '\n');
+      if (reply.raw.writableLength > 512 * 1024) { cancellation.abort(); throw new Error('TTS_SLOW_CONSUMER'); }
+    };
+    let pcmTail: Buffer = Buffer.alloc(0);
+    const onPcm = wantsStream ? (pcm: Buffer) => {
+      const bytes = pcmTail.length ? Buffer.concat([pcmTail, pcm]) : pcm;
+      const length = bytes.length - bytes.length % 2; pcmTail = bytes.subarray(length);
+      if (!length) return;
+      if (!streaming) {
+        firstAudioMs = Date.now() - started; streaming = true; provider = 'qwen'; format = 'pcm_s16le';
+        reply.hijack(); for (const [name, value] of Object.entries(reply.getHeaders())) if (value !== undefined) reply.raw.setHeader(name, value); reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+        emit({ type: 'start', spoken_text: spoken, provider, resolved_voice: voice(), format, sample_rate: 24000, channels: 1, rewritten, fallback: false, request_id: req.id });
+      }
+      pcmBytes += length; for (let offset = 0; offset < length; offset += 9600) emit({ type: 'audio', audio_base64: bytes.subarray(offset, Math.min(offset + 9600, length)).toString('base64') });
+    } : undefined;
     try {
       if (useQwen) {
-        try { audio = await qwen!(spoken, cancellation.signal); if (!audio.length) throw new Error('EMPTY_AUDIO'); provider = 'qwen'; format = 'wav'; }
+        try { provider = 'qwen'; audio = await qwen!(spoken, cancellation.signal, onPcm); if (!audio.length) throw new Error('EMPTY_AUDIO'); format = streaming ? 'pcm_s16le' : 'wav'; }
         catch (error) {
-          if (cancellation.signal.aborted) throw error;
-          fallback = true; audio = await synthesize(spoken, input.voice, cancellation.signal);
+          reason = /^TTS_[A-Z_]+$/.test(String((error as Error)?.message)) ? (error as Error).message : 'TTS_PROVIDER_FAILED';
+          if (cancellation.signal.aborted || streaming) throw error;
+          fallback = true; provider = 'microsoft'; audio = await synthesize(spoken, input.voice, cancellation.signal);
         }
       } else audio = await synthesize(spoken, input.voice, cancellation.signal);
       if (!audio.length) throw new Error('EMPTY_AUDIO');
     } catch {
-      return reply.code(502).send({ error: { code: 'SPEECH_UNAVAILABLE', message: 'Speech synthesis unavailable', spoken_text: spoken } });
+      record(cancellation.signal.aborted ? 'cancelled' : 'failed');
+      if (streaming) {
+        if (!reply.raw.destroyed && !cancellation.signal.aborted) emit({ type: 'error', code: 'SPEECH_STREAM_INTERRUPTED' });
+        if (!reply.raw.destroyed) reply.raw.end(); return reply;
+      }
+      return reply.code(502).send({ error: { code: 'SPEECH_UNAVAILABLE', message: 'Speech synthesis unavailable', spoken_text: spoken }, request_id: req.id });
     }
-    return { spoken_text: spoken, voice: input.voice, format, rewritten, provider, fallback,
-      resolved_voice: provider === 'qwen' ? (config.qwenTtsVoice || 'Momo') : (input.voice === 'sweet-lively' ? (config.ttsVoice || VOICES[input.voice].voice) : VOICES[input.voice].voice),
-      synthesis_ms: Date.now() - started, audio_base64: audio.toString('base64') };
+    record('completed');
+    if (streaming) { emit({ type: 'done', frames: pcmBytes / 2, synthesis_ms: Date.now() - started, first_audio_ms: firstAudioMs }); reply.raw.end(); return reply; }
+    return { spoken_text: spoken, voice: input.voice, format, rewritten, provider, fallback, fallback_reason: reason || undefined,
+      resolved_voice: voice(), request_id: req.id, synthesis_ms: Date.now() - started, audio_base64: audio.toString('base64') };
     } finally { req.raw.removeListener('aborted', cancel); reply.raw.removeListener('close', cancel); }
   });
 }

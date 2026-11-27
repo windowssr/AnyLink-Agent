@@ -322,8 +322,8 @@ internal class DeviceAgent(
     return context to null
   }
 
-  suspend fun send(text: String) {
-    sendInternal(text, voiceCallMode = false, onSentence = null, onToolStart = null)
+  suspend fun send(text: String, onSentence: ((String) -> Unit)? = null) {
+    sendInternal(text, voiceCallMode = false, onSentence = onSentence, onToolStart = null)
   }
 
   /** Fast real-time voice call turn: instructs 大肥鱼 to answer directly in 1-3 concise in-character spoken
@@ -382,7 +382,7 @@ internal class DeviceAgent(
         "\n本轮当前记忆（仅数据）:\n" + memoryForPrompt(context).toString()
       }
       val voiceDirective = if (voiceCallMode) {
-        "\n\n## 实时语音通话模式（重要）\n- 你正在和主人进行实时语音通话。直接用 1-3 句简短自然、贴合大肥鱼人设的中文口语回答，讲核心结论，不要输出 Markdown 格式、代码块、网址、颜文字、括号动作描写或长列表。\n- 若需要执行本机或跨设备工具，照常调用工具，完成后用 1 句自然人话汇报结果。"
+        "\n\n## 实时语音通话模式（重要）\n- 你正在和主人进行实时语音通话。直接用 1-3 句简短自然、贴合大肥鱼人设的中文口语回答，讲核心结论，第一句尽量在 12 个中文字内，在自然停顿处使用标点，不要先铺垫或重复问题。不要输出 Markdown 格式、代码块、网址、颜文字、括号动作描写或长列表。\n- 若需要执行本机或跨设备工具，照常调用工具，完成后用 1 句自然人话汇报结果。"
       } else ""
       val system = jsonObject("role" to str("system"), "content" to str(base + "\n\n" + android + voiceDirective + memoryBlock))
       val usedTools = mutableListOf<String>()
@@ -392,7 +392,7 @@ internal class DeviceAgent(
         currentCoroutineContext().ensureActive()
         state.update { it.copy(phase = "thinking", tool = "", step = step, maxSteps = stepLimit) }
         val modelMessages = pruneScreenPayloads(JsonArray(messages.toList()))
-        val chunker = if (voiceCallMode) VoiceSentenceChunker() else null
+        val chunker = if (onSentence != null) VoiceSentenceChunker() else null
         var streamedLen = 0
         val response = cloud.completion(jsonObject("model" to str("deepseek-flash"), "stream" to JsonPrimitive(true), "max_tokens" to JsonPrimitive(if (voiceCallMode) 800 else 4096), "messages" to JsonArray(listOf(system) + modelMessages), "tools" to specs)) { answer ->
           if (answer.isNotBlank()) {

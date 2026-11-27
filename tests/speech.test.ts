@@ -152,3 +152,31 @@ test('disconnect aborts cloud synthesis and never starts Microsoft fallback',asy
     assert.equal(oldCalls,0);
   } finally {await app.close();}
 });
+
+test('streaming speech delivers first PCM before synthesis completes and retains explicit done',async()=>{
+  let finish!:()=>void;const gate=new Promise<void>(resolve=>{finish=resolve;});
+  const pcm=Buffer.alloc(4800,1);
+  const app=await appWith({qwenSynthesize:async(_text:string,_signal:AbortSignal,onPcm:(pcm:Buffer)=>void)=>{onPcm(pcm);await gate;onPcm(pcm);return Buffer.from('complete');}});
+  try {
+    await app.listen({host:'127.0.0.1',port:0});const port=(app.server.address() as any).port;
+    const response=await fetch(`http://127.0.0.1:${port}/model/v1/speech`,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/x-ndjson'},body:JSON.stringify({text:'我在听呢。',rewrite:'never'})});
+    assert.equal(response.headers.get('content-type'),'application/x-ndjson');
+    const reader=response.body!.getReader();const first=new TextDecoder().decode((await reader.read()).value);
+    assert.ok(first.includes('"type":"start"'));assert.ok(first.includes('"type":"audio"'));assert.ok(!first.includes('"type":"done"'));
+    finish();let tail='';while(true){const next=await reader.read();if(next.done)break;tail+=new TextDecoder().decode(next.value);}
+    assert.ok(tail.includes('"type":"done"'));assert.ok(tail.includes('"frames":4800'));
+  } finally {finish();await app.close();}
+});
+test('stream interruption after first PCM never changes voice or replays via Microsoft',async()=>{
+  let oldCalls=0;
+  const app=await appWith({qwenSynthesize:async(_text:string,_signal:AbortSignal,onPcm:(pcm:Buffer)=>void)=>{onPcm(Buffer.alloc(4800));throw new Error('broken stream');},synthesize:async()=>{oldCalls++;return Buffer.from('old');}});
+  const response=await app.inject({method:'POST',url:'/model/v1/speech',headers:{accept:'application/x-ndjson'},payload:{text:'我在听呢。',rewrite:'never'}});
+  const events=response.body.trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(events[0].provider,'qwen');assert.equal(events.at(-1).type,'error');assert.equal(oldCalls,0);assert.ok(!response.body.includes('broken stream'));await app.close();
+});
+test('a pinned original voice skips Qwen for the rest of a reply, preserving the JSON fallback contract',async()=>{
+  let cloudCalls=0;
+  const app=await appWith({qwenSynthesize:async()=>{cloudCalls++;return Buffer.from('cloud');},synthesize:async()=>Buffer.from('old')});
+  const response=await app.inject({method:'POST',url:'/model/v1/speech',headers:{accept:'application/x-ndjson','x-anylink-speech-provider':'microsoft'},payload:{text:'下一句。',rewrite:'never'}});
+  assert.equal(response.json().provider,'microsoft');assert.equal(response.json().fallback,true);assert.equal(cloudCalls,0);await app.close();
+});

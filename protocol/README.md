@@ -106,3 +106,9 @@ Connect with `Authorization: Bearer <token>` (or send `{ "type": "auth", "token"
 ## 5. Idempotency & Crash Recovery
 
 All state-changing writes require `Idempotency-Key` (replaying same key + same canonical body returns the cached result; different body returns `409 IDEMPOTENCY_CONFLICT`). Workers must persist a local execution journal before invoking a handler: completed results are safely re-sent with `result:<task_id>`, while `started`-only entries after a crash report `unknown` rather than blindly repeating external side effects.
+
+### Optional speech streaming transport
+
+`POST /model/v1/speech` keeps its existing JSON request schema and default JSON audio response. Clients may send `Accept: application/x-ndjson` to receive Qwen PCM16-LE mono at 24 kHz as `start` (spoken text/provider/voice/request ID), `audio` (base64 PCM), and explicit `done` (total frames) events. An `error` or EOF without `done` means incomplete audio; do not replay already spoken content. Before the first audio event, the original Microsoft fallback can still return the existing JSON/MP3 response, so inspect `Content-Type`.
+
+`X-AnyLink-Speech-Provider: microsoft` keeps a reply on its selected fallback without retrying Qwen per sentence; omit it on the next reply. `X-AnyLink-Speech-Source` can label `chat`, `call`, `notification`, or `preview` for metadata diagnostics. Neither header grants access: the endpoint retains device Bearer authentication. Existing clients that do not send these headers retain the original transport.

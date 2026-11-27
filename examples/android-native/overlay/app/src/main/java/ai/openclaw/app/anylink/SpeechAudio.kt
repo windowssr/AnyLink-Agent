@@ -138,6 +138,7 @@ internal data class SpeechEnvelope(val levels: List<Float>, val frameMs: Int = 2
 /** Wait for initialization and synthesize locally to a file, then use the same player and lip clock as cloud TTS. */
 internal class SystemSpeechSynthesizer(private val context: Context, private val onError: (String) -> Unit) {
   private var engine: TextToSpeech? = null
+  val voiceName: String get() = engine?.voice?.name.orEmpty().ifBlank { "system-default" }
   private var initialized: CompletableDeferred<Boolean>? = null
   private val pending = mutableMapOf<String, CompletableDeferred<Boolean>>()
   private var activeUtterance: String? = null

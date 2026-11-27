@@ -54,3 +54,9 @@ AnyLink 是面向**个人 Agent 网络（Personal Agent Network）**的引擎无
   - `GET /edge/v1/ws?resume_after_seq=<n>` 与 `GET /edge/v1/events?after_seq=<n>` 支持按单调序列号无漏重放；发起方收到 `task.completed` 后须回复 `task.receipt_ack`（或 `POST /edge/v1/tasks/:id/ack`），未确认的回执将在下次重连时自动补发。
 - **二进制附件流式直传（`/edge/v1/artifacts`）**：
   - `POST /edge/v1/artifacts`、`GET /edge/v1/artifacts/:id`、`GET /edge/v1/artifacts/:id/meta`、`DELETE /edge/v1/artifacts/:id` 采用零内存流式读写与独立磁盘卷存储，默认单文件 ≤200 MiB（环境变量可调至 1 GiB）、总配额 2 GiB、SHA-256 校验与 TTL 自动清理，任务载荷只需传递 `artifact_id`。
+
+### 可选的语音流式传输
+
+`POST /model/v1/speech` 保留现有 JSON 请求结构与默认 JSON 音频响应。客户端发送 `Accept: application/x-ndjson` 时，可接收 Qwen 的 24kHz PCM16-LE 单声道音频：`start` 包含口播文字、实际供应商、音色和请求 ID，`audio` 包含 base64 PCM，`done` 明确结束并给出总帧数。收到 `error` 或缺少 `done` 时按音频不完整处理，不应重播已说过的内容。首段音频产生前仍可回退原微软 JSON/MP3 响应，因此客户端必须检查 `Content-Type`。
+
+`X-AnyLink-Speech-Provider: microsoft` 让同一轮回复固定在已选中的兜底供应商，避免每句重试 Qwen；下一轮可移除此头。`X-AnyLink-Speech-Source` 可使用 `chat`、`call`、`notification` 或 `preview` 标记脱敏诊断来源。两个头都不授予访问权限，接口仍校验设备 Bearer 凭据；不传这些头的旧客户端继续使用原传输方式。

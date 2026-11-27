@@ -34,6 +34,7 @@ internal fun VoiceCallOverlay(
     callState == "listening" -> "正在听你说"
     callState == "transcribing" -> "正在识别"
     callState == "thinking" -> "正在准备回复"
+    callState == "buffering" -> "正在准备声音"
     callState == "speaking" -> "正在说话 · 点人物可插话"
     callState == "reconnecting" -> "正在恢复监听"
     else -> "正在连接"

@@ -527,40 +527,20 @@ class AnyLinkAgentTest {
     }
   }
 
-  @Test fun `SpeechPlayer always requests persona rewrite and falls back to dedicated chat completion API when speech endpoint fails`() = runBlocking {
+  @Test fun `speech transport failure preserves reply words without another model rewrite`() = runBlocking {
     MockWebServer().use { server ->
-      server.start()
-      // 1. /model/v1/speech fails (502 without rewrite)
-      server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":{"code":"SPEECH_UNAVAILABLE"}}"""))
-      // 2. SpeechPlayer makes a dedicated /model/v1/chat/completions rewrite call
-      server.enqueue(response("""{"choices":[{"message":{"content":"哼，主人，代码和文件我都已经帮你整理好放进桌面啦！"}}]}"""))
-      // 3. Re-synthesis via /model/v1/speech fails -> falls back to system TTS with the rewritten persona line
-      server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":{"code":"SPEECH_UNAVAILABLE"}}"""))
-
+      server.start(); server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":{"code":"SPEECH_UNAVAILABLE"}}"""))
       val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
       val spoken = mutableListOf<String>()
-      val player = SpeechPlayer(
-        context = RuntimeEnvironment.getApplication(),
-        scope = this,
-        connection = { conn },
-        synthesizeLocal = { text -> spoken += text; null },
-        onSpeaking = {},
-      )
-      player.enqueue("## 执行报告\n1. 已创建 `/Users/demo/a.txt`\n```bash\necho hi\n```", summarize = true, interrupt = true, forceRewrite = true)
-      val deadline = System.currentTimeMillis() + 5_000L
-      while (spoken.isEmpty() && System.currentTimeMillis() < deadline) {
-        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-        delay(25)
-      }
-      assertTrue("timed out waiting for TTS fallback", spoken.isNotEmpty())
-      val req1 = server.takeRequest()
-      assertEquals("/model/v1/speech", req1.path)
-      val req1Body = linkJson.parseToJsonElement(req1.body.readUtf8()).jsonObject
-      assertEquals("always", req1Body.text("rewrite"))
-      assertEquals("persona", req1Body.text("style"))
-      val req2 = server.takeRequest()
-      assertEquals("/model/v1/chat/completions", req2.path)
-      assertEquals(listOf("哼，主人，代码和文件我都已经帮你整理好放进桌面啦！"), spoken)
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { spoken += it; null }, {})
+      player.enqueue("你好呀，我在听呢。", false, true, false)
+      val deadline = System.currentTimeMillis() + 5000
+      while (spoken.isEmpty() && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(20) }
+      assertEquals(listOf("你好呀，我在听呢。"), spoken)
+      val request = server.takeRequest(1, TimeUnit.SECONDS)!!
+      assertEquals("/model/v1/speech", request.path)
+      assertEquals("never", linkJson.parseToJsonElement(request.body.readUtf8()).jsonObject.text("rewrite"))
+      assertEquals(1, server.requestCount); player.interrupt()
     }
   }
   @Test fun `interrupted speech fetch cannot play a retired sentence in the next turn`() = runBlocking {
@@ -626,6 +606,70 @@ class AnyLinkAgentTest {
       val deadline = System.currentTimeMillis() + 5000
       while (spoken.isEmpty() && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(20) }
       assertEquals(listOf("我在听呢。"), spoken); assertEquals(1, server.requestCount); player.interrupt()
+    }
+  }
+
+  @Test fun `streamed speech starts at the audio clock before HTTP completion and cancels cleanly`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      val pcm = android.util.Base64.encodeToString(ByteArray(4800) { if (it % 2 == 0) 0 else 32 }, android.util.Base64.NO_WRAP)
+      val prefix = """{"type":"start","spoken_text":"我在听呢。","provider":"qwen","resolved_voice":"Momo","format":"pcm_s16le","sample_rate":24000,"channels":1,"request_id":"test-stream"}
+{"type":"audio","audio_base64":"$pcm"}
+"""
+      server.enqueue(MockResponse().setHeader("Content-Type", "application/x-ndjson").setChunkedBody(prefix + """{"type":"done","frames":2400,"padding":"${"x".repeat(200)}"}
+""", prefix.toByteArray(Charsets.UTF_8).size).throttleBody((prefix.toByteArray(Charsets.UTF_8).size + 16).toLong(), 2, TimeUnit.SECONDS))
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val spoken = mutableListOf<String>(); val events = mutableListOf<JsonObject>(); val played = java.util.concurrent.atomic.AtomicLong(0)
+      var released = false
+      val output = object : PcmOutput {
+        override fun play() = Unit
+        override fun write(bytes: ByteArray, offset: Int, size: Int): Int { played.addAndGet(size / 2L); return size }
+        override fun positionFrames(): Long = played.get()
+        override fun stop() = Unit
+        override fun release() { released = true }
+      }
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { fail("must not fall back"); null }, {},
+        onUtterance = { spoken += it }, createPcmOutput = { _, _ -> output }, onDiagnostic = { events += it })
+      val started = System.currentTimeMillis(); player.enqueue("我在听呢。", false, false, source = "call", turn = "turn-1")
+      while (spoken.isEmpty() && System.currentTimeMillis() - started < 1600) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(20)); delay(15) }
+      assertEquals("events=$events", listOf("我在听呢。"), spoken); assertTrue("playback must precede the delayed done event", player.isActive)
+      assertTrue(events.any { it.text("outcome") == "playing" && it.text("request_id") == "test-stream" })
+      player.interrupt(); delay(50); org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      assertTrue(released); assertFalse(player.isActive)
+    }
+  }
+
+  @Test fun `normal notifications wait until hangup without blocking call audio or being lost by interrupt`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start(); server.enqueue(response("""{"spoken_text":"收到文件啦"}"""))
+      var call = true; val spoken = mutableListOf<String>()
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { spoken += it; null }, {}, inCall = { call })
+      player.enqueue("收到文件啦", false, false, source = "notification"); delay(60)
+      assertEquals(0, server.requestCount); assertFalse(player.isActive)
+      player.interrupt(); call = false; player.releaseDeferred()
+      val deadline = System.currentTimeMillis() + 3000
+      while (spoken.isEmpty() && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(15) }
+      assertEquals(listOf("收到文件啦"), spoken); assertEquals(1, server.requestCount); player.interrupt()
+    }
+  }
+
+  @Test fun `fallback voice is sticky for a reply and a new reply can use Momo again`() = runBlocking {
+    org.robolectric.shadows.ShadowMediaPlayer.setMediaInfoProvider { org.robolectric.shadows.ShadowMediaPlayer.MediaInfo(60000, 0) }
+    val audio = android.util.Base64.encodeToString(WavEncoder.encodePcm16Mono(ByteArray(3200)), android.util.Base64.NO_WRAP)
+    MockWebServer().use { server ->
+      server.start()
+      repeat(3) { server.enqueue(response("""{"spoken_text":"你好呀","audio_base64":"$audio","format":"wav","provider":"microsoft"}""")) }
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { fail("must not use system"); null }, {})
+      player.enqueue("第一句", false, false, source = "call", turn = "turn-A"); player.enqueue("第二句", false, false, source = "call", turn = "turn-A")
+      val deadline = System.currentTimeMillis() + 5000
+      while (server.requestCount < 2 && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(15) }
+      assertEquals("qwen", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("X-AnyLink-Speech-Provider"))
+      assertEquals("microsoft", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("X-AnyLink-Speech-Provider"))
+      player.enqueue("新回复", false, true, source = "call", turn = "turn-B")
+      while (server.requestCount < 3 && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(15) }
+      assertEquals("qwen", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("X-AnyLink-Speech-Provider")); player.interrupt()
     }
   }
 

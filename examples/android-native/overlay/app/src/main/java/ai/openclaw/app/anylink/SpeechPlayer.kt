@@ -51,19 +51,14 @@ internal object SpeechSanitizer {
   }
 }
 
-private const val CLIENT_VOICE_REWRITE_SYSTEM = """你是「大肥鱼」（住在数据海里的深海蓝白鲸鱼娘），负责把要给主人听的文字精炼改写成 1-2 句适合直接语音播报的简短中文口语：
-- 只提炼最核心的结论、关键结果或明确原因，严禁照念长段文字、代码、Markdown 格式、路径、URL、表格、列表或英文报错码。
-- 严格贴合「蓝色大肥鱼」人设：聪明惜力、软糯轻快、带一点傲娇和熟人感，自然称呼「主人」，绝不使用客服套话、播音腔、括号动作描写、颜文字或「喵」。
-- 务必简洁利落（不超过 65 个中文字），只输出最终要念出来的纯口播文本，不要任何引号、前缀或解释。"""
-
-private data class Pending(val text: String, val summarize: Boolean, val forceRewrite: Boolean = false)
-internal data class SpeechPayload(val spoken: String?, val audio: String? = null, val format: String = "mp3", val provider: String = "system") {
+private data class Pending(val text: String, val summarize: Boolean, val forceRewrite: Boolean, val source: String, val turn: String, val queued: Long = android.os.SystemClock.elapsedRealtime())
+internal data class SpeechPayload(val spoken: String?, val audio: String? = null, val format: String = "mp3", val provider: String = "system", val stream: PcmSpeechStream? = null, val requestId: String = "", val reason: String = "", val resolvedVoice: String = "") {
   companion object {
     fun parse(body: JsonObject): SpeechPayload = SpeechPayload(body.text("spoken_text"), body.text("audio_base64").takeIf { it.isNotBlank() },
-      if (body.text("format") == "wav") "wav" else "mp3", if (body.text("provider") == "qwen") "qwen" else "microsoft")
+      if (body.text("format") == "wav") "wav" else "mp3", if (body.text("provider") == "qwen") "qwen" else "microsoft", requestId = body.text("request_id"), reason = body.text("fallback_reason"), resolvedVoice = body.text("resolved_voice"))
   }
 }
-private data class PreparedSpeech(val file: File, val spoken: String, val envelope: SpeechEnvelope, val provider: String)
+private data class PreparedSpeech(val file: File?, val spoken: String, val envelope: SpeechEnvelope, val provider: String, val stream: PcmSpeechStream?, val pending: Pending, val requestId: String, val resolvedVoice: String)
 
 /** Fetches /model/v1/speech and plays WAV/MP3 with one-utterance lookahead;
  * A server failure preserves its spoken text for original system TTS. If no words came back,
@@ -82,11 +77,20 @@ internal class SpeechPlayer(
   private val beforePlayback: () -> Boolean = { true },
   private val onVoice: (String) -> Unit = {},
   private val createPlayer: () -> MediaPlayer = { MediaPlayer() },
+  private val createPcmOutput: (Int, Boolean) -> PcmOutput = { rate, call -> AndroidPcmOutput(rate, call) },
+  private val onDiagnostic: (JsonObject) -> Unit = {},
+  private val onPlaybackText: (String, String) -> Unit = { _, _ -> },
+  private val localVoice: () -> String = { "system-default" },
 ) {
   private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(45000, java.util.concurrent.TimeUnit.MILLISECONDS).build()
   private val json = Json { ignoreUnknownKeys = true }
   private val main = Handler(Looper.getMainLooper())
   private val pending = ArrayDeque<Pending>()
+  private val deferred = ArrayDeque<Pending>()
+  private val providers = java.util.concurrent.ConcurrentHashMap<String, String>()
+  private val streams = java.util.Collections.synchronizedSet(mutableSetOf<PcmSpeechStream>())
+  private var pcmOutput: PcmOutput? = null
+  private var pcmJob: Job? = null
   private var player: MediaPlayer? = null
   private var busy = false
   private var epoch = 0
@@ -96,22 +100,26 @@ internal class SpeechPlayer(
   private var levelTick: Runnable? = null
   val isActive: Boolean get() = busy || pending.isNotEmpty() || fetchJob != null || prepared != null
 
-  fun enqueue(text: String, summarize: Boolean, interrupt: Boolean, forceRewrite: Boolean = true) {
-    if (interrupt) interrupt()
+  fun enqueue(text: String, summarize: Boolean, interrupt: Boolean, forceRewrite: Boolean = false, source: String = "chat", turn: String = UUID.randomUUID().toString()) {
     if (text.isBlank()) return
-    pending.addLast(Pending(text, summarize, forceRewrite))
-    pump()
+    val next = Pending(text, summarize, forceRewrite, source, turn)
+    if (inCall() && source == "notification") { if (deferred.size >= 32) deferred.pollFirst(); deferred.addLast(next); return }
+    if (interrupt) interrupt()
+    pending.addLast(next); pump()
   }
+  fun releaseDeferred() { if (!inCall()) { while (deferred.isNotEmpty()) pending.addLast(deferred.removeFirst()); pump() } }
   fun interrupt() {
     epoch++; pending.clear(); fetchJob?.cancel(); fetchJob = null
-    prepared?.file?.delete(); prepared = null
+    prepared?.file?.delete(); prepared?.stream?.cancel(); prepared = null
+    synchronized(streams) { streams.toList() }.forEach { it.cancel() }; streams.clear()
     http.dispatcher.cancelAll()
     stopPlayer(); busy = false
   }
   private fun pump() {
     if (!busy) prepared?.let { ready ->
       prepared = null; busy = true
-      play(ready.file, ready.spoken, ready.envelope, epoch, ready.provider)
+      if (ready.stream != null) playPcm(ready, epoch)
+      else play(ready.file!!, ready.spoken, ready.envelope, epoch, ready.provider, ready.pending, ready.requestId, ready.resolvedVoice)
     }
     // Fetch at most one next utterance while the active one plays. No pose/voice callbacks until playback.
     if (fetchJob != null || prepared != null) return
@@ -121,8 +129,17 @@ internal class SpeechPlayer(
       var file: File? = null
       try {
         val payload = fetch(next)
+        val actualProvider = if (payload.audio != null || payload.stream != null) payload.provider else "system"
+        trace(next, actualProvider, payload.requestId, "received", payload.reason, payload.stream?.voice ?: payload.resolvedVoice)
+        val rank = listOf("qwen", "microsoft", "system")
+        if (rank.indexOf(actualProvider) > rank.indexOf(providers[next.turn] ?: "qwen")) providers[next.turn] = actualProvider
+        if (providers.size > 32) providers.remove(providers.keys.first())
         ensureActive()
-        val words = payload.spoken ?: SpeechSanitizer.clean(next.text)
+        val words = payload.spoken ?: SpeechSanitizer.clean(next.text).take(160)
+        if (payload.stream != null) {
+          prepared = PreparedSpeech(null, words, SpeechEnvelope(emptyList()), payload.provider, payload.stream, next, payload.requestId, payload.stream.voice)
+          return@launch
+        }
         file = if (payload.audio != null) withContext(Dispatchers.IO) {
           File(context.cacheDir, "speech-${UUID.randomUUID()}.${payload.format}").also { file = it; it.writeBytes(android.util.Base64.decode(payload.audio, android.util.Base64.DEFAULT)) }
         } else synthesizeLocal(words)
@@ -132,7 +149,7 @@ internal class SpeechPlayer(
         val envelope = try { SpeechEnvelope.decode(ready) } catch (e: CancellationException) { throw e } catch (_: Exception) { SpeechEnvelope(emptyList()) }
         ensureActive()
         if (stamp != epoch) return@launch
-        prepared = PreparedSpeech(ready, words, envelope, if (payload.audio != null) payload.provider else "system")
+        prepared = PreparedSpeech(ready, words, envelope, if (payload.audio != null) payload.provider else "system", null, next, payload.requestId, if (payload.audio != null) payload.resolvedVoice else localVoice())
         file = null // Ownership passes to the prepared slot, then the player.
       } catch (e: CancellationException) { throw e }
       catch (_: Exception) { if (stamp == epoch) onError("语音暂时无法播放，请查看文字回复。") }
@@ -144,65 +161,102 @@ internal class SpeechPlayer(
     fetchJob?.start()
   }
 
-  /** Dedicated lightweight chat API call to condense & rewrite any output into 1-2 short in-character spoken sentences. */
-  private fun rewriteViaCompletionApi(conn: CloudConnection, rawText: String): String? = runCatching {
-    val body = jsonObject(
-      "model" to str("deepseek-flash"),
-      "stream" to kotlinx.serialization.json.JsonPrimitive(false),
-      "max_tokens" to kotlinx.serialization.json.JsonPrimitive(180),
-      "temperature" to kotlinx.serialization.json.JsonPrimitive(0.72),
-      "messages" to kotlinx.serialization.json.JsonArray(listOf(
-        jsonObject("role" to str("system"), "content" to str(CLIENT_VOICE_REWRITE_SYSTEM)),
-        jsonObject("role" to str("user"), "content" to str(rawText.take(4000))),
-      )),
-    ).toString().toRequestBody("application/json".toMediaType())
-    val response = http.newCall(
-      Request.Builder()
-        .url(conn.server + "/model/v1/chat/completions")
-        .header("Authorization", "Bearer ${conn.token}")
-        .post(body)
-        .build(),
-    ).execute()
-    response.use { res ->
-      if (!res.isSuccessful) return@runCatching null
-      val parsed = runCatching { json.parseToJsonElement(res.body.string()).jsonObject }.getOrNull() ?: return@runCatching null
-      val choices = parsed["choices"] as? kotlinx.serialization.json.JsonArray ?: return@runCatching null
-      val content = (choices.firstOrNull() as? JsonObject)?.get("message")?.jsonObject?.text("content").orEmpty()
-      SpeechSanitizer.clean(content).take(160).takeIf { it.isNotBlank() }
-    }
-  }.getOrNull()
-
-  private fun requestSpeech(conn: CloudConnection, text: String, rewrite: Boolean): SpeechPayload? {
-    val body = jsonObject("text" to str(text.take(8000)), "summarize" to kotlinx.serialization.json.JsonPrimitive(rewrite),
-      "rewrite" to str(if (rewrite) "always" else "never"), "voice" to str("sweet-lively"), "style" to str("persona"))
+  private fun event(line: String): JsonObject = json.parseToJsonElement(line).jsonObject
+  private suspend fun requestSpeech(conn: CloudConnection, next: Pending): SpeechPayload? {
+    val body = jsonObject("text" to str(next.text.take(8000)), "summarize" to kotlinx.serialization.json.JsonPrimitive(next.summarize),
+      "rewrite" to str(if (next.forceRewrite) "always" else if (next.summarize) "auto" else "never"), "voice" to str("sweet-lively"), "style" to str("persona"))
       .toString().toRequestBody("application/json".toMediaType())
-    return http.newCall(Request.Builder().url(conn.server + "/model/v1/speech")
-      .header("Authorization", "Bearer ${conn.token}").post(body).build()).execute().use { res ->
+    val call = http.newCall(Request.Builder().url(conn.server + "/model/v1/speech")
+      .header("Authorization", "Bearer ${conn.token}").header("Accept", "application/x-ndjson")
+      .header("X-AnyLink-Speech-Source", next.source).header("X-AnyLink-Speech-Provider", providers[next.turn] ?: "qwen").post(body).build())
+    currentCoroutineContext().ensureActive()
+    val owner = currentCoroutineContext()[Job]!!
+    val response = call.execute()
+    if (response.isSuccessful && response.header("Content-Type").orEmpty().startsWith("application/x-ndjson")) {
+      var stream: PcmSpeechStream? = null
+      try {
+        val input = response.body.source()
+        val start = event(input.readUtf8LineStrict(1024 * 1024))
+        check(start.text("type") == "start" && start.text("format") == "pcm_s16le" && start.text("sample_rate") == "24000" && start.text("channels") == "1")
+        val active = PcmSpeechStream(start.text("spoken_text"), start.text("resolved_voice"), start.text("request_id")); stream = active
+        active.closeNetwork = { call.cancel() }; streams.add(active)
+        owner.invokeOnCompletion { failure -> if (failure != null) { active.cancel(); streams.remove(active) } }
+        fun readAudio(e: JsonObject): ByteArray {
+          check(e.text("type") == "audio") { "PCM_STREAM_INCOMPLETE" }
+          val bytes = android.util.Base64.decode(e.text("audio_base64"), android.util.Base64.DEFAULT)
+          check(bytes.isNotEmpty() && bytes.size % 2 == 0 && bytes.size <= 256 * 1024); return bytes
+        }
+        var bytes = readAudio(event(input.readUtf8LineStrict(1024 * 1024)))
+        check(active.audio.trySend(bytes).isSuccess)
+        val firstSize = bytes.size
+        active.producer = scope.launch(Dispatchers.IO) {
+          var total = firstSize
+          try {
+            while (true) {
+              ensureActive(); val e = event(input.readUtf8LineStrict(1024 * 1024))
+              if (e.text("type") == "done") { check(e.text("frames").toLongOrNull() == total / 2L); active.completed = true; active.audio.close(); break }
+              bytes = readAudio(e); total += bytes.size; check(total <= 6 * 1024 * 1024); active.audio.send(bytes)
+            }
+          } catch (e: Exception) { active.audio.close(e) }
+          finally { response.close() }
+        }
+        active.producer?.invokeOnCompletion { runCatching { response.close() } }
+        return SpeechPayload(active.spoken, provider = "qwen", stream = active, requestId = active.requestId)
+      } catch (e: Exception) { stream?.cancel(); stream?.let { streams.remove(it) }; response.close(); throw e }
+    }
+    return response.use { res ->
       val parsed = runCatching { json.parseToJsonElement(res.body.string()).jsonObject }.getOrNull() ?: return@use null
       if (res.isSuccessful) SpeechPayload.parse(parsed)
-      else (parsed["error"] as? JsonObject)?.text("spoken_text")?.takeIf { it.isNotBlank() }?.let { SpeechPayload(it) }
+      else (parsed["error"] as? JsonObject)?.text("spoken_text")?.takeIf { it.isNotBlank() }?.let { SpeechPayload(it, requestId = parsed.text("request_id"), reason = "SPEECH_UNAVAILABLE") }
     }
   }
-
   private suspend fun fetch(next: Pending): SpeechPayload = withContext(Dispatchers.IO) {
-    val conn = connection() ?: return@withContext SpeechPayload(null)
-    val result = runCatching { requestSpeech(conn, next.text, next.forceRewrite || next.summarize) }.getOrNull()
+    if (providers[next.turn] == "system") return@withContext SpeechPayload(SpeechSanitizer.clean(next.text).take(160))
     currentCoroutineContext().ensureActive()
-    // A server 502 has already exhausted Momo and Microsoft; preserve its concise words for system TTS.
-    if (result != null && !result.spoken.isNullOrBlank()) return@withContext result
-    if (next.forceRewrite || next.summarize) {
-      val rewritten = rewriteViaCompletionApi(conn, next.text)
-      currentCoroutineContext().ensureActive()
-      if (!rewritten.isNullOrBlank()) {
-        val retry = runCatching { requestSpeech(conn, rewritten, false) }.getOrNull()
-        currentCoroutineContext().ensureActive()
-        return@withContext retry ?: SpeechPayload(rewritten)
+    val conn = connection() ?: return@withContext SpeechPayload(SpeechSanitizer.clean(next.text).take(160))
+    val result = runCatching { requestSpeech(conn, next) }.getOrNull()
+    currentCoroutineContext().ensureActive()
+    result ?: SpeechPayload(SpeechSanitizer.clean(next.text).take(160), reason = "SPEECH_TRANSPORT_FAILED")
+  }
+  private fun trace(next: Pending, provider: String, requestId: String, outcome: String, reason: String = "", resolvedVoice: String = "") {
+    onDiagnostic(jsonObject("source" to str(next.source), "turn" to str(next.turn), "provider" to str(provider), "request_id" to str(requestId),
+      "text_chars" to kotlinx.serialization.json.JsonPrimitive(next.text.length), "elapsed_ms" to kotlinx.serialization.json.JsonPrimitive(android.os.SystemClock.elapsedRealtime() - next.queued), "outcome" to str(outcome), "reason" to str(reason), "resolved_voice" to str(resolvedVoice), "at" to str(java.time.Instant.now().toString())))
+  }
+  private fun playPcm(ready: PreparedSpeech, stamp: Int) {
+    val stream = ready.stream!!
+    pcmJob = scope.launch(start = CoroutineStart.LAZY) {
+      var output: PcmOutput? = null
+      var announced = false
+      try {
+        if (!beforePlayback()) return@launch
+        val out = createPcmOutput(stream.sampleRate, inCall()); output = out; pcmOutput = out
+        val tick = object : Runnable {
+          override fun run() {
+            if (stamp != epoch || pcmOutput !== out) return
+            val position = runCatching { out.positionFrames() }.getOrDefault(0)
+            if (!announced && position > 0) {
+              announced = true; onSpeaking(true); onUtterance(ready.spoken); onPlaybackText(ready.spoken, ready.pending.source); onVoice(ready.provider); trace(ready.pending, ready.provider, ready.requestId, "playing", resolvedVoice = stream.voice)
+            }
+            onLevel(stream.levels.levelAt(position)); main.postDelayed(this, 20)
+          }
+        }
+        levelTick = tick; main.post(tick)
+        withContext(Dispatchers.IO) { renderPcm(stream, out) }
+        trace(ready.pending, ready.provider, ready.requestId, "completed", resolvedVoice = stream.voice)
+      } catch (e: CancellationException) { throw e }
+      catch (_: Exception) {
+        if (stamp == epoch) {
+          onError("语音传输中断，点人物可继续说话。"); trace(ready.pending, ready.provider, ready.requestId, "stream_interrupted", resolvedVoice = stream.voice); interrupt()
+        }
+      } finally {
+        stream.cancel(); streams.remove(stream); output?.stop(); output?.release()
+        if (stamp == epoch) { pcmOutput = null; pcmJob = null; stopPlayer(); busy = false; pump() }
       }
     }
-    SpeechPayload(null)
+    pcmJob?.start()
   }
 
-  private fun play(file: File, spoken: String, envelope: SpeechEnvelope, stamp: Int, provider: String) {
+  private fun play(file: File, spoken: String, envelope: SpeechEnvelope, stamp: Int, provider: String, next: Pending, requestId: String, resolvedVoice: String) {
     currentFile = file
     val mp = createPlayer(); player = mp
     try {
@@ -213,7 +267,7 @@ internal class SpeechPlayer(
         if (stamp != epoch || player !== mp) return@setOnPreparedListener
         if (!beforePlayback()) { finish(mp, stamp); return@setOnPreparedListener }
         runCatching {
-          mp.start(); onSpeaking(true); onUtterance(spoken); onVoice(provider)
+          mp.start(); onSpeaking(true); onUtterance(spoken); onPlaybackText(spoken, next.source); onVoice(provider); trace(next, provider, requestId, "playing", resolvedVoice = resolvedVoice)
           val tick = object : Runnable {
             override fun run() {
               if (stamp != epoch || player !== mp) return
@@ -237,6 +291,7 @@ internal class SpeechPlayer(
     stopPlayer(); busy = false; pump()
   }
   private fun stopPlayer() {
+    pcmJob?.cancel(); pcmJob = null; pcmOutput?.stop(); pcmOutput = null
     levelTick?.let(main::removeCallbacks); levelTick = null
     val old = player; player = null
     runCatching { old?.stop() }; old?.release()

@@ -429,4 +429,14 @@ class AnyLinkCloudUiTest {
     text.delete(); image.delete(); Unit
   }
 
+  @Test fun `companion transcript follows spoken sentences while reading mode exposes the full reply`() {
+    val full = "第一句正在播。第二句尚未开始。"
+    compose.setContent { MaterialTheme(colorScheme = DeepSeaColorScheme) {
+      CloudCompanionScreen(LocalAgentState(chat = listOf(ChatMessage("a-sync", "assistant", full))), "https://example.invalid", "", true, "", "", false, false, true, emptyList(), false,
+        {}, {}, { _, _, _, _, _ -> }, {}, {}, {}, {}, speechPresentationActive = true, chatPlaybackText = "第一句正在播。")
+    } }
+    compose.onNodeWithText("第一句正在播。").assertExists(); compose.onNodeWithText(full).assertDoesNotExist()
+    compose.onNodeWithText("展开阅读").performClick(); compose.onNodeWithText(full).assertExists()
+  }
+
 }

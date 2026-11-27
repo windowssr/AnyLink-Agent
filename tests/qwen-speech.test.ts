@@ -62,3 +62,10 @@ test('Qwen rejects provider errors, invalid audio, mismatched responses and inco
   }
   assert.throws(()=>pcmWave(Buffer.from([1])),/INVALID/);
 });
+
+test('Qwen exposes valid PCM before response.done for streaming consumers',async()=>{
+  let finish!:()=>void;const chunks:Buffer[]=[];
+  const f=fixture(s=>{delta(s);finish=()=>done(s);});
+  let settled=false;const result=createQwenSpeech({apiKey:'test'},f)('你好',undefined,chunk=>chunks.push(chunk)).finally(()=>{settled=true;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false);assert.deepEqual(chunks,[pcm]);finish();assert.equal((await result).length,pcm.length+44);
+});

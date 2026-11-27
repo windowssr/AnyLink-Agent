@@ -22,7 +22,7 @@ export function createQwenSpeech(config: QwenSpeechConfig, options: {
   const createSocket = options.createSocket ?? ((url, opts) => new WebSocket(url, opts));
   const endpoint = config.region === 'singapore' ? 'dashscope-intl.aliyuncs.com' : 'dashscope.aliyuncs.com';
   const model = config.model ?? 'qwen3-tts-flash-realtime';
-  return (text: string, signal?: AbortSignal): Promise<Buffer> => new Promise((resolve, reject) => {
+  return (text: string, signal?: AbortSignal, onPcm?: (pcm: Buffer) => void): Promise<Buffer> => new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('TTS_CANCELLED')); return; }
     if (!config.apiKey || !text.trim()) { reject(new Error('TTS_NOT_CONFIGURED')); return; }
     let socket: WebSocket;
@@ -69,7 +69,7 @@ export function createQwenSpeech(config: QwenSpeechConfig, options: {
           if (responseId && event.response_id !== responseId) throw new Error('UNEXPECTED_TTS_RESPONSE');
           const pcm = Buffer.from(event.delta, 'base64'); bytes += pcm.length;
           if (bytes > MAX_PCM) throw new Error('TTS_AUDIO_TOO_LARGE');
-          chunks.push(pcm); clearTimeout(first); if (idle) clearTimeout(idle);
+          chunks.push(pcm); onPcm?.(pcm); clearTimeout(first); if (idle) clearTimeout(idle);
           idle = setTimeout(() => finish(new Error('TTS_AUDIO_STALLED')), options.idleTimeoutMs ?? 3000);
         } else if (event.type === 'response.done') {
           if (!responseId || event.response?.status !== 'completed' || event.response?.id !== responseId) throw new Error('TTS_INCOMPLETE');

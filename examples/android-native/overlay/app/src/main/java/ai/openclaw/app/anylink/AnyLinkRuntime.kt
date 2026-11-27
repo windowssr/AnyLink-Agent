@@ -51,6 +51,12 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val listening = MutableStateFlow(false)
   val speaking = MutableStateFlow(false)
   val voiceNotice = MutableStateFlow("")
+  private val speechLogPrefs = app.getSharedPreferences("speech-diagnostics", Context.MODE_PRIVATE)
+  val speechDiagnostic = MutableStateFlow(speechLogPrefs.getString("history", "").orEmpty())
+  val spokenCaption = MutableStateFlow("")
+  val speechPresentationActive = MutableStateFlow(false)
+  val chatPlaybackText = MutableStateFlow("")
+  private var chatSpeechEpoch = 0
   val speechPreviewActive = MutableStateFlow(false)
   val speechVoiceStatus = MutableStateFlow("连接后使用云端语音，失败时由手机系统播报")
   val voiceLevel = MutableStateFlow(0f)
@@ -139,11 +145,12 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       { text -> localSpeech.synthesize(text) },
       { playing ->
         speaking.value = playing
-        if (!playing) voiceLevel.value = 0f
+        if (!playing) { voiceLevel.value = 0f; spokenCaption.value = "" }
       },
-      { speechPreviewActive.value = false; onAudioQueueIdle() },
+      { speechPreviewActive.value = false; if (agent.value?.state?.value?.busy != true) speechPresentationActive.value = false; onAudioQueueIdle() },
       onLevel = { playbackLevel.value = it },
       onUtterance = { spoken ->
+        spokenCaption.value = spoken
         if (callActive.value) { callAssistantCaption.value = spoken; callState.value = "speaking" }
         val pose = speechPose(spoken)
         val now = android.os.SystemClock.elapsedRealtime()
@@ -151,9 +158,15 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         if (gesture != "none") lastGestureAt = now
         agent.value?.state?.update { it.copy(emotion = pose.emotion, gesture = gesture, sequence = UUID.randomUUID().toString()) }
       },
+      onPlaybackText = { text, source -> if (source == "chat") chatPlaybackText.value += text },
       onVoice = { provider -> speechVoiceStatus.value = "最近播报：" + when (provider) { "qwen" -> "阿里云 Momo · 茉兔"; "microsoft" -> "微软神经语音（兜底）"; else -> "手机系统语音（兜底）" } },
       inCall = { callActive.value },
-      onError = { reportVoiceError(it) },
+      localVoice = { localSpeech.voiceName },
+      onDiagnostic = { entry ->
+        val history = (speechDiagnostic.value.lines().filter { it.isNotBlank() } + entry.toString()).takeLast(60).joinToString("\n")
+        speechDiagnostic.value = history; speechLogPrefs.edit().putString("history", history).apply()
+      },
+      onError = { reportVoiceError(it); if (callActive.value) callState.value = "error" },
       beforePlayback = {
         if (callActive.value) {
           voiceEngine.cancel(); listening.value = false; voiceLevel.value = 0f
@@ -243,17 +256,25 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   fun send(text: String) {
     val active = agent.value ?: return
     if (active.state.value.busy || text.isBlank()) return
-    error.value = ""
+    error.value = ""; speechPlayer?.interrupt(); localSpeech.cancel(); speechPresentationActive.value = true; chatPlaybackText.value = ""
+    val speechStamp = ++chatSpeechEpoch
+    val speechTurn = "chat:${UUID.randomUUID()}"
+    var voicedChars = 0
+    var voicedSentences = 0
     turn = scope.launch {
-      try { active.send(text.trim()) } catch (_: Exception) { error.value = "请输入1到8000字。" }
+      try { active.send(text.trim(), onSentence = { sentence ->
+        scope.launch {
+          if (speechStamp == chatSpeechEpoch && turn?.isActive == true && voicedChars < 120 && voicedSentences < 2) {
+            val words = sentence.take(120 - voicedChars); voicedChars += words.length; voicedSentences += words.count { it in "。！？!?" }
+            speechPlayer?.enqueue(words, summarize = false, interrupt = false, source = "chat", turn = speechTurn)
+          }
+        }
+      }) } catch (_: Exception) { error.value = "这次回复未完成，请查看文字或重试。" }
+      if (speechPlayer?.isActive != true) speechPresentationActive.value = false
       val last = active.state.value.runs.firstOrNull()
       if (last?.text("state") == "completed" && last.text("id") != lastSpokenRun && last.text("answer").isNotBlank()) {
         lastSpokenRun = last.text("id")
-        val answer = last.text("answer")
-        if (!activityVisible.value) {
-          AnyLinkCompanionService.notifyProactive(app, "大肥鱼回复你啦", answer, tag = "reply:${last.text("id")}")
-        }
-        speechPlayer?.enqueue(answer.take(3500), summarize = true, interrupt = true, forceRewrite = true)
+        if (!activityVisible.value) AnyLinkCompanionService.notifyProactive(app, "大肥鱼回复你啦", last.text("answer"), tag = "reply:${last.text("id")}")
       }
     }
   }
@@ -418,7 +439,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     }
   }
 
-  fun stop() { agent.value?.stop(); turn?.cancel() }
+  fun stop() { chatSpeechEpoch++; speechPresentationActive.value = false; agent.value?.stop(); turn?.cancel() }
 
   suspend fun refreshTasks() {
     val value = connection.value ?: return
@@ -451,7 +472,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
               scope.launch { runCatching { agent.value?.flushOutbox() } }
             }
           },
-          onFrame = { frame -> handleWsFrame(frame) },
+          onFrame = { frame -> scope.launch { handleWsFrame(frame) } },
         )
         wsClient = socket
         socket.connect()
@@ -499,7 +520,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
           tag = "interact:$taskId",
           urgent = isApproval,
         )
-        speechPlayer?.enqueue(spokenHint, summarize = false, interrupt = false, forceRewrite = false)
+        speechPlayer?.enqueue(spokenHint, summarize = false, interrupt = false, forceRewrite = false, source = "notification")
         scope.launch { refreshTasks() }
       }
       "task.completed" -> {
@@ -583,7 +604,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       else -> "大肥鱼：跨设备任务没完成"
     }
     AnyLinkCompanionService.notifyProactive(app, notifTitle, displayText, tag = "task:$id")
-    speechPlayer?.enqueue(speechInput.take(3500), summarize = true, interrupt = false, forceRewrite = true)
+    speechPlayer?.enqueue(speechInput.take(3500), summarize = forcePersonaRewrite, interrupt = false, forceRewrite = false, source = "notification")
   }
 
   private suspend fun syncRemoteCapabilityProfile(transport: CloudClient) {
@@ -640,7 +661,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       is RemoteTaskOutcome.Succeeded -> {
         voiceNotice.value = outcome.reply.take(160)
         AnyLinkCompanionService.notifyProactive(app, "大肥鱼已替 $sourceName 办妥啦", outcome.reply, tag = "remote:$taskId")
-        speechPlayer?.enqueue("刚刚替${sourceName}在手机上办完了一件事：${outcome.reply}".take(3500), summarize = true, interrupt = false, forceRewrite = true)
+        speechPlayer?.enqueue("刚刚替${sourceName}在手机上办完了一件事：${outcome.reply}".take(3500), summarize = true, interrupt = false, forceRewrite = false, source = "notification")
         jsonObject(
           "state" to str("succeeded"),
           "output" to jsonObject(
@@ -755,7 +776,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         tag = "file-confirm:$taskId",
         urgent = true,
       )
-      speechPlayer?.enqueue("主人！${source}想给你传一个大文件叫${displayName}，有${sizeLabel}，点开屏幕确认一下我就帮你下载哦！", summarize = false, interrupt = false, forceRewrite = false)
+      speechPlayer?.enqueue("主人！${source}想给你传一个大文件叫${displayName}，有${sizeLabel}，点开屏幕确认一下我就帮你下载哦！", summarize = false, interrupt = false, forceRewrite = false, source = "notification")
 
       val decision = try {
         withTimeoutOrNull(300_000L) { deferred.await() }
@@ -800,7 +821,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       body = "《${saved.filename}》（${AnyLinkFiles.formatSize(saved.sizeBytes)}）已保存到手机「${saved.displayPath}」",
       tag = "file:${actualSha.take(12)}",
     )
-    speechPlayer?.enqueue("主人！${source}刚给你传过来一个文件叫${saved.filename}，我已经帮你存进下载里的 AnyLink 文件夹啦！", summarize = false, interrupt = false, forceRewrite = false)
+    speechPlayer?.enqueue("主人！${source}刚给你传过来一个文件叫${saved.filename}，我已经帮你存进下载里的 AnyLink 文件夹啦！", summarize = false, interrupt = false, forceRewrite = false, source = "notification")
     return saved to actualSha
   }
 
@@ -814,7 +835,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       body = text,
       tag = "say:${System.currentTimeMillis()}",
     )
-    speechPlayer?.enqueue(text, summarize = false, interrupt = false, forceRewrite = false)
+    speechPlayer?.enqueue(text, summarize = false, interrupt = false, forceRewrite = false, source = "notification")
   }
 
   fun testSpeechVoice() {
@@ -822,7 +843,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     speechPreviewActive.value = true
     speechVoiceStatus.value = "正在准备试听…"
     connection.value?.let { value -> scope.launch { refreshAudioStatus(value) } }
-    speechPlayer?.enqueue("你好呀，我们终于能说话了。今天过得怎么样？慢慢说，我在听呢。", summarize = false, interrupt = true, forceRewrite = false)
+    speechPlayer?.enqueue("你好呀，我们终于能说话了。今天过得怎么样？慢慢说，我在听呢。", summarize = false, interrupt = true, forceRewrite = false, source = "preview")
   }
 
   fun stopSpeechPreview() { if (speechPreviewActive.value) { speechPreviewActive.value = false; speechPlayer?.interrupt(); localSpeech.cancel() } }
@@ -975,8 +996,8 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     callActive.value = true; callMuted.value = false; callState.value = "connecting"
     callDurationSec.value = 0; callStartedAt = 0; callRetries = 0
     callUserCaption.value = ""; callAssistantCaption.value = "正在准备通话…"
+    connection.value?.let { value -> scope.launch { withTimeoutOrNull(3500) { refreshAudioStatus(value) } } }
     resumeListeningJob = scope.launch {
-      connection.value?.let { withTimeoutOrNull(3500) { refreshAudioStatus(it) } }
       if (!callActive.value || stamp != callEpoch) return@launch
       try {
         if (callAudio.requestPlaybackFocus()) callSounds.play(CallCue.Start)
@@ -1005,8 +1026,8 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     val stamp = callEpoch
     if (playSound) callEndSoundJob = scope.launch {
       try { if (callAudio.requestPlaybackFocus()) callSounds.play(CallCue.End) }
-      finally { if (stamp == callEpoch && !callActive.value) callAudio.stop() }
-    } else { callSounds.stop(); callAudio.stop() }
+      finally { if (stamp == callEpoch && !callActive.value) { callAudio.stop(); speechPlayer?.releaseDeferred() } }
+    } else { callSounds.stop(); callAudio.stop(); speechPlayer?.releaseDeferred() }
     voiceNotice.value = "通话已结束，聊天记录已保留。"
   }
   fun toggleCallMute() {
@@ -1025,17 +1046,14 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     callTurnEpoch++; callTurnJob?.cancel(); callTurnJob = null; callTurnRunning = false
     agent.value?.stop(); interruptVoice(); callMuted.value = false; callRetries = 0
     val stamp = callEpoch
-    resumeListeningJob = scope.launch {
-      connection.value?.let { withTimeoutOrNull(3500) { refreshAudioStatus(it) } }
-      if (stamp == callEpoch && callActive.value) startCallListening()
-    }
+    resumeListeningJob = scope.launch { if (stamp == callEpoch && callActive.value) startCallListening() }
   }
   private fun startCallListening() {
     if (!callActive.value || callMuted.value || callTurnRunning || speechPlayer?.isActive == true) return
     val stamp = callEpoch
     voiceEngine.cancel(); listening.value = true; callState.value = "connecting"; partialTranscript.value = ""
     voiceEngine.start(
-      preferredMode = voiceEngineMode.value, silenceEndMs = 1100,
+      preferredMode = voiceEngineMode.value, silenceEndMs = 850,
       onState = { st -> if (stamp == callEpoch && callActive.value && !callTurnRunning) {
         callState.value = if (st == "starting") "connecting" else st
         if (st == "listening") {
@@ -1067,14 +1085,15 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private fun runCallTurn(userText: String) {
     val activeAgent = agent.value ?: return
     val stamp = ++callTurnEpoch
-    callTurnJob?.cancel(); callTurnRunning = true; callState.value = "thinking"
+    callTurnJob?.cancel(); callTurnRunning = true; callState.value = "thinking"; callAssistantCaption.value = ""
     callTurnJob = scope.launch {
       try {
         activeAgent.sendVoiceCallTurn(userText,
-          onSentence = { sentence -> if (callActive.value && stamp == callTurnEpoch) {
-            speechPlayer?.enqueue(sentence, summarize = false, interrupt = false, forceRewrite = false)
-          } },
-          onToolStart = { label -> if (callActive.value && stamp == callTurnEpoch) callAssistantCaption.value = "正在${label}…" },
+          onSentence = { sentence -> scope.launch { if (callActive.value && stamp == callTurnEpoch) {
+            if (!speaking.value) callState.value = "buffering"
+            speechPlayer?.enqueue(sentence, summarize = false, interrupt = false, source = "call", turn = "call:$callEpoch:$stamp")
+          } } },
+          onToolStart = { label -> if (callActive.value && stamp == callTurnEpoch && !speaking.value) callAssistantCaption.value = "正在${label}…" },
         )
       } catch (e: kotlinx.coroutines.CancellationException) { throw e }
       catch (_: Exception) { if (callActive.value && stamp == callTurnEpoch) callAssistantCaption.value = "这次回复没有完成，请再说一次。" }

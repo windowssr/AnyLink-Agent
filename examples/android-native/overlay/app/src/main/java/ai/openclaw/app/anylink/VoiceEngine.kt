@@ -53,12 +53,12 @@ internal class VoiceSentenceChunker {
   }
 
   fun take(force: Boolean = false): String? {
-    val minimum = if (first) 8 else 18
+    val minimum = if (first) 6 else 12
     var end = -1
     for (i in 0 until pending.length) {
       val count = i + 1
       val ch = pending[i]
-      if (ch in "。！？!?；;\n" || (count >= minimum && ch in "，,：:") || count >= 72) {
+      if (ch in "。！？!?；;\n" || (count >= minimum && ch in "，,：:") || (first && count >= 24 && ch.isWhitespace()) || count >= 48) {
         end = i + 1
         break
       }

@@ -349,6 +349,8 @@ class AnyLinkActivity : ComponentActivity() {
         val tasks by runtime.tasks.collectAsState()
         val listening by runtime.listening.collectAsState()
         val speaking by runtime.speaking.collectAsState()
+        val speechPresentationActive by runtime.speechPresentationActive.collectAsState()
+        val chatPlaybackText by runtime.chatPlaybackText.collectAsState()
         val notice by runtime.voiceNotice.collectAsState()
         val pendingFile by runtime.pendingFile.collectAsState()
         val uploadingFile by runtime.uploadingFile.collectAsState()
@@ -370,6 +372,8 @@ class AnyLinkActivity : ComponentActivity() {
         LaunchedEffect(profile) { if (profile != null) maybeStartCompanion() }
         CloudCompanionScreen(
           state = local,
+          speechPresentationActive = speechPresentationActive,
+          chatPlaybackText = chatPlaybackText,
           server = profile?.server,
           deviceSlug = profile?.deviceSlug.orEmpty(),
           wsOnline = wsOnline,
@@ -466,6 +470,7 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
   val voiceEngineMode by runtime.voiceEngineMode.collectAsState()
   val cloudAsrEnabled by runtime.cloudAsrEnabled.collectAsState()
   val speechVoiceStatus by runtime.speechVoiceStatus.collectAsState()
+  val speechDiagnostic by runtime.speechDiagnostic.collectAsState()
   val speechBusy by runtime.speechPreviewActive.collectAsState()
   val inVoiceCall by runtime.callActive.collectAsState()
   val offlineModel by runtime.offlineModelState.collectAsState()
@@ -536,6 +541,11 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       Text("优先使用阿里云 Momo，无法合成时切回原来的微软语音，再由手机系统语音兜底。", style = MaterialTheme.typography.bodySmall, color = SeaSlate)
       AssistChip(enabled = !inVoiceCall, onClick = { if (speechBusy) runtime.stopSpeechPreview() else runtime.testSpeechVoice() }, label = { Text(if (speechBusy) "停止试听" else "试听当前声音") })
       HorizontalDivider(color = Color(0xFFDCEEF8))
+      AssistChip(onClick = {
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("播报诊断", speechDiagnostic.ifBlank { "暂无播报记录" }))
+      }, label = { Text("复制播报诊断") })
+      Text("诊断只记录播报来源、实际声音、耗时及降级原因，不含正文或密钥。", style = MaterialTheme.typography.bodySmall, color = SeaSlate)
       Text("语音输入与实时通话识别引擎", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
       LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val voiceModes = listOf(
@@ -701,6 +711,8 @@ internal fun CloudCompanionScreen(
   bargeInCall: () -> Unit = {},
   playbackLevel: Float = 0f,
   callAudioRoute: String = if (callSpeakerOn) "外放" else "听筒",
+  speechPresentationActive: Boolean = false,
+  chatPlaybackText: String = "",
 ) {
   val context = LocalContext.current
   var showLicenses by remember { mutableStateOf(false) }
@@ -915,7 +927,7 @@ internal fun CloudCompanionScreen(
         }
       }
 
-      // 2c. Frosted Deep-Sea Glass Conversation Sheet
+      // 2c. Frosted conversation sheet; reading mode always exposes the full response.
       Surface(
         modifier = Modifier
           .fillMaxWidth()
@@ -1006,7 +1018,9 @@ internal fun CloudCompanionScreen(
               }
             } else {
               items(state.chat, key = { it.id }) { msg ->
-                ChatBubble(msg, onReplyTask = replyTask)
+                val synced = if (speechPresentationActive && !readingExpanded && msg.role == "assistant" && msg.id == state.chat.lastOrNull { it.role == "assistant" }?.id && state.chat.indexOf(msg) > state.chat.indexOfLast { it.role == "user" })
+                  msg.copy(text = chatPlaybackText.ifBlank { "正在准备语音…" }) else msg
+                ChatBubble(synced, onReplyTask = replyTask)
               }
             }
           }
