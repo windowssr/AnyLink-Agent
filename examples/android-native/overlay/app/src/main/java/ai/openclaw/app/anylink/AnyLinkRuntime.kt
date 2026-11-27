@@ -162,10 +162,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       onVoice = { provider -> speechVoiceStatus.value = "最近播报：" + when (provider) { "qwen" -> "阿里云 Momo · 茉兔"; "microsoft" -> "微软神经语音（兜底）"; else -> "手机系统语音（兜底）" } },
       inCall = { callActive.value },
       localVoice = { localSpeech.voiceName },
-      onDiagnostic = { entry ->
-        val history = (speechDiagnostic.value.lines().filter { it.isNotBlank() } + entry.toString()).takeLast(60).joinToString("\n")
-        speechDiagnostic.value = history; speechLogPrefs.edit().putString("history", history).apply()
-      },
+      onDiagnostic = { recordSpeechDiagnostic(it) },
       onError = { reportVoiceError(it); if (callActive.value) callState.value = "error" },
       beforePlayback = {
         if (callActive.value) {
@@ -176,6 +173,11 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         } else true
       },
     )
+  }
+
+  private fun recordSpeechDiagnostic(entry: JsonObject) {
+    val history = (speechDiagnostic.value.lines().filter { it.isNotBlank() } + entry.toString()).takeLast(60).joinToString("\n")
+    speechDiagnostic.value = history; speechLogPrefs.edit().putString("history", history).apply()
   }
 
   private fun reportVoiceError(message: String) {
@@ -192,6 +194,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     val chat = CloudClient(value); chatCloud = chat
     workerCloud = CloudClient(value)
     agent.value = DeviceAgent(value, chat, SqlAgentLedger(app, value), { infoJson(value) }, PersonaProvider { readPersona() }, { maxSteps.value })
+    scope.launch { runCatching { agent.value?.prewarmVoice() } }
     scope.launch { refreshAudioStatus(value) }
     refreshOverlay()
     syncWorker()
@@ -992,6 +995,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     callSounds.stop(); callAudio.stop()
     interruptAll()
     if (!runCatching { callAudio.start(callSpeakerOn.value) }.onFailure { voiceNotice.value = "无法准备通话音频，请检查音频设备后重试。" }.getOrDefault(false)) { callAudio.stop(); return }
+    scope.launch { runCatching { agent.value?.prewarmVoice() } }
     val stamp = ++callEpoch
     callActive.value = true; callMuted.value = false; callState.value = "connecting"
     callDurationSec.value = 0; callStartedAt = 0; callRetries = 0
@@ -1085,6 +1089,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private fun runCallTurn(userText: String) {
     val activeAgent = agent.value ?: return
     val stamp = ++callTurnEpoch
+    val began = android.os.SystemClock.elapsedRealtime()
     callTurnJob?.cancel(); callTurnRunning = true; callState.value = "thinking"; callAssistantCaption.value = ""
     callTurnJob = scope.launch {
       try {
@@ -1094,6 +1099,11 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
             speechPlayer?.enqueue(sentence, summarize = false, interrupt = false, source = "call", turn = "call:$callEpoch:$stamp")
           } } },
           onToolStart = { label -> if (callActive.value && stamp == callTurnEpoch && !speaking.value) callAssistantCaption.value = "正在${label}…" },
+          onStage = { stage ->
+            val elapsed = android.os.SystemClock.elapsedRealtime() - began
+            scope.launch { if (stamp == callTurnEpoch) recordSpeechDiagnostic(jsonObject("source" to str("call"), "turn" to str("call:$callEpoch:$stamp"), "outcome" to str(stage),
+              "elapsed_ms" to JsonPrimitive(elapsed), "at" to str(java.time.Instant.now().toString()))) }
+          },
         )
       } catch (e: kotlinx.coroutines.CancellationException) { throw e }
       catch (_: Exception) { if (callActive.value && stamp == callTurnEpoch) callAssistantCaption.value = "这次回复没有完成，请再说一次。" }

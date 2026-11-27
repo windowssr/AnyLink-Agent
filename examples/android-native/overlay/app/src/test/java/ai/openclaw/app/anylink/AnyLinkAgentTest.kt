@@ -673,4 +673,42 @@ class AnyLinkAgentTest {
     }
   }
 
+  @Test fun `voice prewarm reuses verified identity while explicit verification stays fresh`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      fun identity() { server.enqueue(response("""{"device":{"id":"$testDevice"}}""")); server.enqueue(response("""{"protocol":"anylink","version":"3.2"}""")) }
+      identity()
+      server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
+      server.enqueue(stream(sse("你好呀。"))); server.enqueue(response("""{"status":"pending"}"""))
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val agent = DeviceAgent(conn, CloudClient(conn), MemoryLedger(), { JsonObject(emptyMap()) })
+      agent.prewarmVoice(); val stages = mutableListOf<String>()
+      agent.sendVoiceCallTurn("你在吗", onSentence = {}, onStage = { stages += it })
+      assertEquals(5, server.requestCount)
+      val paths = (1..5).map { server.takeRequest(1, TimeUnit.SECONDS)!!.path }
+      assertEquals(listOf("/edge/v1/identity", "/edge/v1/protocol", "/edge/v1/memory/assemble", "/model/v1/chat/completions", "/edge/v1/memory/ingest"), paths)
+      assertTrue(stages.indexOf("context_ready") < stages.indexOf("first_token")); assertTrue(stages.contains("first_sentence"))
+      identity(); agent.verify(); assertEquals(7, server.requestCount)
+    }
+  }
+
+  @Test fun `speech reuses the control connection but interruption cannot cancel a control request`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start(); server.enqueue(response("{}"))
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val control = CloudClient(conn); control.request("GET", "/warm")
+      assertEquals(0, server.takeRequest(1, TimeUnit.SECONDS)!!.sequenceNumber)
+      server.enqueue(response("""{"spoken_text":"你好呀"}""").setBodyDelay(2, TimeUnit.SECONDS))
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { fail("interrupted speech must not synthesize"); null }, {})
+      player.enqueue("你好呀", false, false)
+      val deadline = System.currentTimeMillis() + 5000
+      while (server.requestCount < 2 && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(15) }
+      assertEquals(1, server.takeRequest(1, TimeUnit.SECONDS)!!.sequenceNumber)
+      server.enqueue(response("""{"ok":true}""").setBodyDelay(250, TimeUnit.MILLISECONDS))
+      val stillRunning = async { control.request("GET", "/still-alive") }
+      while (server.requestCount < 3 && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(15) }
+      player.interrupt(); assertEquals("true", stillRunning.await().text("ok"))
+    }
+  }
+
 }

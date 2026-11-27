@@ -9,6 +9,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import kotlinx.serialization.Serializable
 
@@ -200,6 +201,8 @@ internal class DeviceAgent(
         resolved = msg.resolved || msg.role == "interaction")
     } }.getOrNull() } ?: chatFromHistory(ledger.messages())))
   private val lock = Mutex()
+  private val verificationLock = Mutex()
+  private var verifiedUntilNanos = 0L
   @Synchronized private fun persistChat() { ledger.timeline(linkJson.encodeToJsonElement(state.value.chat).jsonArray) }
   fun stop() { cloud.cancel() }
   fun newConversation() { if (!state.value.busy) { ledger.messages(JsonArray(emptyList())); ledger.timeline(JsonArray(emptyList())); state.update { it.copy(answer = "", notice = "", step = 0, canContinue = false, chat = emptyList()) } } }
@@ -291,12 +294,17 @@ internal class DeviceAgent(
     return flushed
   }
 
-  suspend fun verify() {
+  suspend fun prewarmVoice() { verify(fresh = false) }
+
+  suspend fun verify(fresh: Boolean = true) = verificationLock.withLock {
+    if (!fresh && System.nanoTime() < verifiedUntilNanos) return@withLock
+    verifiedUntilNanos = 0L
     val identity = cloud.request("GET", "/edge/v1/identity")
     if (identity["device"]?.jsonObject?.text("id") != connection.deviceId) throw LinkFailure("IDENTITY_MISMATCH", "设备身份不一致，请重新连接")
     if (connection.agentId.isNotBlank() && identity["agent"]?.jsonObject?.text("id") != connection.agentId) throw LinkFailure("IDENTITY_MISMATCH", "Agent 身份不一致，请重新连接")
     val proto = try { cloud.request("GET", "/edge/v1/protocol") } catch (_: LinkFailure) { cloud.request("GET", "/edge/v1/link/protocol") }
     if (proto.text("protocol") != "anylink") throw LinkFailure("PROTOCOL_MISMATCH", "这不是 AnyLink 服务器")
+    verifiedUntilNanos = System.nanoTime() + 60_000_000_000L
   }
 
   private suspend fun loadMemoryContext(query: String): Pair<JsonObject, String?> {
@@ -332,13 +340,15 @@ internal class DeviceAgent(
     text: String,
     onSentence: (String) -> Unit,
     onToolStart: (String) -> Unit = {},
-  ): String = sendInternal(text, voiceCallMode = true, onSentence = onSentence, onToolStart = onToolStart)
+    onStage: (String) -> Unit = {},
+  ): String = sendInternal(text, voiceCallMode = true, onSentence = onSentence, onToolStart = onToolStart, onStage = onStage)
 
   private suspend fun sendInternal(
     text: String,
     voiceCallMode: Boolean,
     onSentence: ((String) -> Unit)?,
     onToolStart: ((String) -> Unit)?,
+    onStage: (String) -> Unit = {},
   ): String {
     require(text.isNotBlank() && text.length <= 8000) { "请输入1到8000字" }
     if (!lock.tryLock()) throw LinkFailure("BUSY", "请先停止当前回复")
@@ -369,8 +379,8 @@ internal class DeviceAgent(
       persistChat()
       save()
       val history = trimHistoryForBudget(ledger.messages())
-      verify()
-      val (context, summaryText) = loadMemoryContext(text)
+      onStage("verification_start"); verify(fresh = onSentence == null); onStage("verification_ready")
+      val (context, summaryText) = loadMemoryContext(text); onStage("context_ready")
       val messages = history.toMutableList()
       messages.add(jsonObject("role" to str("user"), "content" to str(text)))
       val serverPersona = context["persona"]?.jsonObject?.text("content")?.takeIf { it.isNotBlank() }
@@ -388,14 +398,17 @@ internal class DeviceAgent(
       val usedTools = mutableListOf<String>()
       var lastCallSig = ""
       var repeatCallCount = 0
+      var firstText = true; var firstSpoken = true
       for (step in 1..stepLimit) {
         currentCoroutineContext().ensureActive()
         state.update { it.copy(phase = "thinking", tool = "", step = step, maxSteps = stepLimit) }
         val modelMessages = pruneScreenPayloads(JsonArray(messages.toList()))
         val chunker = if (onSentence != null) VoiceSentenceChunker() else null
         var streamedLen = 0
+        onStage("model_request")
         val response = cloud.completion(jsonObject("model" to str("deepseek-flash"), "stream" to JsonPrimitive(true), "max_tokens" to JsonPrimitive(if (voiceCallMode) 800 else 4096), "messages" to JsonArray(listOf(system) + modelMessages), "tools" to specs)) { answer ->
           if (answer.isNotBlank()) {
+            if (firstText) { firstText = false; onStage("first_token") }
             upsertAssistant(answer, meta = if (usedTools.isEmpty()) (if (voiceCallMode) "实时通话" else "") else "第 $step 步 · 已执行：${usedTools.distinct().take(4).joinToString("、")}", streaming = true)
             if (chunker != null && onSentence != null && answer.length > streamedLen) {
               val delta = answer.substring(streamedLen)
@@ -403,6 +416,7 @@ internal class DeviceAgent(
               chunker.append(delta)
               while (true) {
                 val sentence = chunker.take(force = false) ?: break
+                if (firstSpoken) { firstSpoken = false; onStage("first_sentence") }
                 onSentence(sentence)
               }
             }
@@ -416,6 +430,7 @@ internal class DeviceAgent(
             if (answer.length > streamedLen) chunker.append(answer.substring(streamedLen))
             while (true) {
               val sentence = chunker.take(force = true) ?: break
+              if (firstSpoken) { firstSpoken = false; onStage("first_sentence") }
               onSentence(sentence)
             }
           }

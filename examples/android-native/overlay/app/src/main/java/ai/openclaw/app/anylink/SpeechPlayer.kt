@@ -82,7 +82,7 @@ internal class SpeechPlayer(
   private val onPlaybackText: (String, String) -> Unit = { _, _ -> },
   private val localVoice: () -> String = { "system-default" },
 ) {
-  private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(45000, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+  private val http = AnyLinkHttp.builder().followRedirects(false).followSslRedirects(false).callTimeout(45000, java.util.concurrent.TimeUnit.MILLISECONDS).build()
   private val json = Json { ignoreUnknownKeys = true }
   private val main = Handler(Looper.getMainLooper())
   private val pending = ArrayDeque<Pending>()

@@ -20,7 +20,7 @@ const revision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'
 const privateCharacter=process.env.ANYLINK_CHARACTER_MODE==='private';
 if(JSON.parse(fs.readFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/character-mode.json'))).private_character!==privateCharacter)throw new Error('Prepared character mode differs from requested distribution; prepare again');
 fs.writeFileSync(path.join(source,'apps/android/app/src/main/assets/anylink/build-info.json'),JSON.stringify({product:'AnyLink',version,upstream:lock.commit,source:revision,source_dirty:execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).trim().length>0,agent_context:agent,private_character:privateCharacter,architecture:'device-agent',gateway_required:false},null,2)+'\n');
-const versionCode=3013;
+const versionCode=3014;
 const args=['gradlew','--no-daemon','--max-workers=2','--console=plain','-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED','-Pkotlin.compiler.execution.strategy=in-process','-POPENCLAW_ANDROID_VERSION_NAME='+version,'-POPENCLAW_ANDROID_VERSION_CODE='+versionCode,'-PANYLINK_AGENT_ID='+agent];
 if(process.argv.includes('--dependencies'))args.push('help');
 else if(live)args.push(':app:testThirdPartyDebugUnitTest','--tests','ai.openclaw.app.anylink.AnyLinkLiveTest');

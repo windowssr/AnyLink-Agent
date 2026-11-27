@@ -47,7 +47,7 @@ internal class AndroidPcmOutput(rate: Int, call: Boolean) : PcmOutput {
     .setTransferMode(AudioTrack.MODE_STREAM)
     .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), rate / 5 * 2))
     .build()
-  init { check(track.state == AudioTrack.STATE_INITIALIZED) }
+  init { check(track.state == AudioTrack.STATE_INITIALIZED); track.setStartThresholdInFrames(minOf(rate / 20, track.bufferCapacityInFrames)) }
   override fun play() = track.play()
   override fun write(bytes: ByteArray, offset: Int, size: Int): Int = track.write(bytes, offset, size, AudioTrack.WRITE_NON_BLOCKING)
   override fun positionFrames(): Long = track.playbackHeadPosition.toLong() and 0xffffffffL

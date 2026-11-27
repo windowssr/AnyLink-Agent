@@ -125,9 +125,15 @@ internal interface LinkTransport {
   fun cancel()
 }
 
+/** Share TLS connections, while each owner keeps its own dispatcher and cancellation domain. */
+internal object AnyLinkHttp {
+  private val base = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
+  fun builder(): OkHttpClient.Builder = base.newBuilder().dispatcher(okhttp3.Dispatcher())
+}
+
 /** Thread-safe AnyLink HTTP client with Protocol v3.2 SSE detach-on-disconnect recovery and O(1)-RAM large file streaming. */
 internal class CloudClient(private val connection: CloudConnection) : LinkTransport {
-  private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
+  private val http = AnyLinkHttp.builder().followRedirects(false).followSslRedirects(false)
     .retryOnConnectionFailure(false).connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(125, TimeUnit.SECONDS).callTimeout(130, TimeUnit.SECONDS).build()
   private val transferHttp = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
@@ -385,7 +391,7 @@ internal class AnyLinkWebSocket(
   private val onState: (Boolean) -> Unit = {},
   private val onFrame: (JsonObject) -> Unit,
 ) {
-  private val http = OkHttpClient.Builder()
+  private val http = AnyLinkHttp.builder()
     .followRedirects(false)
     .followSslRedirects(false)
     .pingInterval(20, TimeUnit.SECONDS)
