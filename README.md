@@ -10,7 +10,8 @@
 
 <p align="center">
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/lang-简体中文-0ea5e9?style=flat-square" alt="简体中文" /></a>
-  <a href="protocol/README.md"><img src="https://img.shields.io/badge/Protocol-v3.0-22d3ee?style=flat-square" alt="Protocol v3.0" /></a>
+  <a href="protocol/README.md"><img src="https://img.shields.io/badge/Protocol-v3.2-22d3ee?style=flat-square" alt="Protocol v3.2" /></a>
+  <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.9.0"><img src="https://img.shields.io/badge/Release-v0.9.0-0284c7?style=flat-square" alt="Release v0.9.0" /></a>
   <a href="sdk-python/README.md"><img src="https://img.shields.io/badge/Python-anylink--agent-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python SDK" /></a>
   <a href="sdk/README.md"><img src="https://img.shields.io/badge/TypeScript-@anylink--agent%2Fsdk-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript SDK" /></a>
   <a href="mcp/README.md"><img src="https://img.shields.io/badge/MCP-@anylink--agent%2Fmcp-10b981?style=flat-square" alt="MCP Server" /></a>
@@ -64,8 +65,21 @@ Edge agents **only manage their own local environment and safety policy** — th
 
 - **Simple Login Password (`ANYLINK_LOGIN_PASSWORD`)**: Optional memorable server passcode (≥6 chars) so non-technical users can connect Android/Mac apps and sign into the Web Admin Console with just the server URL + password (automatically exchanges for an encrypted high-entropy device token; password is never stored on disk).
 - **Unique Short Device Slugs (`device_slug`)**: Address multiple machines cleanly (`@home-mac`, `@office-mac`, `@gpu-box`). Ambiguous display names return `409 AMBIGUOUS_TARGET_DEVICE` with candidate slugs.
-- **Smart Debouncing & Chitchat Filtering**: Rapid turns in the same session are debounced (default 15s / 6 turns) into a **single** Cloud Memory consolidation call, while trivial greetings ("ok / hi") are skipped at zero LLM cost. Declined/failed task boundaries consolidate immediately.
-- **Crash-Safe Reliability**: Idempotent writes, zero-dependency durable JSONL local journals (`FileJournal`), heartbeat lease expiry (`LEASE_EXPIRED` → `unknown`), and zero blind side-effect retries.
+- **Smart Debouncing & Chitchat Filtering**: Rapid turns in the same session are debounced (default 15s / 6 turns) into a **single** Cloud Memory consolidation call, while trivial greetings ("ok / hi") are skipped at zero LLM cost. Declined/failed task boundaries consolidate immediately, with crash recovery and per-owner serialization.
+
+### Protocol v3.2 Resilient Task State Machine & Multi-Agent Primitives
+
+Designed for real-world mobile networks, NAT drops, sleeping laptops, and multi-agent loops:
+
+<p align="center">
+  <img src="docs/assets/protocol-v3.2-state-machine.png" alt="AnyLink Protocol v3.2 Task State Machine" width="100%" />
+</p>
+
+- **Network-Hardened WebSocket Bus**: Application-level ping/pong zombie eviction, slow-consumer backpressure guard, monotonic `edge_events` sequence cursor (`resume_after_seq`) with zero-gap replay, and explicit receipt delivery ACKs (`task.receipt_ack` / `POST /edge/v1/tasks/:id/ack`) so completed tasks are never silently lost across reconnects.
+- **Split-Brain Prevention & Safe Queueing**: Atomic `claim` issues a per-attempt **Fencing Token** (`attempt` + `lease_token`, rejecting stale workers with `409 LEASE_FENCED`); idempotent tasks (`idempotent: true`) safely auto-requeue up to `max_retries`; unified Reaper actively pushes queued TTL expirations (`expired`), interactive waiting timeouts, and hard execution timeouts (`max_execution_seconds`).
+- **Queue Governance & Loop Protection**: `priority` (0–100), `require_online` fail-fast (`409 TARGET_OFFLINE`), `concurrency_key` per-resource serialization, queue quotas (`429 QUEUE_FULL`), and `trace_id` / `parent_task_id` / `call_depth` recursion guard (`409 CALL_DEPTH_EXCEEDED`).
+- **Human-in-the-Loop & Large Payloads**: Workers can suspend into `awaiting_input` or `awaiting_approval` (`/suspend` & `/reply`) without burning lease time; binary/file handoffs go through `POST/GET /edge/v1/artifacts` (SHA-256 verified, 10 MiB / file, 200 MiB owner quota, auto-TTL cleanup).
+- **Detached SSE Resume & Offline Outbox**: Pass `X-AnyLink-Detach-On-Disconnect: on` on `/model/v1/chat/completions` to let long LLM generations finish cleanly if mobile Wi-Fi/4G drops, then fetch the snapshot via `GET /model/v1/requests/:id`; offline memory turns queue locally in an outbox and flush automatically on reconnect.
 
 ---
 
@@ -146,9 +160,9 @@ const done = await client.waitForTask(task.id);
 AnyLink's core is the **framework-agnostic Protocol v3, Cloud Hub, SDKs, and MCP Server**. To demonstrate the end-to-end user experience, two companion apps featuring the deep-sea blue whale mascot **"蓝色大肥鱼 (Dafeiyu)"** are cleanly isolated under [`examples/`](examples/README.md) with zero coupling into the core protocol:
 
 1. **macOS Desktop Agent (OpenClaw + Worker)** — Setup Guide: [`examples/mac-openclaw/README.md`](examples/mac-openclaw/README.md)
-   - Runs persistently in the background via macOS LaunchAgent (`com.anylink.openclaw`), integrating Cloud Memory Brain, `anylink_invoke`, WebSocket worker, default directory sandbox or opt-in `--full-access` host permissions, and optional Live2D desktop companion.
+   - Runs persistently in the background via macOS LaunchAgent (`com.anylink.openclaw`), integrating Cloud Memory Brain, `anylink_invoke` + `anylink_task_reply`, concurrent WebSocket worker (`maxConcurrency=2`), default directory sandbox or opt-in `--full-access` host permissions with automatic stale-boundary self-healing, and optional Live2D desktop companion.
 2. **Android Native Independent Agent** — Setup Guide: [`examples/android-native/README.md`](examples/android-native/README.md)
-   - Runs independently on-device (works even when Mac is offline); unobstructed virtual avatar stage + full scrollable multi-turn chat stream, quick password login, foreground service keep-alive + lightweight floating bubble, and optional accessibility phone control.
+   - Runs independently on-device (works even when Mac is offline); **Deep-Sea Glass Companion UI** (full-bleed unobstructed Live2D stage with WebGL pixel verification, Companion ↔ Reading mode toggle, frosted glass full-output chat sheet, and interactive v3.2 approval/choice cards), quick password login, foreground service keep-alive, detached SSE resume, offline SQLite memory outbox, and persona-matched voice feedback.
 
 ### Quick Operations Tips (Mac Background Service)
 
@@ -217,8 +231,9 @@ Open `http://127.0.0.1:3180` and sign in with `secrets/local-dev-owner-token`. S
 ```
 
 - [x] **Phase 1**: Protocol v3.0, Cloud Memory Brain (hybrid search + debounced batch consolidation + auto boundary learning), Multi-Model Gateway + 1A Auto-Memory, WebSocket real-time bus + lease reaper, unique device slugs, Python SDK, TypeScript SDK, MCP Server.
-- [x] **Phase 2**: Migrated Mac OpenClaw plugins & workers (hot token reload, v3 `memory/assemble` & `memory/ingest`, `anylink_invoke`, WebSocket bus, `[ANYLINK_DECLINED]` boundary feedback) and Android native companion app (OkHttp WebSocket push, proactive spoken `task.completed` results, thread-safe isolated `CloudClient`, `device_slug` onboarding, `task_invoke` + `declined` boundary learning) to Protocol v3.
-- [ ] **Phase 3**: Publish `anylink-agent` to PyPI and `@anylink-agent/sdk` + `@anylink-agent/mcp` to npm, plus community adapters (LangGraph, CrewAI, AutoGen).
+- [x] **Phase 2**: Migrated Mac OpenClaw plugins & workers and Android native companion app to Protocol v3, with clean `examples/` isolation and quick password onboarding (`ANYLINK_LOGIN_PASSWORD`).
+- [x] **Phase 3 (`v0.9.0` / Protocol v3.2)**: Full network-reliability & multi-agent hardening — WS zombie eviction, monotonic event cursor replay, receipt ACK, Fencing Token (`lease_token`), queue governance & call-depth loop guard, interactive `awaiting_input` / `awaiting_approval`, PostgreSQL binary artifacts, detached SSE resume, offline outbox, Mac full-access boundary self-healing, Android Deep-Sea Glass UI & Live2D WebGL stability fix, and persona-consistent TTS.
+- [ ] **Phase 4**: Publish `anylink-agent` to PyPI and `@anylink-agent/sdk` + `@anylink-agent/mcp` to npm, plus community adapters (LangGraph, CrewAI, AutoGen).
 
 ---
 

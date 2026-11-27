@@ -10,7 +10,8 @@
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/lang-English-0ea5e9?style=flat-square" alt="English" /></a>
-  <a href="protocol/README.zh-CN.md"><img src="https://img.shields.io/badge/Protocol-v3.0-22d3ee?style=flat-square" alt="Protocol v3.0" /></a>
+  <a href="protocol/README.zh-CN.md"><img src="https://img.shields.io/badge/Protocol-v3.2-22d3ee?style=flat-square" alt="Protocol v3.2" /></a>
+  <a href="https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.9.0"><img src="https://img.shields.io/badge/Release-v0.9.0-0284c7?style=flat-square" alt="Release v0.9.0" /></a>
   <a href="sdk-python/README.md"><img src="https://img.shields.io/badge/Python-anylink--agent-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python SDK" /></a>
   <a href="sdk/README.zh-CN.md"><img src="https://img.shields.io/badge/TypeScript-@anylink--agent%2Fsdk-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript SDK" /></a>
   <a href="mcp/README.md"><img src="https://img.shields.io/badge/MCP-@anylink--agent%2Fmcp-10b981?style=flat-square" alt="MCP Server" /></a>
@@ -64,8 +65,21 @@
 
 - **快捷登录密码（`ANYLINK_LOGIN_PASSWORD`）**：面向普通用户，服务端可选配置一个好记的预设密码（至少 6 位）；在手机端、电脑端或 Web 管理后台直接输入服务器地址和该密码即可一键连接，云端自动签发高熵加密设备令牌（密码不落盘）。
 - **唯一短别名（`device_slug`）**：即使你有两台同名的 Mac，也能用 `@home-mac`、`@office-mac` 精确寻址；同名歧义自动返回 `409 AMBIGUOUS_TARGET_DEVICE` 并提示候选别名。
-- **去抖动 + 闲聊过滤**：连续对话按会话窗口（默认 15 秒 / 6 轮）合并为**单次**云端记忆整理调用，短闲聊（“好的 / 你好 / 嗯”）直接跳过 0 消耗；而设备拒绝/失败边界会**立即落盘学习**。
-- **可靠执行语义**：所有写操作带幂等键，边缘本地零依赖持久化 JSONL 回执日志（`FileJournal`），崩溃或超租约转为 `unknown`，绝不盲目重跑带副作用的操作。
+- **去抖动 + 闲聊过滤 + 崩溃恢复**：连续对话按会话窗口（默认 15 秒 / 6 轮）合并为**单次**云端记忆整理调用，短闲聊（“好的 / 你好 / 嗯”）直接跳过 0 消耗；跨设备拒绝/失败边界立即落盘学习，服务端重启自动恢复待处理批次并按 Owner 串行化防止竞态。
+
+### Protocol v3.2 任务状态机与弱网 / 多 Agent 可靠性架构
+
+面向真实公网、Wi-Fi/4G 切换、笔记本休眠与多 Agent 协作场景，Protocol v3.2 补齐了端到端网络韧性与协作原语：
+
+<p align="center">
+  <img src="docs/assets/protocol-v3.2-state-machine.png" alt="AnyLink Protocol v3.2 任务状态机" width="100%" />
+</p>
+
+- **弱网加固的 WebSocket 实时总线**：应用层双向心跳与僵尸连接剔除、慢消费者背压保护、单调递增 `edge_events` 事件序列游标（`resume_after_seq` 断线续传零丢帧），以及回执送达确认（`task.receipt_ack` / `POST /edge/v1/tasks/:id/ack`），未确认的跨设备回执在重连后自动补发。
+- **防脑裂 Fencing Token 与可靠超时回报**：每次原子 `claim` 签发递增 `attempt` 与随机 `lease_token`，失联复活的旧 Worker 回传会被 `409 LEASE_FENCED` 拦截；声明 `idempotent: true` 的只读任务租约超时可自动安全重试，带副作用任务绝不盲目重跑；统一 Reaper 主动推送排队过期（`expired`）、等待追问/审批超时与硬执行超时（`max_execution_seconds`）。
+- **队列治理与循环调用防护**：支持任务优先级 `priority`（0–100）、要求在线快速失败 `require_online`（`409 TARGET_OFFLINE`）、资源级并发互斥键 `concurrency_key`、队列水位限流（`429 QUEUE_FULL`），以及 `trace_id` / `parent_task_id` / `call_depth` 防无限互相调用（`409 CALL_DEPTH_EXCEEDED`）。
+- **人机协同挂起与大附件直传**：Worker 可通过 `/suspend` 挂起为 `awaiting_input`（追问）或 `awaiting_approval`（高危审批）并暂停租约扣减，主人回复 `/reply` 后无缝恢复；文件/截图等大载荷通过 `POST/GET /edge/v1/artifacts`（SHA-256 校验、单文件 10 MiB / 总配额 200 MiB、到期自动清理）直传。
+- **SSE 断线脱钩续接与离线 Outbox**：对话流携带 `X-AnyLink-Detach-On-Disconnect: on` 后，即使手机切网断开，云端也会继续跑完生成并缓存快照，重连通过 `GET /model/v1/requests/:id` 补拉完整结果；离线产生的记忆先入本地 Outbox 队列，恢复联网自动补发。
 
 ---
 
@@ -152,9 +166,9 @@ const done = await client.waitForTask(task.id);
 AnyLink 的核心价值是**中立、通用的个人 Agent 互联协议（Protocol v3）与云端中枢/SDK**。为了方便直接体验，仓库在 [`examples/`](examples/README.md) 目录下额外隔离提供了两款以深海蓝白鲸鱼娘「大肥鱼」为交互卖点的完整展示客户端（核心协议层与角色完全解耦，二次开发可完全不引入 `examples/`）：
 
 1. **电脑端（Mac + OpenClaw 后台常驻 Agent）** — 详见配置文档：[`examples/mac-openclaw/README.md`](examples/mac-openclaw/README.md)
-   - 基于 OpenClaw + Protocol v3 插件与 WebSocket Worker，由 macOS LaunchAgent 后台常驻运行，支持云端记忆同步、免能力表 `anylink_invoke`、默认白名单安全沙箱或 `--full-access` 全权限模式、可选桌面 Live2D 桌宠与本地语音。
+   - 基于 OpenClaw + Protocol v3.2 插件与并发 WebSocket Worker（`maxConcurrency=2`），由 macOS LaunchAgent 后台常驻运行，支持云端记忆同步、`anylink_invoke` 与 `anylink_task_reply`、默认白名单安全沙箱或 `--full-access` 全权限模式（启动时自动清理历史 `OUTSIDE_ROOT` 陈旧边界记忆）、可选桌面 Live2D 桌宠与本地语音。
 2. **手机端（Android 原生独立 Agent）** — 详见配置文档：[`examples/android-native/README.md`](examples/android-native/README.md)
-   - 手机本地运行完整对话循环与 SQLite 账本，**不依赖 Mac 在线**；独立无遮挡形象舞台 + 完整可滚动对话流 + 预设密码一键登录 + 后台前台服务常驻保活 + 轻量化悬浮球 + 可选无障碍控屏；需要操作电脑时经云端实时协同并主动语音播报回执。
+   - 手机本地运行完整对话循环与 SQLite 幂等账本，**不依赖 Mac 在线**；v0.9.0 全新「深海玻璃陪伴」视觉设计：全屏无遮挡 Live2D 舞台（内置 WebGL 像素实测验证，根治闪现消失）+ 陪伴/阅读双视图切换 + 磨砂玻璃完整对话流 + v3.2 高危审批/追问交互卡片 + 预设密码一键登录 + 后台前台服务保活与悬浮球 + 离线 Outbox / SSE 断线续接 + 贴合「蓝色大肥鱼」人设的活泼语音播报。
 
 ### Mac 端常用控制小技巧
 
@@ -223,8 +237,9 @@ node --env-file=.env dist/server/index.js
 ```
 
 - [x] **第一阶段**：Protocol v3.0 规范、云端记忆大脑（混合检索 + 去抖批整理 + 边界自动学习）、多模型网关与 1A 自动记忆、WebSocket 实时总线与租约回收、设备唯一短别名 `slug`、Python SDK、TypeScript SDK、MCP Server。
-- [x] **第二阶段**：Mac OpenClaw 插件与 Worker（凭据热重载、v3 `memory/assemble` & `memory/ingest`、`anylink_invoke`、WebSocket 长连接、`[ANYLINK_DECLINED]` 边界回传）及 Android 原生大肥鱼客户端（OkHttp WebSocket 实时推送、跨设备结果主动语音汇报、聊天/Worker 客户端隔离与并发取消修复、`device_slug` 接入、`task_invoke` 与 `declined` 边界学习）已全部迁移至 Protocol v3。
-- [ ] **第三阶段**：正式发布 `anylink-agent` 至 PyPI、发布 `@anylink-agent/sdk` 与 `@anylink-agent/mcp` 至 npm，以及更多生态框架适配器（LangGraph / CrewAI / AutoGen）。
+- [x] **第二阶段**：Mac OpenClaw 插件与 Worker 及 Android 原生大肥鱼客户端全面迁移至 Protocol v3，完成 `examples/` 彻底隔离与预设密码快捷接入。
+- [x] **第三阶段（`v0.9.0` / Protocol v3.2）**：弱网与多 Agent 全链路可靠性升级——WS 僵尸连接剔除、事件序列游标续传、回执送达 ACK、Fencing Token 防脑裂、队列治理与递归深度防护、人机协同挂起（`awaiting_input` / `awaiting_approval`）、二进制大附件直传、SSE 断线脱钩续接、离线 Outbox、Mac 全权限陈旧边界自愈、Android 深海玻璃重设计与 Live2D 渲染根因修复，以及贴合「蓝色大肥鱼」人设的语音播报。
+- [ ] **第四阶段**：正式发布 `anylink-agent` 至 PyPI、发布 `@anylink-agent/sdk` 与 `@anylink-agent/mcp` 至 npm，以及更多生态框架适配器（LangGraph / CrewAI / AutoGen）。
 
 ---
 
