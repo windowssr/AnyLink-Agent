@@ -1,12 +1,12 @@
-# Mac 端参考客户端（OpenClaw + Protocol v3 Worker）
+# Mac 端参考客户端（OpenClaw + Protocol v3.2 Worker）
 
 > 本目录属于 `examples/` 展示实例，与核心协议（`protocol/`）、云端中枢（`server/`）和 SDK（`sdk/`、`sdk-python/`、`mcp/`）完全隔离。
 
 Mac 端以 **OpenClaw** 作为本地 Agent 执行引擎，通过 macOS 后台守护服务（LaunchAgent）常驻运行，实现：
 - **云端共享记忆**：每轮对话前自动调用 `POST /edge/v1/memory/assemble` 注入跨设备共享记忆、已学习的设备边界和近期动态；对话结束后异步上报 `POST /edge/v1/memory/ingest`。
-- **WebSocket 实时任务接收**：通过 `/edge/v1/ws` 保持 `ws_online` 长连接，收到手机或其他设备派发的跨设备指令时毫秒级唤醒本地 `remote` Agent 执行。
-- **跨设备免能力表调用**：主对话拥有 `anylink_invoke` 工具，可直接通过 `@device_slug`（如 `@my-phone`）向其他设备发自然语言指令。
-- **可选全权限模式与默认安全沙箱**：默认只开放白名单目录；个人自用电脑可通过 `--full-access` 显式开放完整电脑文件、终端与桌面操控权限。
+- **Protocol v3.2 并发 WebSocket Worker（`maxConcurrency=2`）**：通过 `/edge/v1/ws` 保持 `ws_online` 长连接、单调游标续传、Fencing Token 租约续期，收到手机或其他设备派发的跨设备指令时毫秒级唤醒本地 `remote` Agent 执行。
+- **跨设备免能力表调用与人机协同**：主对话拥有 `anylink_invoke` 与 `anylink_task_reply` 工具，可直接通过 `@device_slug`（如 `@my-phone`）发指令（含优先级/并发键/在线校验）及回复挂起的追问/审批任务。
+- **可选全权限模式 + 历史边界自愈**：默认只开放白名单目录；个人自用电脑可通过 `--full-access` 显式开放完整电脑（含 `/Users/<用户名>` 主目录）、终端与桌面操控权限。Worker 启动时若检测到 `full_access: true`，会自动清除历史学习到的陈旧 `OUTSIDE_ROOT` 边界记忆并写入最新全权限设备事实，避免 `remote` Agent 误判无权限。
 
 ---
 

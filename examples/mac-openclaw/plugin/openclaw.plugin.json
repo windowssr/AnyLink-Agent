@@ -2,7 +2,7 @@
   "id": "anylink-memory",
   "name": "AnyLink Cloud Memory",
   "description": "Shared cloud facts for Mac-hosted agents and explicitly selected logical device contexts. Never runs a cloud agent.",
-  "version": "0.3.0",
+  "version": "0.9.0",
   "contracts": {
     "tools": [
       "anylink_memory_search",
@@ -13,6 +13,7 @@
       "anylink_invoke",
       "anylink_task_create",
       "anylink_task_status",
+      "anylink_task_reply",
       "anylink_task_cancel"
     ]
   },
@@ -82,6 +83,11 @@
       ]
     },
     "anylink_task_status": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "anylink_task_reply": {
       "profiles": [
         "coding"
       ]

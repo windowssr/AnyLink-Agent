@@ -91,3 +91,29 @@ test('full_access policy allows absolute paths outside roots while default denie
     assert.equal(rd.content, 'full ok');
   } finally { await fs.rm(dir, {recursive: true, force: true}); }
 });
+
+test('healStaleBoundaries deletes legacy OUTSIDE_ROOT boundaries and records full_access device fact', async () => {
+  const {healStaleBoundaries} = await import('./link-worker.mjs');
+  const deleted = [], saved = [];
+  const fakeClient = {
+    async searchMemories(q) {
+      if (q.kind === 'boundary') {
+        return {
+          items: [
+            {id: 'b1', revision: 2, title: 'Mac 能力边界', content: '主目录根层不在开放目录内，返回 OUTSIDE_ROOT'},
+            {id: 'b2', revision: 1, title: 'Mac 能力边界', content: '当前环境没有微信无法发微信'},
+          ],
+        };
+      }
+      return {items: []};
+    },
+    async deleteMemory(id, rev) { deleted.push([id, rev]); },
+    async saveMemory(mem) { saved.push(mem); },
+  };
+  const out = await healStaleBoundaries(fakeClient, {full_access: true, roots: [{id: 'home', path: '/Users/demo'}]});
+  assert.deepEqual(out, {healed: 1, recorded: true});
+  assert.deepEqual(deleted, [['b1', 2]]);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].scope, 'device');
+  assert.ok(saved[0].content.includes('/Users/demo'));
+});

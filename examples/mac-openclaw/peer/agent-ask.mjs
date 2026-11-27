@@ -1,7 +1,7 @@
 import { TaskDeclined, TaskFailure } from '../../../sdk/src/worker.mjs';
 
 const GATEWAY = 'http://127.0.0.1:18791';
-const ASK_DESCRIPTION = '把一件事交给 Mac 上的大肥鱼：在桌面、文稿、下载、项目目录里读取、写入、整理、移动、删到废纸篓或打开文件；超出本机环境能力会返回 declined 让云端记忆大脑自动学习';
+const ASK_DESCRIPTION = '把一件事交给 Mac 上的大肥鱼：按本机授予的权限（全权限模式下可直接操作用户主目录及任意授权路径、执行命令与打开应用）完成文件读写、整理、执行与桌面操控；若当前环境确实无法完成则返回 declined 让云端记忆大脑学习';
 const DECLINE_MARKER = /^\s*\[ANYLINK_DECLINED(?::\s*([A-Z0-9_-]{2,40}))?\]\s*(.*)$/is;
 
 function askInput(input, task) {

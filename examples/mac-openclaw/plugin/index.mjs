@@ -24,8 +24,9 @@ const readLinkSpecs = [
 ];
 
 const writeLinkSpecs = [
-  { name: 'anylink_invoke', description: '直接向另一台设备或 Agent 发送自然语言指令，无需事先查能力表。推荐传 target_device_slug（唯一短别名，如 my-phone）或 target_device_name / target_agent_id；若对方无法完成会返回 declined 与原因，云端记忆大脑会自动学会。', parameters: object({ instruction: str('要交给目标设备完成的完整指令'), target_device_slug: str('目标设备唯一短别名，如 my-phone'), target_device_name: str('目标设备显示名'), target_agent_id: str('目标 Agent ID'), target_device_id: str('目标设备 ID'), target_agent_key: str('目标 Agent key'), capability: str('可选结构化能力名，默认 agent.invoke'), input: { type: 'object', description: '可选补充结构化入参' }, ttl_seconds: { type: 'integer', minimum: 10, maximum: 86400 }, lease_seconds: { type: 'integer', minimum: 10, maximum: 3600 } }, ['instruction']) },
-  { name: 'anylink_task_create', description: '向云端派发结构化或自然语言跨设备任务；支持 target_device_slug / target_agent_id / target_device_id / target_device_name。', parameters: object({ capability: str('可选能力名，省略默认 agent.invoke'), instruction: str('可选自然语言指令'), input: { type: 'object', description: '可选任务输入对象' }, target_device_slug: str('目标设备唯一短别名，可选'), target_device_name: str('目标设备显示名，可选'), target_agent_id: str('目标 Agent ID，可选'), target_device_id: str('目标设备 ID，可选'), target_agent_key: str('目标 Agent key，可选'), ttl_seconds: { type: 'integer', minimum: 10, maximum: 86400 } }) },
+  { name: 'anylink_invoke', description: '直接向另一台设备或 Agent 发送自然语言指令，无需事先查能力表。推荐传 target_device_slug（唯一短别名，如 my-phone）或 target_device_name / target_agent_id；支持 priority、require_online 与 concurrency_key；若对方无法完成会返回 declined 与原因，云端记忆大脑会自动学会。', parameters: object({ instruction: str('要交给目标设备完成的完整指令'), target_device_slug: str('目标设备唯一短别名，如 my-phone'), target_device_name: str('目标设备显示名'), target_agent_id: str('目标 Agent ID'), target_device_id: str('目标设备 ID'), target_agent_key: str('目标 Agent key'), capability: str('可选结构化能力名，默认 agent.invoke'), input: { type: 'object', description: '可选补充结构化入参' }, priority: { type: 'integer', minimum: 0, maximum: 10 }, require_online: { type: 'boolean' }, concurrency_key: str('可选互斥并发键'), ttl_seconds: { type: 'integer', minimum: 10, maximum: 86400 }, lease_seconds: { type: 'integer', minimum: 10, maximum: 3600 }, execution_timeout_seconds: { type: 'integer', minimum: 10, maximum: 86400 } }, ['instruction']) },
+  { name: 'anylink_task_create', description: '向云端派发结构化或自然语言跨设备任务；支持 target_device_slug / target_agent_id / target_device_id / target_device_name、priority 与 require_online。', parameters: object({ capability: str('可选能力名，省略默认 agent.invoke'), instruction: str('可选自然语言指令'), input: { type: 'object', description: '可选任务输入对象' }, target_device_slug: str('目标设备唯一短别名，可选'), target_device_name: str('目标设备显示名，可选'), target_agent_id: str('目标 Agent ID，可选'), target_device_id: str('目标设备 ID，可选'), target_agent_key: str('目标 Agent key，可选'), priority: { type: 'integer', minimum: 0, maximum: 10 }, require_online: { type: 'boolean' }, ttl_seconds: { type: 'integer', minimum: 10, maximum: 86400 } }) },
+  { name: 'anylink_task_reply', description: '回复或批准/拒绝处于 awaiting_input 或 awaiting_approval 状态的跨设备任务。', parameters: object({ id: str('任务ID'), message: str('回复文字，可选'), choice: str('快捷选项，可选'), approved: { type: 'boolean', description: '高危审批结果，true 批准 / false 拒绝' } }, ['id']) },
   { name: 'anylink_task_cancel', description: '取消由本 Agent 创建的任务；运行中任务发送协作取消。', parameters: object({ id: str('任务ID') }, ['id']) },
 ];
 
@@ -241,6 +242,10 @@ export default {
               if (spec.name === 'anylink_link_directory') return result(await request(conn, '/edge/v1/directory'));
               if (spec.name === 'anylink_task_status') return result(await request(conn, '/edge/v1/tasks/' + encodeURIComponent(params.id)));
               if (spec.name === 'anylink_task_cancel') return result(await request(conn, '/edge/v1/tasks/' + encodeURIComponent(params.id) + '/cancel', 'POST', {}, headers));
+              if (spec.name === 'anylink_task_reply') {
+                const { id, ...replyBody } = params;
+                return result(await request(conn, '/edge/v1/tasks/' + encodeURIComponent(id) + '/reply', 'POST', replyBody, headers));
+              }
               const target = params.target_agent_id ? { agent_id: params.target_agent_id }
                 : params.target_device_slug ? { device_slug: params.target_device_slug }
                 : params.target_device_id ? { device_id: params.target_device_id }
@@ -252,8 +257,12 @@ export default {
                 ...(params.instruction !== undefined ? { instruction: params.instruction } : {}),
                 ...(params.capability !== undefined ? { capability: params.capability } : {}),
                 ...(params.input !== undefined ? { input: params.input } : {}),
+                ...(params.priority !== undefined ? { priority: params.priority } : {}),
+                ...(params.require_online !== undefined ? { require_online: params.require_online } : {}),
+                ...(params.concurrency_key !== undefined ? { concurrency_key: params.concurrency_key } : {}),
                 ...(params.ttl_seconds !== undefined ? { ttl_seconds: params.ttl_seconds } : {}),
                 ...(params.lease_seconds !== undefined ? { lease_seconds: params.lease_seconds } : {}),
+                ...(params.execution_timeout_seconds !== undefined ? { execution_timeout_seconds: params.execution_timeout_seconds } : {}),
               };
               return result(await request(conn, '/edge/v1/tasks', 'POST', body, headers));
             } catch (e) {

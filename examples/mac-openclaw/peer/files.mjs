@@ -113,12 +113,14 @@ export async function listFiles(input, policy) {
     if (!stat.isDirectory()) throw new PeerFailure(400, 'NOT_DIRECTORY', '路径不是目录');
     const names = (await fs.readdir(resolved)).sort((a, b) => a.localeCompare(b, 'zh'));
     const entries = [], skipped = [];
+    const unrestricted = policy?.full_access === true;
     for (const name of names) {
-      if (name.startsWith('.') || excluded.has(name)) continue;
+      if (!unrestricted && (name.startsWith('.') || excluded.has(name))) continue;
+      if (unrestricted && name.startsWith('.')) continue;
       const file = path.join(resolved, name);
       const st = await fs.lstat(file).catch(() => null);
-      if (!st || st.isSymbolicLink()) { skipped.push(name); continue; }
-      entries.push({name, type: st.isDirectory() ? 'dir' : 'file', size: st.isFile() ? st.size : null, modified_at: st.mtime.toISOString()});
+      if (!st || (!unrestricted && st.isSymbolicLink())) { skipped.push(name); continue; }
+      entries.push({name, type: st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'symlink' : 'file', size: st.isFile() ? st.size : null, modified_at: st.mtime.toISOString()});
       if (entries.length >= limit) break;
     }
     return {path: resolved, entries, truncated: entries.length >= limit || skipped.length > 0, skipped: skipped.slice(0, 20)};

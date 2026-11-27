@@ -9,7 +9,7 @@ const publicBuild=process.argv.includes('--public');
 const version=JSON.parse(fs.readFileSync(path.join(root,'examples/mac-openclaw/desktop/version.json'),'utf8'));
 const profile=path.join(root,'data/mac/openclaw/openclaw.json');
 if(fs.existsSync(profile)&&JSON.parse(fs.readFileSync(profile,'utf8')).gateway?.controlUi?.basePath!=='/openclaw'){
-  throw new Error('Prepare the existing Mac profile while idle: node mac/configure-desktop.mjs');
+  throw new Error('Prepare the existing Mac profile while idle: node examples/mac-openclaw/configure-desktop.mjs');
 }
 const output=path.join(root,publicBuild?'artifacts/public/desktop':'artifacts/desktop');
 const app=path.join(output,'AnyLink.app');
@@ -32,7 +32,7 @@ fs.cpSync(path.join(root,'examples/mac-openclaw/companion/web'),companionResourc
 fs.cpSync(path.join(root,'examples/mac-openclaw/companion/vendor'),path.join(companionResources,'vendor'),{recursive:true});
 for(const file of ['asset-server.mjs','runtime-lock.json','ASSET-NOTICE.md'])fs.copyFileSync(path.join(root,'examples/mac-openclaw/companion',file),path.join(companionResources,file));
 const controlRuntime=path.join(root,'data/mac/control/runtime.json');
-if(!fs.existsSync(controlRuntime))throw new Error('Install the signed control component first: node mac/install-control.mjs');
+if(!fs.existsSync(controlRuntime))throw new Error('Install the signed control component first: node examples/mac-openclaw/install-control.mjs');
 const control=JSON.parse(fs.readFileSync(controlRuntime,'utf8'));
 run('/usr/bin/codesign',['--verify','--deep','--strict',control.app]);
 const helpers=path.join(app,'Contents/Helpers');fs.mkdirSync(helpers,{recursive:true});

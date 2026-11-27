@@ -4,7 +4,7 @@ import path from 'node:path';
 export class PeerFailure extends Error {
   constructor(status, code, message) { super(message); Object.assign(this, {status, code}); }
 }
-const scopes = new Set(['all', 'desktop', 'documents', 'downloads', 'projects', 'workspace']);
+const scopes = new Set(['all', 'home', 'desktop', 'documents', 'downloads', 'projects', 'workspace']);
 export const excluded = new Set(['node_modules', 'vendor', 'secrets', 'data', 'backups', 'artifacts', 'dist', 'build', 'unpackage', 'Library', 'Applications']);
 const inside = (root, file) => file === root || file.startsWith(root + path.sep);
 export function searchInput(input) {
