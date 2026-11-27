@@ -4,10 +4,12 @@ import ai.openclaw.app.R
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color as AndroidColor
+import android.net.Uri
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -31,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -52,35 +55,42 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.ByteArrayInputStream
-import java.net.URLDecoder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-private fun mimeForAsset(path: String): String = when {
-  path.endsWith(".html", ignoreCase = true) -> "text/html"
-  path.endsWith(".js", ignoreCase = true) -> "application/javascript"
-  path.endsWith(".json", ignoreCase = true) -> "application/json"
-  path.endsWith(".png", ignoreCase = true) -> "image/png"
-  path.endsWith(".jpg", ignoreCase = true) || path.endsWith(".jpeg", ignoreCase = true) -> "image/jpeg"
-  path.endsWith(".svg", ignoreCase = true) -> "image/svg+xml"
-  path.endsWith(".css", ignoreCase = true) -> "text/css"
-  path.endsWith(".moc3", ignoreCase = true) -> "application/octet-stream"
-  else -> "application/octet-stream"
+private fun mimeForAsset(path: String): Pair<String, String?> = when {
+  path.endsWith(".html", ignoreCase = true) -> "text/html" to "UTF-8"
+  path.endsWith(".js", ignoreCase = true) -> "application/javascript" to "UTF-8"
+  path.endsWith(".json", ignoreCase = true) -> "application/json" to "UTF-8"
+  path.endsWith(".css", ignoreCase = true) -> "text/css" to "UTF-8"
+  path.endsWith(".svg", ignoreCase = true) -> "image/svg+xml" to "UTF-8"
+  path.endsWith(".png", ignoreCase = true) -> "image/png" to null
+  path.endsWith(".jpg", ignoreCase = true) || path.endsWith(".jpeg", ignoreCase = true) -> "image/jpeg" to null
+  path.endsWith(".webp", ignoreCase = true) -> "image/webp" to null
+  path.endsWith(".wasm", ignoreCase = true) -> "application/wasm" to null
+  path.endsWith(".moc3", ignoreCase = true) -> "application/octet-stream" to null
+  else -> "application/octet-stream" to null
 }
 
 private fun openBundledAsset(context: Context, rawPath: String): WebResourceResponse {
-  val decoded = runCatching { URLDecoder.decode(rawPath, "UTF-8") }.getOrDefault(rawPath)
+  // Use Uri.decode (RFC 3986) rather than URLDecoder so '+' in filenames is never turned into spaces.
+  val decoded = runCatching { Uri.decode(rawPath) }.getOrDefault(rawPath)
   val rel = decoded.removePrefix("/assets/").trimStart('/')
   if (!rel.startsWith("anylink/") || rel.contains("..")) {
+    Log.w(TAG, "blocked asset path: $rel")
     return WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
   }
   val stream = runCatching { context.assets.open(rel) }.getOrNull()
-    ?: return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+  if (stream == null) {
+    Log.w(TAG, "missing bundled asset (404): $rel")
+    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+  }
+  val (mime, encoding) = mimeForAsset(rel)
   val headers = mapOf(
     "Access-Control-Allow-Origin" to "https://appassets.androidplatform.net",
     "Cache-Control" to "no-store",
   )
-  return WebResourceResponse(mimeForAsset(rel), "UTF-8", 200, "OK", headers, stream)
+  return WebResourceResponse(mime, encoding, 200, "OK", headers, stream)
 }
 
 @SuppressLint("SetJavaScriptEnabled") // Only the bundled, keyless Live2D view runs JavaScript.
@@ -93,6 +103,8 @@ internal fun AnyLinkPortrait(
   safeTopPx: Int = 0,
   safeBottomPx: Int = 0,
   mini: Boolean = false,
+  reloadTrigger: Int = 0,
+  onStatusChange: (String) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var web by remember { mutableStateOf<WebView?>(null) }
@@ -100,8 +112,10 @@ internal fun AnyLinkPortrait(
   var webFailed by remember { mutableStateOf(false) }
   var paused by remember { mutableStateOf(false) }
   var webEpoch by remember { mutableIntStateOf(0) }
+  var autoReloaded by remember { mutableStateOf(false) }
   val animationsEnabled = rememberSystemAnimationsEnabled()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
+  val statusCallback by rememberUpdatedState(onStatusChange)
   val payload =
     buildJsonObject {
       put("phase", phase.wire)
@@ -116,6 +130,16 @@ internal fun AnyLinkPortrait(
     }.toString()
   val currentPayload by rememberUpdatedState(payload)
 
+  LaunchedEffect(reloadTrigger) {
+    if (reloadTrigger > 0) {
+      ready = false
+      webFailed = false
+      autoReloaded = false
+      webEpoch++
+      statusCallback("正在重新初始化 Live2D WebView…")
+    }
+  }
+
   DisposableEffect(lifecycle) {
     val observer = LifecycleEventObserver { _, event ->
       if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
@@ -126,12 +150,14 @@ internal fun AnyLinkPortrait(
         paused = false
         web?.onResume()
         val view = web
-        if (view != null && !webFailed) view.postDelayed({
-          if (web === view && !ready && !webFailed) {
-            Log.w(TAG, "avatar not ready 8s after resume; reloading")
+        if (view != null && !webFailed && !autoReloaded) view.postDelayed({
+          if (web === view && !ready && !webFailed && !autoReloaded) {
+            autoReloaded = true
+            Log.w(TAG, "avatar not ready 25s after resume; reloading once")
+            statusCallback("加载超时，正在自动重试一次…")
             view.reload()
           }
-        }, 8000)
+        }, 25_000)
       }
     }
     lifecycle.addObserver(observer)
@@ -153,8 +179,8 @@ internal fun AnyLinkPortrait(
   )
 
   Box(modifier, contentAlignment = Alignment.TopCenter) {
-    // Full-bleed hardware-accelerated WebView: never clip with RoundedCornerShape or start at alpha(0f),
-    // which prevents Android Chromium WebGL layer compositing bugs on transparent canvases.
+    // Full-bleed hardware-accelerated WebView: never clip with RoundedCornerShape, start at alpha(0f),
+    // or cover with an opaque full-screen layer (which causes Android Chromium to throttle WebGL rAF).
     if (!webFailed) {
       key(webEpoch) {
         DisposableEffect(webEpoch) {
@@ -177,19 +203,35 @@ internal fun AnyLinkPortrait(
               settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
               settings.mediaPlaybackRequiresUserGesture = true
               webViewClient = object : WebViewClient() {
-                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                   val uri = request.url
+                  // Let WebView handle inline data: and blob: URLs natively (used by Pixi ImageBitmap/Blob & Cubism).
+                  if (uri.scheme == "data" || uri.scheme == "blob") return null
                   if (uri.scheme == "https" && uri.host == "appassets.androidplatform.net" && uri.path?.startsWith("/assets/anylink/") == true) {
                     return openBundledAsset(context, uri.encodedPath ?: uri.path.orEmpty())
                   }
+                  Log.w(TAG, "blocked request: ${uri.scheme}://${uri.host}${uri.path}")
                   return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 }
 
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
 
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                  val desc = "${error.errorCode}: ${error.description} (${request.url.lastPathSegment})"
+                  Log.w(TAG, "web error: $desc")
+                  if (request.isForMainFrame) statusCallback("WebView 加载失败：$desc")
+                }
+
+                override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                  val desc = "HTTP ${errorResponse.statusCode} (${request.url.lastPathSegment})"
+                  Log.w(TAG, "http error: $desc")
+                  statusCallback("资源加载异常：$desc")
+                }
+
                 override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
                   Log.w(TAG, "render process gone didCrash=${detail.didCrash()}; recreating WebView")
                   ready = false
+                  statusCallback("WebView 渲染进程已重启（crash=${detail.didCrash()}）")
                   if (webEpoch < 2) webEpoch++ else webFailed = true
                   return true
                 }
@@ -201,14 +243,23 @@ internal fun AnyLinkPortrait(
                   when {
                     text == "ANYLINK_AVATAR_READY" -> {
                       ready = true
+                      statusCallback("Live2D 已就绪")
                       evaluateJavascript("window.anylinkMobileAvatar?.update($currentPayload)", null)
+                    }
+                    text.startsWith("ANYLINK_AVATAR_STAGE:") -> {
+                      statusCallback(text.removePrefix("ANYLINK_AVATAR_STAGE:").trim())
+                    }
+                    text.startsWith("ANYLINK_AVATAR_WARN:") -> {
+                      Log.w(TAG, text)
                     }
                     text == "ANYLINK_AVATAR_CONTEXT_LOST" -> {
                       ready = false
+                      statusCallback("WebGL 上下文丢失，等待恢复…")
                     }
                     text.startsWith("ANYLINK_AVATAR_FAILED") -> {
                       ready = false
                       webFailed = true
+                      statusCallback("已回退静态头像（${text.removePrefix("ANYLINK_AVATAR_FAILED:").trim().ifBlank { "未知错误" }}）")
                     }
                   }
                   return true
@@ -216,6 +267,7 @@ internal fun AnyLinkPortrait(
 
                 override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
               }
+              statusCallback("正在加载 Live2D 引擎与模型…")
               loadUrl("https://appassets.androidplatform.net/assets/anylink/portrait.html")
             }
           },
@@ -224,43 +276,35 @@ internal fun AnyLinkPortrait(
       }
     }
 
-    // Native animated portrait fallback: stays smoothly visible on top until Live2D verifies real rendered pixels,
-    // and smoothly re-appears if WebGL loses context or fails, so the character NEVER flashes and disappears.
+    // Native animated portrait fallback: sits centered WITHOUT an opaque full-screen backdrop so Android Chromium
+    // never marks the underlying WebView as occluded or throttles WebGL rendering, and fades out once Live2D is ready.
     AnimatedVisibility(
       visible = !ready || webFailed,
       enter = fadeIn(tween(220)),
       exit = fadeOut(tween(380)),
-      modifier = Modifier.fillMaxSize(),
+      modifier = Modifier.padding(top = if (mini) 86.dp else 104.dp),
     ) {
+      val ringBrush = Brush.radialGradient(
+        colors = listOf(Color(0x668ED8F8), Color(0x22468CAF), Color.Transparent),
+      )
       Box(
         modifier = Modifier
-          .fillMaxSize()
-          .background(Brush.verticalGradient(listOf(Color(0xFFF6FCFF), Color(0xFFDDF1FC), Color(0xFFBFE3F6))))
-          .padding(top = if (mini) 86.dp else 104.dp),
-        contentAlignment = Alignment.TopCenter,
+          .size(if (mini) 84.dp else 212.dp)
+          .graphicsLayer {
+            translationY = if (animationsEnabled) bobDp * density else 0f
+            val s = if (animationsEnabled) pulseScale else 1f
+            scaleX = s; scaleY = s
+          }
+          .background(ringBrush, CircleShape)
+          .padding(if (mini) 8.dp else 16.dp),
+        contentAlignment = Alignment.Center,
       ) {
-        val ringBrush = Brush.radialGradient(
-          colors = listOf(Color(0x668ED8F8), Color(0x22468CAF), Color.Transparent),
+        Image(
+          painter = painterResource(R.drawable.anylink_avatar),
+          contentDescription = "大肥鱼形象",
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxSize().clip(CircleShape),
         )
-        Box(
-          modifier = Modifier
-            .size(if (mini) 84.dp else 212.dp)
-            .graphicsLayer {
-              translationY = if (animationsEnabled) bobDp * density else 0f
-              val s = if (animationsEnabled) pulseScale else 1f
-              scaleX = s; scaleY = s
-            }
-            .background(ringBrush, CircleShape)
-            .padding(if (mini) 8.dp else 16.dp),
-          contentAlignment = Alignment.Center,
-        ) {
-          Image(
-            painter = painterResource(R.drawable.anylink_avatar),
-            contentDescription = "大肥鱼形象",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().clip(CircleShape),
-          )
-        }
       }
     }
   }

@@ -8,10 +8,25 @@
   let touch = 0, lastFrame = performance.now(), baseWidth = 0, baseHeight = 0;
   const pose = {x: 0, y: 0, tilt: 0, pitch: 0, mouth: 0, body: 0};
 
+  function stage(msg) {
+    console.info('ANYLINK_AVATAR_STAGE: ' + msg);
+  }
+
   function viewportSize() {
-    const w = Math.max(1, Math.round(document.documentElement.clientWidth || window.innerWidth || 1));
-    const h = Math.max(1, Math.round(document.documentElement.clientHeight || window.innerHeight || 1));
+    const w = Math.round(document.documentElement.clientWidth || window.innerWidth || 0);
+    const h = Math.round(document.documentElement.clientHeight || window.innerHeight || 0);
     return {w, h};
+  }
+
+  async function waitForViewport(timeoutMs = 3000) {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+      const {w, h} = viewportSize();
+      if (w >= 32 && h >= 32) return {w, h};
+      await new Promise(r => setTimeout(r, 50));
+    }
+    const {w, h} = viewportSize();
+    return {w: Math.max(w, 360), h: Math.max(h, 640)};
   }
 
   function fit() {
@@ -40,7 +55,7 @@
     model.position.set(w / 2, yPos);
   }
 
-  /** Sample the WebGL backbuffer to verify non-transparent pixels were actually drawn before dismissing Android fallback. */
+  /** Sample the WebGL backbuffer synchronously right after render() to verify non-transparent pixels. */
   function hasRenderedPixels() {
     try {
       const gl = app?.renderer?.gl;
@@ -62,6 +77,17 @@
         }
       }
       return false;
+    } catch {
+      return false;
+    }
+  }
+
+  function hasValidModelAssets() {
+    try {
+      const gl = app?.renderer?.gl;
+      if (!gl || gl.isContextLost?.()) return false;
+      const textures = model?.textures || [];
+      return Boolean(model?.internalModel && textures.length > 0 && textures.every(t => t && t.valid) && baseWidth > 10 && baseHeight > 10);
     } catch {
       return false;
     }
@@ -118,32 +144,62 @@
     nod() { touch = performance.now(); },
   };
 
-  async function waitForVisibleFrame(maxAttempts = 6) {
+  async function waitForVisibleFrame(maxAttempts = 16) {
     for (let i = 0; i < maxAttempts; i++) {
       fit();
+      try { model.update(16); } catch {}
       app.renderer.render(app.stage);
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      if (hasRenderedPixels()) return true;
-      await new Promise(r => setTimeout(r, 220));
+      try { app.renderer.gl?.finish?.(); } catch {}
+      if (hasRenderedPixels()) return 'pixels';
+      await new Promise(r => setTimeout(r, 200));
     }
-    return false;
+    if (hasValidModelAssets()) {
+      console.warn('ANYLINK_AVATAR_WARN: readpixels_zero_but_textures_valid');
+      return 'textures';
+    }
+    return '';
+  }
+
+  function createPixiApp(w, h) {
+    // Disable MSAA (antialias: false) on mobile WebView WebGL to avoid Adreno/Mali transparent-canvas blanking bugs.
+    try {
+      return new PIXI.Application({
+        width: Math.max(w, 64),
+        height: Math.max(h, 64),
+        backgroundAlpha: 0,
+        antialias: false,
+        autoDensity: true,
+        preserveDrawingBuffer: true,
+        resolution: Math.min(devicePixelRatio || 1, 1.5),
+        powerPreference: 'default',
+      });
+    } catch (firstErr) {
+      console.warn('ANYLINK_AVATAR_WARN: primary_pixi_init_failed: ' + String(firstErr));
+      if (PIXI.settings && PIXI.ENV) PIXI.settings.PREFER_ENV = PIXI.ENV.WEBGL;
+      return new PIXI.Application({
+        width: Math.max(w, 64),
+        height: Math.max(h, 64),
+        backgroundAlpha: 0,
+        antialias: false,
+        autoDensity: true,
+        preserveDrawingBuffer: false,
+        resolution: 1,
+      });
+    }
   }
 
   async function start() {
-    const {w, h} = viewportSize();
-    app = new PIXI.Application({
-      width: Math.max(w, 64),
-      height: Math.max(h, 64),
-      backgroundAlpha: 0,
-      antialias: true,
-      autoDensity: true,
-      preserveDrawingBuffer: true,
-      resolution: Math.min(devicePixelRatio || 1, 1.5),
-      powerPreference: 'default',
-    });
+    if (typeof PIXI === 'undefined' || !PIXI.live2d || typeof Live2DCubismCore === 'undefined') {
+      throw new Error('live2d_runtime_missing');
+    }
+    stage('等待视口测量…');
+    const {w, h} = await waitForViewport(3000);
+    stage('初始化 WebGL 画布 (' + w + 'x' + h + ')…');
+    app = createPixiApp(w, h);
     app.ticker.maxFPS = 24;
     PIXI.Ticker.shared.maxFPS = 24;
     document.body.appendChild(app.view);
+    stage('加载大肥鱼模型与贴图…');
     model = await PIXI.live2d.Live2DModel.from('./model/entry.model3.json', {autoInteract: false});
     model.anchor.set(0.5, 0);
     app.stage.addChild(model);
@@ -178,8 +234,9 @@
     canvas.addEventListener('webglcontextrestored', () => { contextLost = false; console.info('ANYLINK_AVATAR_CONTEXT_RESTORED'); location.reload(); });
     document.addEventListener('visibilitychange', apply);
 
-    const visible = await waitForVisibleFrame(6);
-    if (!visible) {
+    stage('验证首帧渲染…');
+    const verified = await waitForVisibleFrame(16);
+    if (!verified) {
       console.error('ANYLINK_AVATAR_FAILED: blank_webgl_surface');
       return;
     }

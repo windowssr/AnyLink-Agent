@@ -62,6 +62,14 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val acceptsFiles = MutableStateFlow(prefs.getBoolean("file_accepts", true))
   val maxReceiveFileBytes = MutableStateFlow(prefs.getLong("file_max_receive_bytes", AnyLinkFiles.MAX_BYTES))
   val confirmFileOverBytes = MutableStateFlow(prefs.getLong("file_confirm_over_bytes", AnyLinkFiles.DEFAULT_CONFIRM_OVER_BYTES))
+  val allowRemoteControl = MutableStateFlow(prefs.getBoolean("allow_remote_control", true))
+  val avatarStatus = MutableStateFlow("初始化中…")
+  val avatarReloadTick = MutableStateFlow(0)
+  val privateCharacterMode: Boolean = runCatching {
+    app.assets.open("anylink/character-mode.json").bufferedReader().use {
+      linkJson.parseToJsonElement(it.readText()).jsonObject["private_character"]?.jsonPrimitive?.booleanOrNull == true
+    }
+  }.getOrDefault(false)
   val activityVisible = MutableStateFlow(false)
   val serviceRunning = MutableStateFlow(false)
   val overlayVisible = MutableStateFlow(false)
@@ -163,7 +171,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         if (!activityVisible.value) {
           AnyLinkCompanionService.notifyProactive(app, "大肥鱼回复你啦", answer, tag = "reply:${last.text("id")}")
         }
-        speechPlayer?.enqueue(answer.take(3500), summarize = true, interrupt = true, forceRewrite = false)
+        speechPlayer?.enqueue(answer.take(3500), summarize = true, interrupt = true, forceRewrite = true)
       }
     }
   }
@@ -493,11 +501,86 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       else -> "大肥鱼：跨设备任务没完成"
     }
     AnyLinkCompanionService.notifyProactive(app, notifTitle, displayText, tag = "task:$id")
-    speechPlayer?.enqueue(speechInput.take(3500), summarize = true, interrupt = false, forceRewrite = forcePersonaRewrite)
+    speechPlayer?.enqueue(speechInput.take(3500), summarize = true, interrupt = false, forceRewrite = true)
+  }
+
+  private suspend fun syncRemoteCapabilityProfile(transport: CloudClient) {
+    runCatching {
+      val summary = if (allowRemoteControl.value) {
+        "手机本地大肥鱼：支持跨设备远程操控手机（打开 App、看屏、点击、输入、滚动）、收发文件、查状态与语音播报"
+      } else {
+        "手机本地大肥鱼：支持语音陪伴、收发文件、查状态与播报提醒（主人暂已关闭远程控屏）"
+      }
+      transport.request("PATCH", "/edge/v1/agent/profile", jsonObject("summary" to str(summary), "file_policy" to buildFilePolicyJson()))
+    }
+    if (!allowRemoteControl.value) return
+    // Auto-heal stale PHONE_REMOTE_SCOPE_LIMITED boundary memories recorded before bidirectional phone control was wired.
+    runCatching {
+      val res = transport.request("POST", "/edge/v1/memories/search", jsonObject("kind" to str("boundary"), "limit" to JsonPrimitive(50)))
+      val staleRegex = Regex("PHONE_REMOTE_SCOPE_LIMITED|暂不支持远程操控其他手机|不支持远程操控手机", RegexOption.IGNORE_CASE)
+      for (el in (res["items"] as? JsonArray).orEmpty()) {
+        val mem = el as? JsonObject ?: continue
+        val text = mem.text("title") + "\n" + mem.text("content")
+        val id = mem.text("id")
+        val rev = mem["revision"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: continue
+        if (id.isNotBlank() && staleRegex.containsMatchIn(text)) {
+          runCatching { transport.request("DELETE", "/edge/v1/memories/$id", revision = rev) }
+        }
+      }
+    }
+  }
+
+  private suspend fun executeRemoteAgentInvoke(
+    transport: CloudClient,
+    taskId: String,
+    leaseToken: String,
+    instruction: String,
+    sourceName: String,
+  ): JsonObject {
+    if (!allowRemoteControl.value) {
+      val msg = "手机端主人已关闭「允许远程操控本机」开关（可在手机 App「保活」设置中重新开启）"
+      agent.value?.appendEvent(role = "event", text = "已拦截来自 $sourceName 的远程指令：$msg", meta = "远程控屏已关闭")
+      throw FileDeclined("REMOTE_CONTROL_DISABLED", msg, learnBoundary = false)
+    }
+    val active = agent.value ?: throw LinkFailure("AGENT_UNAVAILABLE", "手机大肥鱼尚未初始化")
+    val outcome = active.runRemoteTask(taskId, instruction, sourceName) { step, msg ->
+      runCatching {
+        val body = buildJsonObject {
+          put("stage", str("running"))
+          put("message", str(msg))
+          put("step", JsonPrimitive(step))
+          if (leaseToken.isNotBlank()) put("lease_token", str(leaseToken))
+        }
+        transport.request("POST", "/edge/v1/tasks/$taskId/progress", body)
+      }
+    }
+    return when (outcome) {
+      is RemoteTaskOutcome.Succeeded -> {
+        voiceNotice.value = outcome.reply.take(160)
+        AnyLinkCompanionService.notifyProactive(app, "大肥鱼已替 $sourceName 办妥啦", outcome.reply, tag = "remote:$taskId")
+        speechPlayer?.enqueue("刚刚替${sourceName}在手机上办完了一件事：${outcome.reply}".take(3500), summarize = true, interrupt = false, forceRewrite = true)
+        jsonObject(
+          "state" to str("succeeded"),
+          "output" to jsonObject(
+            "reply" to str(outcome.reply),
+            "steps" to JsonPrimitive(outcome.steps),
+          ),
+        )
+      }
+      is RemoteTaskOutcome.Declined -> {
+        voiceNotice.value = outcome.message.take(160)
+        AnyLinkCompanionService.notifyProactive(app, "大肥鱼暂未执行来自 $sourceName 的指令", outcome.message, tag = "remote:$taskId")
+        throw FileDeclined(outcome.code, outcome.message, learnBoundary = outcome.learnBoundary)
+      }
+      is RemoteTaskOutcome.Failed -> {
+        throw LinkFailure(outcome.code, outcome.message, outcome.unknown)
+      }
+    }
   }
 
   private suspend fun workerLoop(transport: CloudClient, value: CloudConnection) {
     val ledger = SqlAgentLedger(app, value)
+    scope.launch { syncRemoteCapabilityProfile(transport) }
     linkWorkerLoop(
       transport = transport,
       ledger = ledger,
@@ -505,6 +588,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       say = { text, source -> companionSay(text, source) },
       receiveFile = { taskId, leaseToken, artifactId, input, source -> receiveDeliveredFile(transport, taskId, leaseToken, artifactId, input, source) },
       filePolicy = { buildFilePolicyJson() },
+      invokeAgent = { taskId, leaseToken, instruction, source -> executeRemoteAgentInvoke(transport, taskId, leaseToken, instruction, source) },
       wakeup = workerWakeup,
       isWsOnline = { wsOnline.value },
     )
@@ -761,6 +845,22 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     prefs.edit().putLong("file_confirm_over_bytes", clean).apply()
     confirmFileOverBytes.value = clean
     syncFilePolicyToCloud()
+  }
+
+  fun setAllowRemoteControl(enabled: Boolean) {
+    prefs.edit().putBoolean("allow_remote_control", enabled).apply()
+    allowRemoteControl.value = enabled
+    val client = workerCloud ?: return
+    scope.launch { syncRemoteCapabilityProfile(client) }
+  }
+
+  fun updateAvatarStatus(status: String) {
+    if (status.isNotBlank()) avatarStatus.value = status
+  }
+
+  fun reloadAvatar() {
+    avatarStatus.value = "正在重新加载形象…"
+    avatarReloadTick.update { it + 1 }
   }
   fun overlayDismissed() = prefs.getBoolean("overlay_dismissed", false)
   fun dismissOverlay() { prefs.edit().putBoolean("overlay_dismissed", true).apply(); refreshOverlay() }

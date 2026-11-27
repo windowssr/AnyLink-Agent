@@ -104,6 +104,7 @@ internal suspend fun linkWorkerLoop(
   say: suspend (String, String) -> Unit,
   receiveFile: (suspend (String, String, String, JsonObject, String) -> Pair<SavedFile, String>)? = null,
   filePolicy: (() -> JsonObject)? = null,
+  invokeAgent: (suspend (String, String, String, String) -> JsonObject)? = null,
   wakeup: Channel<Unit>? = null,
   isWsOnline: () -> Boolean = { false },
 ) {
@@ -133,6 +134,7 @@ internal suspend fun linkWorkerLoop(
     "sent" to JsonPrimitive(false),
   )
   val capabilities = jsonObject("capabilities" to JsonArray(listOf(
+    jsonObject("name" to str("agent.invoke"), "description" to str("把自然语言指令交给手机上的大肥鱼自主执行：支持通过无障碍服务打开 App、查看屏幕、点击、输入、滚动、查状态与处理本地任务")),
     jsonObject("name" to str("phone.status"), "description" to str("读取这台手机的基础状态：型号、系统版本、电量等")),
     jsonObject("name" to str("companion.say"), "description" to str("让手机上的大肥鱼用语音说一句话并显示在屏幕上，text 不超过 500 字")),
     jsonObject("name" to str("file.deliver"), "description" to str("接收其他设备通过 /edge/v1/artifacts 上传的文件（artifact_id），自动校验并保存到手机「下载/AnyLink」且弹窗提醒")),
@@ -195,7 +197,7 @@ internal suspend fun linkWorkerLoop(
                 }
               }
               try {
-                executeWorkerTask(task, leaseToken, transport, info, say, receiveFile, ::deviceName)
+                executeWorkerTask(task, leaseToken, transport, info, say, receiveFile, invokeAgent, ::deviceName)
               } finally {
                 hbJob.cancel()
               }
@@ -239,6 +241,7 @@ private suspend fun executeWorkerTask(
   info: () -> JsonObject,
   say: suspend (String, String) -> Unit,
   receiveFile: (suspend (String, String, String, JsonObject, String) -> Pair<SavedFile, String>)?,
+  invokeAgent: (suspend (String, String, String, String) -> JsonObject)?,
   deviceName: suspend (String) -> String,
 ): JsonObject {
   val taskId = task.text("id")
@@ -273,24 +276,26 @@ private suspend fun executeWorkerTask(
       jsonObject("state" to str("succeeded"), "output" to jsonObject("spoken" to JsonPrimitive(true), "reply" to str("已播报：$text")))
     }
     "file.deliver" -> handleArtifactDelivery()
-    "agent.invoke" -> {
+    "agent.invoke", "agent.ask" -> {
       val instruction = task.text("instruction").ifBlank { input.text("instruction") }
       val source = task["source_device_id"]?.jsonPrimitive?.contentOrNull
+      val sourceName = if (source.isNullOrBlank()) "其他设备" else deviceName(source)
       when {
-        input.text("artifact_id").isNotBlank() -> handleArtifactDelivery()
+        input.text("artifact_id").isNotBlank() && instruction.isBlank() -> handleArtifactDelivery()
         instruction.isBlank() -> throw LinkFailure("BAD_TOOL_INPUT", "instruction 不能为空")
+        invokeAgent != null -> {
+          val enriched = if (input.text("artifact_id").isNotBlank()) {
+            "$instruction\n[附带云端附件 artifact_id=${input.text("artifact_id")}, filename=${input.text("filename")}]"
+          } else instruction
+          invokeAgent(taskId, leaseToken, enriched, sourceName)
+        }
         Regex("状态|电量|型号|版本|信息|status", RegexOption.IGNORE_CASE).containsMatchIn(instruction) ->
           jsonObject("state" to str("succeeded"), "output" to JsonObject(info() + mapOf("reply" to str("手机当前状态已读取"))))
-        Regex("提醒|说|播报|告诉主人|喊|叫一下", RegexOption.IGNORE_CASE).containsMatchIn(instruction) -> {
-          val text = instruction.take(500)
-          say(text, if (source.isNullOrBlank()) "其他设备" else deviceName(source))
-          jsonObject("state" to str("succeeded"), "output" to jsonObject("spoken" to JsonPrimitive(true), "reply" to str("已在手机上语音播报给主人")))
-        }
         else -> jsonObject(
           "state" to str("declined"),
           "error" to jsonObject(
             "code" to str("PHONE_REMOTE_SCOPE_LIMITED"),
-            "message" to str("手机端跨设备模式目前支持读取手机状态、接收文件（file.deliver）与语音播报提醒，暂不支持远程操控其他手机 App"),
+            "message" to str("手机端跨设备 Agent 执行器未就绪，暂无法处理该远程指令"),
             "learn_boundary" to JsonPrimitive(true),
           ),
         )
@@ -300,7 +305,7 @@ private suspend fun executeWorkerTask(
       "state" to str("declined"),
       "error" to jsonObject(
         "code" to str("CAPABILITY_UNAVAILABLE"),
-        "message" to str("这台手机不支持 $capability，仅支持 phone.status、companion.say 与 file.deliver"),
+        "message" to str("这台手机不支持 $capability，仅支持 agent.invoke、phone.status、companion.say 与 file.deliver"),
         "learn_boundary" to JsonPrimitive(true),
       ),
     )
@@ -337,6 +342,7 @@ class AnyLinkActivity : ComponentActivity() {
         val notice by runtime.voiceNotice.collectAsState()
         val pendingFile by runtime.pendingFile.collectAsState()
         val uploadingFile by runtime.uploadingFile.collectAsState()
+        val avatarReloadTick by runtime.avatarReloadTick.collectAsState()
         var configuration by remember { mutableStateOf(false) }
         var floating by remember { mutableStateOf(false) }
         permissionTick.intValue
@@ -369,6 +375,8 @@ class AnyLinkActivity : ComponentActivity() {
           uploadingFile = uploadingFile,
           pickFile = { runCatching { pickDocument.launch(arrayOf("*/*")) } },
           clearPendingFile = { runtime.clearPendingFile() },
+          avatarReloadTrigger = avatarReloadTick,
+          onAvatarStatus = { runtime.updateAvatarStatus(it) },
         )
         if (floating) FloatingSettingsSheet(runtime, onDismiss = { floating = false; permissionTick.intValue++ })
       }
@@ -403,6 +411,8 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
   val acceptsFiles by runtime.acceptsFiles.collectAsState()
   val maxReceiveBytes by runtime.maxReceiveFileBytes.collectAsState()
   val confirmOverBytes by runtime.confirmFileOverBytes.collectAsState()
+  val allowRemoteControl by runtime.allowRemoteControl.collectAsState()
+  val avatarStatus by runtime.avatarStatus.collectAsState()
   val freeBytes = remember { AnyLinkFiles.availableStorageBytes(context) }
   ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color(0xFFF6FBFE), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -428,6 +438,23 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       Row(verticalAlignment = Alignment.CenterVertically) {
         Text("退到后台时显示悬浮球", Modifier.weight(1f), color = DeepInk)
         Switch(checked = floatEnabled, onCheckedChange = { runtime.setOverlayEnabled(it); floatEnabled = it })
+      }
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+          Text("允许 Mac 等设备远程操控本机", color = DeepInk)
+          Text("开启后，Mac 下发的指令会交给手机大肥鱼实际执行（需同时开启无障碍权限）", style = MaterialTheme.typography.labelSmall, color = SoftMist)
+        }
+        Switch(checked = allowRemoteControl, onCheckedChange = { runtime.setAllowRemoteControl(it) })
+      }
+      HorizontalDivider(color = Color(0xFFDCEEF8))
+      Text("大肥鱼形象引擎状态", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
+      Text(
+        "安装包模式：${if (runtime.privateCharacterMode) "私有 Live2D 版（含大肥鱼模型）" else "开源占位版（不含私有 Live2D 模型）"}\n当前状态：$avatarStatus",
+        style = MaterialTheme.typography.bodySmall,
+        color = SeaSlate,
+      )
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AssistChip(onClick = { runtime.reloadAvatar() }, label = { Text("重新加载大肥鱼") })
       }
       HorizontalDivider(color = Color(0xFFDCEEF8))
       Text("手机 Agent 单轮执行步数上限", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
@@ -499,6 +526,8 @@ internal fun CloudCompanionScreen(
   uploadingFile: Boolean = false,
   pickFile: () -> Unit = {},
   clearPendingFile: () -> Unit = {},
+  avatarReloadTrigger: Int = 0,
+  onAvatarStatus: (String) -> Unit = {},
 ) {
   val context = LocalContext.current
   var showLicenses by remember { mutableStateOf(false) }
@@ -580,6 +609,8 @@ internal fun CloudCompanionScreen(
       safeTopPx = statusTopPx + with(density) { 56.dp.roundToPx() },
       safeBottomPx = 0,
       mini = compactStage,
+      reloadTrigger = avatarReloadTrigger,
+      onStatusChange = onAvatarStatus,
       modifier = Modifier.fillMaxSize(),
     )
 
@@ -1110,7 +1141,7 @@ private fun ChatBubble(msg: ChatMessage, onReplyTask: (String, Boolean?, String?
             }
           }
         }
-        Text(msg.text, style = MaterialTheme.typography.bodyMedium, color = DeepInk)
+        MarkdownText(msg.text, color = DeepInk)
         if (!msg.resolved && msg.taskId.isNotBlank()) {
           if (msg.interactionType == "awaiting_approval") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1184,11 +1215,9 @@ private fun ChatBubble(msg: ChatMessage, onReplyTask: (String, Boolean?, String?
             fontWeight = FontWeight.SemiBold,
           )
           SelectionContainer {
-            Text(
+            MarkdownText(
               text = msg.text,
-              style = MaterialTheme.typography.bodyMedium,
               color = DeepInk,
-              lineHeight = 21.sp,
             )
           }
           if (msg.fileName.isNotBlank()) {
@@ -1287,7 +1316,7 @@ private fun TaskReceipt(task: JsonObject) {
       for (file in files) { val entry = file.jsonObject; Text(entry.text("name"), style = MaterialTheme.typography.titleSmall, color = DeepInk); Text(entry.text("path"), style = MaterialTheme.typography.bodySmall, color = SeaSlate) }
       if (partial) Text("搜索覆盖有限，未遍历全部文件。", style = MaterialTheme.typography.labelSmall, color = SoftMist)
     }
-    reply.isNotBlank() -> Text(reply, color = DeepInk)
+    reply.isNotBlank() -> MarkdownText(reply, color = DeepInk)
     error != null -> Text(error.text("message"), color = SeaSlate)
     task.text("state") == "running" && progress?.text("message")?.isNotBlank() == true -> Text(progress.text("message"), color = SeaSlate)
     task.text("state") == "queued" -> Text("目标设备领取后会通过 WebSocket 实时推回结果，手机可以继续聊天。", color = SeaSlate)

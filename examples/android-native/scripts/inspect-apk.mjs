@@ -48,6 +48,21 @@ with zipfile.ZipFile(sys.argv[2]) as z:
   assert 'assets/anylink/model/entry.model3.json' in names, 'Private APK is missing the Live2D model'
   assert any('live2dcubismcore' in n.lower() for n in names), 'Private APK is missing the Cubism core'
   assert 'assets/anylink/avatar.js' in names
+  model_entries = [n for n in names if n.startswith('assets/anylink/model/')]
+  assert all(n.isascii() for n in model_entries), f'Non-ASCII Live2D asset paths found: {[n for n in model_entries if not n.isascii()]}'
+  model_json = json.loads(z.read('assets/anylink/model/entry.model3.json').decode('utf-8'))
+  refs = model_json.get('FileReferences', {})
+  expected_refs = []
+  for k in ('Moc', 'Physics', 'DisplayInfo'):
+   if refs.get(k): expected_refs.append(refs[k])
+  expected_refs.extend(refs.get('Textures', []))
+  for grp in (refs.get('Motions') or {}).values():
+   for m in grp:
+    if m.get('File'): expected_refs.append(m['File'])
+  for exp in (refs.get('Expressions') or []):
+   if exp.get('File'): expected_refs.append(exp['File'])
+  missing = [r for r in expected_refs if ('assets/anylink/model/' + r) not in names]
+  assert not missing, f'Private APK missing Live2D referenced assets: {missing}'
  else:
   assert not any(n.endswith('.moc3') or 'live2dcubismcore' in n.lower() or '/anylink/model/' in n for n in names), 'Restricted character assets found in public APK'
   assert not any('anylink_avatar' in n and n.endswith('.png') for n in names), 'Private derived avatar found in public APK'

@@ -90,11 +90,52 @@ for(const ext of ['png','xml'])fs.rmSync(path.join(drawable,'anylink_avatar.'+ex
 if(privateCharacter){
   for(const name of ['portrait.html','avatar.js'])fs.copyFileSync(path.join(home,'web',name),path.join(assets,name));
   const model=path.join(root,'data/mac/companion/model');
-  if(!fs.existsSync(path.join(model,'entry.model3.json')))throw new Error('Prepare privately licensed character assets first.');
-  fs.cpSync(model,path.join(assets,'model'),{recursive:true});
+  const entryPath=path.join(model,'entry.model3.json');
+  if(!fs.existsSync(entryPath))throw new Error('Prepare privately licensed character assets first.');
+  // Copy referenced model assets using pure ASCII filenames inside Android assets so APK ZIP encoding
+  // (non-UTF8 flag bits / URL percent-decoding / NFD-vs-NFC) can never break WebView Live2D loading.
+  const modelOut=path.join(assets,'model');
+  fs.mkdirSync(modelOut,{recursive:true});
+  const entry=JSON.parse(fs.readFileSync(entryPath,'utf8'));
+  const refs=entry.FileReferences??{};
+  const copyAscii=(srcRel,dstRel)=>{
+    const src=path.join(model,srcRel),dst=path.join(modelOut,dstRel);
+    if(!fs.existsSync(src))throw new Error('Missing model asset: '+srcRel);
+    fs.mkdirSync(path.dirname(dst),{recursive:true});
+    fs.copyFileSync(src,dst);
+    return dstRel;
+  };
+  if(refs.Moc)refs.Moc=copyAscii(refs.Moc,'dafeiyu.moc3');
+  if(Array.isArray(refs.Textures)){
+    refs.Textures=refs.Textures.map((tex,idx)=>{
+      const ext=path.extname(tex)||'.png';
+      return copyAscii(tex,`textures/texture_${String(idx).padStart(2,'0')}${ext}`);
+    });
+  }
+  if(refs.Physics)refs.Physics=copyAscii(refs.Physics,'dafeiyu.physics3.json');
+  if(refs.DisplayInfo)refs.DisplayInfo=copyAscii(refs.DisplayInfo,'dafeiyu.cdi3.json');
+  if(refs.Motions&&typeof refs.Motions==='object'){
+    for(const [group,list] of Object.entries(refs.Motions)){
+      if(!Array.isArray(list))continue;
+      const slug=group.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'motion';
+      list.forEach((item,idx)=>{
+        if(item&&typeof item.File==='string'){
+          item.File=copyAscii(item.File,`Animation/${slug}${idx===0?'':'-'+idx}.motion3.json`);
+        }
+      });
+    }
+  }
+  if(Array.isArray(refs.Expressions)){
+    refs.Expressions.forEach((item,idx)=>{
+      if(item&&typeof item.File==='string'){
+        const slug=String(item.Name||`exp-${idx}`).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||`exp-${idx}`;
+        item.File=copyAscii(item.File,`Exp3/${slug}.exp3.json`);
+      }
+    });
+  }
+  fs.writeFileSync(path.join(modelOut,'entry.model3.json'),JSON.stringify(entry,null,2)+'\n');
   // Phone GPUs and WebView texture memory are tighter than the Mac's: shrink the
   // copied 4096px textures to 1024 for this build only so mobile WebGL never OOMs. Source assets stay untouched.
-  const modelOut=path.join(assets,'model');
   for(const dir of fs.readdirSync(modelOut,{withFileTypes:true,recursive:true})){
     if(!dir.isFile()||!dir.name.endsWith('.png'))continue;
     const file=path.join(dir.parentPath??dir.path??modelOut,dir.name);

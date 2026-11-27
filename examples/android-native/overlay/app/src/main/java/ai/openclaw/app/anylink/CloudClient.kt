@@ -71,7 +71,7 @@ internal data class CloudConnection(
           "key" to str("android-dafeiyu"),
           "name" to str("手机大肥鱼"),
           "kind" to str("device-agent"),
-          "summary" to str("手机本地大肥鱼：支持语音陪伴、查看手机基础状态与播报提醒"),
+          "summary" to str("手机本地大肥鱼：支持跨设备远程操控手机（打开 App、看屏、点击、输入、滚动）、收发文件、查状态与语音播报"),
         ))
       }
       val request = Request.Builder().url("$base/edge/v1/connect").header("Authorization", "Bearer $cleanSecret")

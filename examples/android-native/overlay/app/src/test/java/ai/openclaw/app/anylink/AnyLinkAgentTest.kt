@@ -436,4 +436,131 @@ class AnyLinkAgentTest {
       assertEquals(false, parsed["error"]!!.jsonObject["learn_boundary"]!!.jsonPrimitive.boolean)
     }
   }
+
+  @Test fun `worker routes agent invoke to DeviceAgent for actual phone control even when instruction contains say keywords`() = runBlocking {
+    val opened = mutableListOf<String>()
+    PhoneControlBridge.control = object : PhoneControl {
+      override fun screen() = jsonObject("package" to str("com.tencent.mm"), "nodes" to JsonArray(emptyList()))
+      override fun tap(id: String?, text: String?, x: Float?, y: Float?) = true
+      override fun setText(text: String, id: String?, submit: Boolean) = true
+      override fun scroll(direction: String, id: String?) = true
+      override fun back() = true
+      override fun home() = true
+      override fun openApp(query: String): Boolean { opened += query; return true }
+      override fun listApps(query: String?) = JsonArray(emptyList())
+    }
+    try {
+      MockWebServer().use { server ->
+        server.start()
+        // 1. capabilities registration
+        server.enqueue(response("""{"ok":true}"""))
+        // 2. claim agent.invoke (deliberately contains "说" to prove old regex no longer swallows commands!)
+        server.enqueue(response("""{"task":{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","capability":"agent.invoke","instruction":"帮我打开微信给张三说一声晚点回","input":{},"source_device_id":"dev-mac"}}"""))
+        // 3. directory lookup for source device name
+        server.enqueue(response("""{"items":[{"device":{"id":"dev-mac","name":"Mac 主机","platform":"macos"},"agents":[]}]}"""))
+        // 4-6. DeviceAgent verify + memory assemble
+        server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
+        server.enqueue(response("""{"protocol":"anylink","version":"3.2"}"""))
+        server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
+        // 7. Model calls phone_open_app("微信")
+        server.enqueue(stream(sse(call = """{"name":"phone_open_app","arguments":"{\"name\":\"微信\"}"}""")))
+        // 8. Model finishes with summary
+        server.enqueue(stream(sse("已在手机上打开微信。")))
+        // 9. Memory ingest
+        server.enqueue(response("""{"episode_id":"ep-remote-1","status":"pending"}"""))
+        // 10. Worker posts task result
+        server.enqueue(response("""{"ok":true}"""))
+        // 11. Next claim returns null
+        server.enqueue(response("""{"task":null}"""))
+
+        val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+        val ledger = MemoryLedger()
+        val agent = DeviceAgent(conn, CloudClient(conn), ledger, { jsonObject("model" to str("m")) })
+        val job = launch {
+          runCatching {
+            linkWorkerLoop(
+              transport = CloudClient(conn),
+              ledger = ledger,
+              info = { jsonObject("model" to str("m")) },
+              say = { _, _ -> fail("agent.invoke control command must execute, not fall back to say") },
+              invokeAgent = { taskId, _, instruction, source ->
+                when (val outcome = agent.runRemoteTask(taskId, instruction, source)) {
+                  is RemoteTaskOutcome.Succeeded -> jsonObject("state" to str("succeeded"), "output" to jsonObject("reply" to str(outcome.reply), "steps" to JsonPrimitive(outcome.steps)))
+                  is RemoteTaskOutcome.Declined -> throw FileDeclined(outcome.code, outcome.message, outcome.learnBoundary)
+                  is RemoteTaskOutcome.Failed -> throw LinkFailure(outcome.code, outcome.message, outcome.unknown)
+                }
+              },
+            )
+          }
+        }
+        delay(1800); job.cancel()
+        val requests = (1..server.requestCount).map { server.takeRequest() }
+        val caps = requests.first { it.path == "/edge/v1/link/capabilities" }.body.readUtf8()
+        assertTrue("worker must advertise agent.invoke", caps.contains("\"agent.invoke\""))
+        assertEquals(listOf("微信"), opened)
+        val resultReq = requests.single { it.path == "/edge/v1/tasks/cccccccc-cccc-4ccc-8ccc-cccccccccccc/result" }
+        val parsed = linkJson.parseToJsonElement(resultReq.body.readUtf8()).jsonObject
+        assertEquals("succeeded", parsed.text("state"))
+        assertTrue(parsed["output"]!!.jsonObject.text("reply").contains("微信"))
+      }
+    } finally {
+      PhoneControlBridge.control = null
+    }
+  }
+
+  @Test fun `remote task reports transient accessibility decline with learn_boundary false`() = runBlocking {
+    PhoneControlBridge.control = null
+    MockWebServer().use { server ->
+      server.start()
+      server.enqueue(response("""{"device":{"id":"$testDevice","platform":"android"}}"""))
+      server.enqueue(response("""{"protocol":"anylink","version":"3.2"}"""))
+      server.enqueue(response("""{"device_id":"$testDevice","memories":[],"boundaries":[],"episodes":[],"summary_text":""}"""))
+      server.enqueue(stream(sse(call = """{"name":"phone_open_app","arguments":"{\"name\":\"微信\"}"}""")))
+      server.enqueue(stream(sse("[ANYLINK_DECLINED:ACCESSIBILITY_DISABLED] 请先在手机设置里开启无障碍服务")))
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val agent = DeviceAgent(conn, CloudClient(conn), MemoryLedger(), { jsonObject("model" to str("m")) })
+      val outcome = agent.runRemoteTask("task-acc-1", "打开微信", "Mac 主机")
+      assertTrue(outcome is RemoteTaskOutcome.Declined)
+      val declined = outcome as RemoteTaskOutcome.Declined
+      assertEquals("ACCESSIBILITY_DISABLED", declined.code)
+      assertEquals(false, declined.learnBoundary)
+    }
+  }
+
+  @Test fun `SpeechPlayer always requests persona rewrite and falls back to dedicated chat completion API when speech endpoint fails`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      // 1. /model/v1/speech fails (502 without rewrite)
+      server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":{"code":"SPEECH_UNAVAILABLE"}}"""))
+      // 2. SpeechPlayer makes a dedicated /model/v1/chat/completions rewrite call
+      server.enqueue(response("""{"choices":[{"message":{"content":"哼，主人，代码和文件我都已经帮你整理好放进桌面啦！"}}]}"""))
+      // 3. Re-synthesis via /model/v1/speech fails -> falls back to system TTS with the rewritten persona line
+      server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":{"code":"SPEECH_UNAVAILABLE"}}"""))
+
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val spoken = mutableListOf<String>()
+      val player = SpeechPlayer(
+        context = RuntimeEnvironment.getApplication(),
+        scope = this,
+        connection = { conn },
+        speakTts = { text, _ -> spoken += text },
+        onSpeaking = {},
+      )
+      player.enqueue("## 执行报告\n1. 已创建 `/Users/demo/a.txt`\n```bash\necho hi\n```", summarize = true, interrupt = true, forceRewrite = true)
+      val deadline = System.currentTimeMillis() + 5_000L
+      while (spoken.isEmpty() && System.currentTimeMillis() < deadline) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        delay(25)
+      }
+      assertTrue("timed out waiting for TTS fallback", spoken.isNotEmpty())
+      val req1 = server.takeRequest()
+      assertEquals("/model/v1/speech", req1.path)
+      val req1Body = linkJson.parseToJsonElement(req1.body.readUtf8()).jsonObject
+      assertEquals("always", req1Body.text("rewrite"))
+      assertEquals("persona", req1Body.text("style"))
+      val req2 = server.takeRequest()
+      assertEquals("/model/v1/chat/completions", req2.path)
+      assertEquals(listOf("哼，主人，代码和文件我都已经帮你整理好放进桌面啦！"), spoken)
+    }
+  }
 }

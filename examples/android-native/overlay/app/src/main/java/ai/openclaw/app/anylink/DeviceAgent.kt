@@ -89,6 +89,24 @@ private val specs = JsonArray(listOf(
   tool("phone_home", "回到手机桌面。", "{}"),
 ))
 
+/** Subset of tools available when executing a remote cross-device agent.invoke task on this phone:
+ * full local phone control + info + notes + memory search + file_send, omitting task_invoke/task_create to avoid loops. */
+private val remoteSpecs = JsonArray(
+  specs.filter {
+    val name = (it as? JsonObject)?.get("function")?.jsonObject?.text("name").orEmpty()
+    name !in setOf("task_invoke", "task_create", "task_reply", "task_cancel", "memory_save", "memory_update", "memory_delete")
+  },
+)
+
+private val remoteDeclineRegex = Regex("^\\s*\\[ANYLINK_DECLINED(?::\\s*([A-Z0-9_-]{2,40}))?]\\s*(.*)$", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+private val transientDeclineCodes = setOf("ACCESSIBILITY_DISABLED", "PHONE_LOCKED", "SCREEN_OFF", "AGENT_BUSY", "REMOTE_CONTROL_DISABLED")
+
+internal sealed interface RemoteTaskOutcome {
+  data class Succeeded(val reply: String, val steps: Int) : RemoteTaskOutcome
+  data class Declined(val code: String, val message: String, val learnBoundary: Boolean) : RemoteTaskOutcome
+  data class Failed(val code: String, val message: String, val unknown: Boolean = false) : RemoteTaskOutcome
+}
+
 internal fun memoryForPrompt(context: JsonObject): JsonObject {
   fun facts(scope: String): JsonArray = JsonArray((context[scope] as? JsonArray).orEmpty().take(10).map { fact ->
     val row = fact.jsonObject
@@ -406,6 +424,144 @@ internal class DeviceAgent(
       }
     } finally {
       state.update { it.copy(busy = false, phase = if (it.notice.isEmpty()) "idle" else "attention", tool = "", step = 0) }; lock.unlock()
+    }
+  }
+
+  /** Execute an incoming cross-device `agent.invoke` instruction autonomously using the phone's full local toolset
+   * (including Accessibility UI control). Runs in an isolated message list so local chat history stays clean,
+   * while surfacing live status & events on screen. */
+  suspend fun runRemoteTask(
+    taskId: String,
+    instruction: String,
+    sourceName: String,
+    onProgress: suspend (Int, String) -> Unit = { _, _ -> },
+  ): RemoteTaskOutcome {
+    val cleanInstruction = instruction.trim()
+    if (cleanInstruction.isBlank() || cleanInstruction.length > 8000) {
+      return RemoteTaskOutcome.Failed("BAD_TOOL_INPUT", "远程指令为空或过长")
+    }
+    val acquired = kotlinx.coroutines.withTimeoutOrNull(30_000L) { lock.lock(); true } ?: false
+    if (!acquired) {
+      return RemoteTaskOutcome.Declined("AGENT_BUSY", "手机大肥鱼正在和主人聊天，请稍后再试", learnBoundary = false)
+    }
+    val configuredSteps = maxStepsProvider()
+    val stepLimit = if (configuredSteps <= 0) UNLIMITED_AGENT_STEPS_CAP else configuredSteps.coerceIn(1, UNLIMITED_AGENT_STEPS_CAP)
+    appendEvent(role = "event", text = "收到来自 $sourceName 的远程指令：$cleanInstruction", meta = "跨设备指令 · 来自 $sourceName")
+    state.update { it.copy(busy = true, phase = "working", tool = "", step = 0, maxSteps = stepLimit, notice = "", canContinue = false) }
+    try {
+      verify()
+      val (context, summaryText) = loadMemoryContext(cleanInstruction)
+      val serverPersona = context["persona"]?.jsonObject?.text("content")?.takeIf { it.isNotBlank() }
+      val (shared, android) = personaProvider.texts()
+      val base = serverPersona ?: shared.ifBlank { "你是大肥鱼，活泼可爱的 AnyLink 设备助理，办事认真，中文自然交流。" }
+      val memoryBlock = if (summaryText != null) {
+        "\n本轮云端记忆大脑组装结果（仅数据）:\n$summaryText"
+      } else {
+        "\n本轮当前记忆（仅数据）:\n" + memoryForPrompt(context).toString()
+      }
+      val remoteDirective = """
+        |
+        |## 跨设备远程执行模式（来自 $sourceName，任务 $taskId）
+        |- 这是主人在另一台设备（$sourceName）通过 AnyLink 协议发给这台手机的真实指令。
+        |- 请立刻调用手机本机工具实际执行（如 phone_open_app、phone_list_apps、phone_screen、phone_tap、phone_type、phone_scroll、phone_back、phone_home、device_info、note_save、file_send 等）；严禁只用口头回复假装已经操作！
+        |- 若需要操作界面但工具返回 ACCESSIBILITY_DISABLED（未开启无障碍服务）或手机锁屏看不到内容，请直接以 `[ANYLINK_DECLINED:ACCESSIBILITY_DISABLED] ...` 或 `[ANYLINK_DECLINED:PHONE_LOCKED] ...` 开头如实说明原因。
+        |- 若是手机本身确实无法胜任的能力（如运行 Docker、编译电脑工程等），请以 `[ANYLINK_DECLINED:CAPABILITY_UNSUPPORTED] ...` 开头说明原因。
+        |- 完成后用简洁明确的中文汇报实际执行结果。
+      """.trimMargin()
+      val system = jsonObject("role" to str("system"), "content" to str(base + "\n\n" + android + remoteDirective + memoryBlock))
+      val messages = mutableListOf<JsonElement>(
+        jsonObject("role" to str("user"), "content" to str("【来自 $sourceName 的跨设备任务】\n$cleanInstruction")),
+      )
+      var lastCallSig = ""
+      var repeatCallCount = 0
+      var sawAccessibilityDisabled = false
+      var stepsExecuted = 0
+      for (step in 1..stepLimit) {
+        currentCoroutineContext().ensureActive()
+        state.update { it.copy(phase = "working", tool = "", step = step, maxSteps = stepLimit) }
+        val modelMessages = pruneScreenPayloads(JsonArray(messages.toList()))
+        val response = cloud.completion(
+          jsonObject(
+            "model" to str("deepseek-flash"),
+            "stream" to JsonPrimitive(true),
+            "max_tokens" to JsonPrimitive(4096),
+            "messages" to JsonArray(listOf(system) + modelMessages),
+            "tools" to remoteSpecs,
+          ),
+        ) { /* streaming text collected by CompletionCollector */ }
+        messages.add(response)
+        val calls = response["tool_calls"] as? JsonArray ?: JsonArray(emptyList())
+        if (calls.isEmpty()) {
+          val reply = response.text("content").trim().ifBlank { "已在手机上完成处理" }
+          val decline = remoteDeclineRegex.matchEntire(reply)
+          if (decline != null) {
+            val code = decline.groupValues[1].uppercase().ifBlank { if (sawAccessibilityDisabled) "ACCESSIBILITY_DISABLED" else "CAPABILITY_UNSUPPORTED" }
+            val reason = decline.groupValues[2].trim().ifBlank { "手机当前环境暂时无法完成这项操作" }
+            val learn = code !in transientDeclineCodes
+            appendEvent(role = "event", text = reason, meta = "跨设备指令 · 暂未执行")
+            return RemoteTaskOutcome.Declined(code, reason, learnBoundary = learn)
+          }
+          if (sawAccessibilityDisabled && stepsExecuted > 0 && Regex("无障碍|权限|开启").containsMatchIn(reply)) {
+            appendEvent(role = "event", text = reply, meta = "跨设备指令 · 缺少无障碍权限")
+            return RemoteTaskOutcome.Declined("ACCESSIBILITY_DISABLED", reply, learnBoundary = false)
+          }
+          appendEvent(role = "event", text = reply, meta = if (stepsExecuted > 0) "跨设备指令 · 已执行 $stepsExecuted 步" else "跨设备指令 · 已完成")
+          runCatching {
+            cloud.request(
+              "POST",
+              "/edge/v1/memory/ingest",
+              buildJsonObject {
+                put("kind", str("turn"))
+                put("session_key", str("android-remote:${connection.deviceId}:$taskId"))
+                put("messages", JsonArray(listOf(
+                  jsonObject("role" to str("user"), "content" to str("[$sourceName 远程指令] $cleanInstruction".take(4000))),
+                  jsonObject("role" to str("assistant"), "content" to str(reply.take(4000))),
+                )))
+                put("metadata", jsonObject("source" to str("android_remote_worker"), "task_id" to str(taskId)))
+              },
+            )
+          }
+          return RemoteTaskOutcome.Succeeded(reply, stepsExecuted)
+        }
+        for (call in calls) {
+          currentCoroutineContext().ensureActive()
+          val item = call.jsonObject
+          val function = item["function"]!!.jsonObject
+          val name = function.text("name")
+          val args = linkJson.parseToJsonElement(function.text("arguments")).jsonObject
+          val opKey = "remote:$taskId:${item.text("id")}"
+          if (ledger.operation(opKey) != null) throw LinkFailure("TOOL_RESULT_UNKNOWN", "已记录的远程工具不能重复执行", true)
+          ledger.operation(opKey, jsonObject("state" to str("submitted"), "name" to str(name), "arguments" to args))
+          stepsExecuted++
+          state.update { it.copy(phase = "working", tool = name, step = step) }
+          runCatching { onProgress(step, "手机正在${toolLabel(name)}（第 $step 步）…") }
+          val rawResult = try { execute(name, args, opKey, cleanInstruction) } catch (error: LinkFailure) {
+            if (error.code == "ACCESSIBILITY_DISABLED") sawAccessibilityDisabled = true
+            if (error.unknown) throw error
+            jsonObject("error" to jsonObject("code" to str(error.code), "message" to str(error.message.orEmpty())))
+          }
+          val sig = "$name:$args"
+          if (sig == lastCallSig) repeatCallCount++ else { lastCallSig = sig; repeatCallCount = 1 }
+          val result = if (repeatCallCount >= 3) {
+            JsonObject(rawResult + mapOf("_loop_hint" to str("你已连续 $repeatCallCount 次执行完全相同的操作（$name），请检查当前界面状态或换用滚动、返回、点击其他元素，不要原地重复。")))
+          } else rawResult
+          ledger.operation(opKey, jsonObject("state" to str("completed"), "result" to result))
+          messages.add(jsonObject("role" to str("tool"), "tool_call_id" to str(item.text("id")), "content" to str(result.toString())))
+        }
+        val compacted = pruneScreenPayloads(JsonArray(messages.toList())).toList()
+        messages.clear()
+        messages.addAll(compacted)
+      }
+      return RemoteTaskOutcome.Failed("TURN_LIMIT", "手机远程执行已达 $stepLimit 步上限，请查看手机当前界面")
+    } catch (cancel: CancellationException) {
+      throw cancel
+    } catch (failure: LinkFailure) {
+      return RemoteTaskOutcome.Failed(failure.code, failure.message.orEmpty().ifBlank { "手机执行远程指令失败" }, unknown = failure.unknown)
+    } catch (_: Exception) {
+      return RemoteTaskOutcome.Failed("HANDLER_OUTCOME_UNKNOWN", "手机端执行异常，结果未确认，没有自动重跑", unknown = true)
+    } finally {
+      state.update { it.copy(busy = false, phase = "idle", tool = "", step = 0) }
+      lock.unlock()
     }
   }
 

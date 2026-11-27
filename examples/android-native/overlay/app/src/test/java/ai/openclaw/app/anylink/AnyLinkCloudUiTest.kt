@@ -261,4 +261,42 @@ class AnyLinkCloudUiTest {
     compose.onNodeWithText("继续执行").assertExists().performClick()
     assertTrue(continuedPrompt.contains("继续"))
   }
+
+  @Test fun `markdown parser and Compose renderer format headings, bold, code, lists, and tables without raw markers`() {
+    val md = """
+      |### 今日进展
+      |已经帮主人搞定 **核心任务**，命令是 `npm test`。
+      |- 第一项：完成 *斜体说明*
+      |1. 第二项：详见 [AnyLink](https://example.com)
+      |> 小提示：一切正常
+      |```kotlin
+      |println("ok")
+      |```
+      || 项目 | 状态 |
+      || --- | --- |
+      || 手机 | 就绪 |
+    """.trimMargin()
+    val blocks = parseMarkdownBlocks(md)
+    assertTrue(blocks.any { it is MarkdownBlock.Heading && it.level == 3 && it.text == "今日进展" })
+    assertTrue(blocks.any { it is MarkdownBlock.BulletItem })
+    assertTrue(blocks.any { it is MarkdownBlock.OrderedItem && it.number == "1" })
+    assertTrue(blocks.any { it is MarkdownBlock.Quote && it.text.contains("小提示") })
+    assertTrue(blocks.any { it is MarkdownBlock.CodeBlock && it.language == "kotlin" && it.code.contains("println") })
+    assertTrue(blocks.any { it is MarkdownBlock.Table && it.headers == listOf("项目", "状态") })
+
+    val inline = parseInlineMarkdown("已完成 **重点** 和 `code`")
+    assertFalse(inline.text.contains("**"))
+    assertFalse(inline.text.contains("`"))
+    assertTrue(inline.text.contains("重点"))
+    assertTrue(inline.text.contains("code"))
+
+    compose.setContent {
+      MaterialTheme(colorScheme = DeepSeaColorScheme) {
+        MarkdownText(md, color = androidx.compose.ui.graphics.Color(0xFF0B2A40))
+      }
+    }
+    compose.onNodeWithText("今日进展").assertExists()
+    compose.onNodeWithText("println(\"ok\")").assertExists()
+    compose.onNodeWithText("### 今日进展").assertDoesNotExist()
+  }
 }
