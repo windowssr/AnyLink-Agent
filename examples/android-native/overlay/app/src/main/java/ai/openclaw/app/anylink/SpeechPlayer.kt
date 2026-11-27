@@ -12,6 +12,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -54,11 +56,18 @@ private const val CLIENT_VOICE_REWRITE_SYSTEM = """你是「大肥鱼」（住�
 - 严格贴合「蓝色大肥鱼」人设：聪明惜力、软糯轻快、带一点傲娇和熟人感，自然称呼「主人」，绝不使用客服套话、播音腔、括号动作描写、颜文字或「喵」。
 - 务必简洁利落（不超过 65 个中文字），只输出最终要念出来的纯口播文本，不要任何引号、前缀或解释。"""
 
-private data class Pending(val text: String, val summarize: Boolean, val interrupt: Boolean, val forceRewrite: Boolean = false)
+private data class Pending(val text: String, val summarize: Boolean, val forceRewrite: Boolean = false)
+internal data class SpeechPayload(val spoken: String?, val audio: String? = null, val format: String = "mp3", val provider: String = "system") {
+  companion object {
+    fun parse(body: JsonObject): SpeechPayload = SpeechPayload(body.text("spoken_text"), body.text("audio_base64").takeIf { it.isNotBlank() },
+      if (body.text("format") == "wav") "wav" else "mp3", if (body.text("provider") == "qwen") "qwen" else "microsoft")
+  }
+}
+private data class PreparedSpeech(val file: File, val spoken: String, val envelope: SpeechEnvelope, val provider: String)
 
-/** Fetches /model/v1/speech (with mandatory persona rewrite when requested) and plays the mp3;
- * if /model/v1/speech fails or skips rewrite, performs a dedicated lightweight /model/v1/chat/completions
- * persona-rewrite API call before falling back to system TTS so voice output stays brief, core, and in-character. */
+/** Fetches /model/v1/speech and plays WAV/MP3 with one-utterance lookahead;
+ * A server failure preserves its spoken text for original system TTS. If no words came back,
+ * a lightweight chat rewrite keeps local fallback brief and in character. */
 internal class SpeechPlayer(
   private val context: Context,
   private val scope: CoroutineScope,
@@ -71,6 +80,8 @@ internal class SpeechPlayer(
   private val inCall: () -> Boolean = { false },
   private val onError: (String) -> Unit = {},
   private val beforePlayback: () -> Boolean = { true },
+  private val onVoice: (String) -> Unit = {},
+  private val createPlayer: () -> MediaPlayer = { MediaPlayer() },
 ) {
   private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(45000, java.util.concurrent.TimeUnit.MILLISECONDS).build()
   private val json = Json { ignoreUnknownKeys = true }
@@ -80,48 +91,57 @@ internal class SpeechPlayer(
   private var busy = false
   private var epoch = 0
   private var fetchJob: Job? = null
+  private var prepared: PreparedSpeech? = null
   private var currentFile: File? = null
   private var levelTick: Runnable? = null
-  val isActive: Boolean get() = busy || pending.isNotEmpty()
+  val isActive: Boolean get() = busy || pending.isNotEmpty() || fetchJob != null || prepared != null
 
   fun enqueue(text: String, summarize: Boolean, interrupt: Boolean, forceRewrite: Boolean = true) {
     if (interrupt) interrupt()
     if (text.isBlank()) return
-    pending.addLast(Pending(text, summarize, interrupt, forceRewrite))
+    pending.addLast(Pending(text, summarize, forceRewrite))
     pump()
   }
   fun interrupt() {
     epoch++; pending.clear(); fetchJob?.cancel(); fetchJob = null
+    prepared?.file?.delete(); prepared = null
     http.dispatcher.cancelAll()
     stopPlayer(); busy = false
   }
   private fun pump() {
-    if (busy) return
-    val next = pending.pollFirst() ?: run { onIdle(); return }
-    busy = true
+    if (!busy) prepared?.let { ready ->
+      prepared = null; busy = true
+      play(ready.file, ready.spoken, ready.envelope, epoch, ready.provider)
+    }
+    // Fetch at most one next utterance while the active one plays. No pose/voice callbacks until playback.
+    if (fetchJob != null || prepared != null) return
+    val next = pending.pollFirst() ?: run { if (!busy) onIdle(); return }
     val stamp = epoch
-    fetchJob = scope.launch {
+    fetchJob = scope.launch(start = CoroutineStart.LAZY) {
       var file: File? = null
       try {
-        val (spoken, audio) = fetch(next)
+        val payload = fetch(next)
         ensureActive()
-        val words = spoken ?: SpeechSanitizer.clean(next.text)
-        file = if (audio != null) withContext(Dispatchers.IO) {
-          File(context.cacheDir, "speech-${UUID.randomUUID()}.mp3").also { file = it; it.writeBytes(android.util.Base64.decode(audio, android.util.Base64.DEFAULT)) }
+        val words = payload.spoken ?: SpeechSanitizer.clean(next.text)
+        file = if (payload.audio != null) withContext(Dispatchers.IO) {
+          File(context.cacheDir, "speech-${UUID.randomUUID()}.${payload.format}").also { file = it; it.writeBytes(android.util.Base64.decode(payload.audio, android.util.Base64.DEFAULT)) }
         } else synthesizeLocal(words)
         ensureActive()
         if (stamp != epoch) return@launch
-        val ready = file
-        if (ready == null) { busy = false; pump(); return@launch }
+        val ready = file ?: return@launch
         val envelope = try { SpeechEnvelope.decode(ready) } catch (e: CancellationException) { throw e } catch (_: Exception) { SpeechEnvelope(emptyList()) }
         ensureActive()
         if (stamp != epoch) return@launch
-        play(ready, words, envelope, stamp)
-        file = null // Ownership passes to the active player.
+        prepared = PreparedSpeech(ready, words, envelope, if (payload.audio != null) payload.provider else "system")
+        file = null // Ownership passes to the prepared slot, then the player.
       } catch (e: CancellationException) { throw e }
-      catch (_: Exception) { if (stamp == epoch) { onError("语音暂时无法播放，请查看文字回复。"); busy = false; pump() } }
-      finally { file?.delete() }
+      catch (_: Exception) { if (stamp == epoch) onError("语音暂时无法播放，请查看文字回复。") }
+      finally {
+        file?.delete()
+        if (stamp == epoch) { fetchJob = null; pump() }
+      }
     }
+    fetchJob?.start()
   }
 
   /** Dedicated lightweight chat API call to condense & rewrite any output into 1-2 short in-character spoken sentences. */
@@ -152,68 +172,39 @@ internal class SpeechPlayer(
     }
   }.getOrNull()
 
-  private suspend fun fetch(next: Pending): Pair<String?, String?> = withContext(Dispatchers.IO) {
-    val conn = connection() ?: return@withContext null to null
-    val wantRewrite = next.forceRewrite || next.summarize
-    var spokenFromServer: String? = null
-    var rewrittenByServer = false
-    try {
-      val body = jsonObject(
-        "text" to str(next.text.take(8000)),
-        "summarize" to kotlinx.serialization.json.JsonPrimitive(wantRewrite),
-        "rewrite" to str(if (wantRewrite) "always" else "never"),
-        "voice" to str("sweet-lively"),
-        "style" to str("persona"),
-      ).toString().toRequestBody("application/json".toMediaType())
-      val response = http.newCall(Request.Builder().url(conn.server + "/model/v1/speech")
-        .header("Authorization", "Bearer ${conn.token}").post(body).build()).execute()
-      response.use { res ->
-        val payload = res.body.string()
-        val parsed = runCatching { json.parseToJsonElement(payload).jsonObject }.getOrNull()
-        if (res.code == 200) {
-          val spoken = parsed?.get("spoken_text")?.jsonPrimitive?.content
-          val audio = parsed?.get("audio_base64")?.jsonPrimitive?.content
-          rewrittenByServer = parsed?.get("rewritten")?.jsonPrimitive?.content == "true"
-          if (!audio.isNullOrBlank() && !spoken.isNullOrBlank() && (!wantRewrite || rewrittenByServer)) {
-            return@withContext spoken to audio
-          }
-          spokenFromServer = spoken
-        } else {
-          // 502 SPEECH_UNAVAILABLE still carries server-rewritten spoken_text for client fallback.
-          spokenFromServer = (parsed?.get("error") as? JsonObject)?.get("spoken_text")?.jsonPrimitive?.content
-          rewrittenByServer = !spokenFromServer.isNullOrBlank() && spokenFromServer != SpeechSanitizer.clean(next.text)
-        }
-      }
-    } catch (_: Exception) { }
-
-    // Guarantee a dedicated persona-rewrite API pass whenever requested and not already rewritten by /model/v1/speech.
-    if (wantRewrite && !rewrittenByServer) {
-      val rewritten = rewriteViaCompletionApi(conn, next.text)
-      if (!rewritten.isNullOrBlank()) {
-        // Try synthesizing the already-rewritten concise line via /model/v1/speech (rewrite=never) for neural voice!
-        val synthAudio = runCatching {
-          val synthBody = jsonObject(
-            "text" to str(rewritten),
-            "summarize" to kotlinx.serialization.json.JsonPrimitive(false),
-            "rewrite" to str("never"),
-            "voice" to str("sweet-lively"),
-            "style" to str("persona"),
-          ).toString().toRequestBody("application/json".toMediaType())
-          http.newCall(Request.Builder().url(conn.server + "/model/v1/speech")
-            .header("Authorization", "Bearer ${conn.token}").post(synthBody).build()).execute().use { res ->
-            if (res.code != 200) null
-            else runCatching { json.parseToJsonElement(res.body.string()).jsonObject["audio_base64"]?.jsonPrimitive?.content }.getOrNull()?.takeIf { it.isNotBlank() }
-          }
-        }.getOrNull()
-        return@withContext rewritten to synthAudio
-      }
+  private fun requestSpeech(conn: CloudConnection, text: String, rewrite: Boolean): SpeechPayload? {
+    val body = jsonObject("text" to str(text.take(8000)), "summarize" to kotlinx.serialization.json.JsonPrimitive(rewrite),
+      "rewrite" to str(if (rewrite) "always" else "never"), "voice" to str("sweet-lively"), "style" to str("persona"))
+      .toString().toRequestBody("application/json".toMediaType())
+    return http.newCall(Request.Builder().url(conn.server + "/model/v1/speech")
+      .header("Authorization", "Bearer ${conn.token}").post(body).build()).execute().use { res ->
+      val parsed = runCatching { json.parseToJsonElement(res.body.string()).jsonObject }.getOrNull() ?: return@use null
+      if (res.isSuccessful) SpeechPayload.parse(parsed)
+      else (parsed["error"] as? JsonObject)?.text("spoken_text")?.takeIf { it.isNotBlank() }?.let { SpeechPayload(it) }
     }
-    return@withContext spokenFromServer to null
   }
 
-  private fun play(file: File, spoken: String, envelope: SpeechEnvelope, stamp: Int) {
+  private suspend fun fetch(next: Pending): SpeechPayload = withContext(Dispatchers.IO) {
+    val conn = connection() ?: return@withContext SpeechPayload(null)
+    val result = runCatching { requestSpeech(conn, next.text, next.forceRewrite || next.summarize) }.getOrNull()
+    currentCoroutineContext().ensureActive()
+    // A server 502 has already exhausted Momo and Microsoft; preserve its concise words for system TTS.
+    if (result != null && !result.spoken.isNullOrBlank()) return@withContext result
+    if (next.forceRewrite || next.summarize) {
+      val rewritten = rewriteViaCompletionApi(conn, next.text)
+      currentCoroutineContext().ensureActive()
+      if (!rewritten.isNullOrBlank()) {
+        val retry = runCatching { requestSpeech(conn, rewritten, false) }.getOrNull()
+        currentCoroutineContext().ensureActive()
+        return@withContext retry ?: SpeechPayload(rewritten)
+      }
+    }
+    SpeechPayload(null)
+  }
+
+  private fun play(file: File, spoken: String, envelope: SpeechEnvelope, stamp: Int, provider: String) {
     currentFile = file
-    val mp = MediaPlayer(); player = mp
+    val mp = createPlayer(); player = mp
     try {
       val usage = if (inCall()) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA
       mp.setAudioAttributes(AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
@@ -222,7 +213,7 @@ internal class SpeechPlayer(
         if (stamp != epoch || player !== mp) return@setOnPreparedListener
         if (!beforePlayback()) { finish(mp, stamp); return@setOnPreparedListener }
         runCatching {
-          mp.start(); onSpeaking(true); onUtterance(spoken)
+          mp.start(); onSpeaking(true); onUtterance(spoken); onVoice(provider)
           val tick = object : Runnable {
             override fun run() {
               if (stamp != epoch || player !== mp) return

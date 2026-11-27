@@ -64,7 +64,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anylink.openclaw.plist
 
 Compose 只定义 app、postgres 两服务。产品入口仍只绑定 `127.0.0.1:3180`；app 从 `secrets/model.env` 读取服务端 DeepSeek Key，直连配置的提供商。模型地址不接受调用者提供的任意 URL。
 
-模型 API：`/model/v1/models`、`/model/v1/chat/completions`、`/model/v1/speech`（文字净化＋可选口播改写＋微软神经语音 mp3，设备 Bearer 凭据；合成失败返回 502 `SPEECH_UNAVAILABLE` 并附 `spoken_text` 供客户端回退）。记忆 API：`/edge/v1/context` 与 `/edge/v1/memories...`。均使用设备 Bearer 凭据。设备登记、凭据生成 / 撤销和模型元数据由主人管理；服务凭据不能调用主人管理接口。
+模型 API：`/model/v1/models`、`/model/v1/chat/completions`、`/model/v1/speech`（文字净化＋可选口播改写＋语音合成：默认微软神经语音 MP3；配置百炼 Key 时优先 Qwen Momo WAV，再回退原微软语音，设备 Bearer 凭据；合成失败返回 502 `SPEECH_UNAVAILABLE` 并附 `spoken_text` 供客户端回退）。记忆 API：`/edge/v1/context` 与 `/edge/v1/memories...`。均使用设备 Bearer 凭据。设备登记、凭据生成 / 撤销和模型元数据由主人管理；服务凭据不能调用主人管理接口。
 
 每台设备同时一个推理请求，服务总并发两个，单请求输出上限 8192 tokens，默认 4096；单设备每分钟最多 30 次模型请求。代理不自动重发未知上游调用，保存请求 ID、设备、状态与用量，不保存模型输入 / 输出正文。
 

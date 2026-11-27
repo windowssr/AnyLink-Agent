@@ -587,4 +587,46 @@ class AnyLinkAgentTest {
     }
   }
 
+  @Test fun `Momo WAV prefetch is bounded and interruption discards prepared audio without triggering its pose`() = runBlocking {
+    val context = RuntimeEnvironment.getApplication()
+    val existing = context.cacheDir.listFiles().orEmpty().toSet()
+    val pcm = ByteArray(16000 * 2) { if (it % 2 == 0) 0 else 32 }
+    val audio = android.util.Base64.encodeToString(WavEncoder.encodePcm16Mono(pcm), android.util.Base64.NO_WRAP)
+    fun sound(words: String) = response("""{"spoken_text":"$words","audio_base64":"$audio","format":"wav","provider":"qwen"}""")
+    org.robolectric.shadows.ShadowMediaPlayer.setMediaInfoProvider { org.robolectric.shadows.ShadowMediaPlayer.MediaInfo(60000, 0) }
+    MockWebServer().use { server ->
+      server.start(); server.enqueue(sound("第一句")); server.enqueue(sound("第二句")); server.enqueue(sound("新回复"))
+      val spoken = mutableListOf<String>(); val voices = mutableListOf<String>(); val players = mutableListOf<android.media.MediaPlayer>()
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val player = SpeechPlayer(context, this, { conn }, { fail("system fallback should not run"); null }, {},
+        onUtterance = { spoken += it }, onVoice = { voices += it }, createPlayer = { android.media.MediaPlayer().also { players += it } })
+      player.enqueue("第一句", false, false, false); player.enqueue("第二句", false, false, false); player.enqueue("第三句", false, false, false)
+      val deadline = System.currentTimeMillis() + 5000
+      while ((server.requestCount < 2 || context.cacheDir.listFiles().orEmpty().count { it !in existing && it.name.startsWith("speech-") } < 2) && System.currentTimeMillis() < deadline) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(20)
+      }
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(80)
+      assertEquals(2, server.requestCount); assertEquals(listOf("第一句"), spoken); assertEquals(listOf("qwen"), voices)
+      val files = context.cacheDir.listFiles().orEmpty().filter { it !in existing && it.name.startsWith("speech-") }
+      assertEquals(2, files.size); assertTrue(files.all { it.extension == "wav" })
+      player.interrupt(); assertTrue(files.none { it.exists() }); assertFalse(player.isActive)
+      assertEquals(org.robolectric.shadows.ShadowMediaPlayer.State.END, org.robolectric.Shadows.shadowOf(players.single()).state)
+      player.enqueue("新回复", false, false, false)
+      while (spoken.size < 2 && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(20) }
+      assertEquals(listOf("第一句", "新回复"), spoken); player.interrupt()
+    }
+  }
+
+  @Test fun `exhausted cloud synthesis goes directly to original system TTS with server spoken words`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start(); server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":{"code":"SPEECH_UNAVAILABLE","spoken_text":"我在听呢。"}}"""))
+      val spoken = mutableListOf<String>(); val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { spoken += it; null }, {})
+      player.enqueue("长回复需要精炼", true, false, true)
+      val deadline = System.currentTimeMillis() + 5000
+      while (spoken.isEmpty() && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(20) }
+      assertEquals(listOf("我在听呢。"), spoken); assertEquals(1, server.requestCount); player.interrupt()
+    }
+  }
+
 }

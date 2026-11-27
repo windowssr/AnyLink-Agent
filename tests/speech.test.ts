@@ -21,7 +21,7 @@ test('fallbackSpoken keeps at most two sentences within 120 chars',()=>{
   const out=fallbackSpoken('第一句。第二句！第三句？末尾。');
   assert.ok(out.length<=125);assert.ok(out.includes('第一句'));
 });
-async function appWith(deps:{summarize?:any;synthesize?:any}){
+async function appWith(deps:{summarize?:any;synthesize?:any;qwenSynthesize?:any}){
   const app=Fastify();
   const {ApiError}=await import('../server/db.js');const {ZodError}=await import('zod');
   app.setErrorHandler((error,req,reply)=>{
@@ -105,4 +105,50 @@ test('audio status and transcription route support OpenAI-compatible ASR and rep
   assert.equal(capturedBytes,128);
   assert.equal(res.json().text,'识别结果(zh)');
   await app.close();
+});
+
+
+test('speech prefers Momo WAV and reports the actual voice without exposing credentials',async()=>{
+  let oldCalls=0;
+  const app=await appWith({qwenSynthesize:async()=>Buffer.from('RIFFcloud'),synthesize:async()=>{oldCalls++;return Buffer.from('old');}});
+  const response=await app.inject({method:'POST',url:'/model/v1/speech',payload:{text:'你好呀',rewrite:'never'}});
+  assert.equal(response.statusCode,200);const body=response.json();
+  assert.equal(body.provider,'qwen');assert.equal(body.resolved_voice,'Momo');assert.equal(body.format,'wav');assert.equal(body.fallback,false);assert.equal(oldCalls,0);
+  const status=(await app.inject('/model/v1/audio/status')).json();
+  assert.equal(status.tts_provider,'qwen');assert.deepEqual(status.tts_fallbacks,['microsoft','system']);
+  await app.close();
+});
+test('Momo failure falls back once to original Microsoft with the same rewritten utterance',async()=>{
+  const requests:string[]=[];
+  const app=await appWith({summarize:async()=>'我在听呢。',qwenSynthesize:async(text:string)=>{requests.push('qwen:'+text);throw new Error('provider down');},synthesize:async(text:string)=>{requests.push('microsoft:'+text);return Buffer.from('old');}});
+  const result=await app.inject({method:'POST',url:'/model/v1/speech',payload:{text:'原始回复',rewrite:'always'}});
+  const body=result.json();assert.equal(body.provider,'microsoft');assert.equal(body.format,'mp3');assert.equal(body.fallback,true);
+  assert.deepEqual(requests,['qwen:我在听呢。','microsoft:我在听呢。']);await app.close();
+});
+test('empty cloud sound falls back, both providers failing retains words for original system TTS',async()=>{
+  const app=await appWith({qwenSynthesize:async()=>Buffer.alloc(0),synthesize:async()=>{throw new Error('offline');}});
+  const result=await app.inject({method:'POST',url:'/model/v1/speech',payload:{text:'请看屏幕',rewrite:'never'}});
+  assert.equal(result.statusCode,502);assert.equal(result.json().error.spoken_text,'请看屏幕');assert.ok(!result.body.includes('offline'));await app.close();
+});
+test('legacy voice profiles stay usable when Momo is configured',async()=>{
+  let qwenCalls=0;
+  const app=await appWith({qwenSynthesize:async()=>{qwenCalls++;return Buffer.from('cloud');},synthesize:async()=>Buffer.from('old')});
+  const result=await app.inject({method:'POST',url:'/model/v1/speech',payload:{text:'你好',voice:'sweet-warm',rewrite:'never'}});
+  assert.equal(result.json().provider,'microsoft');assert.equal(result.json().resolved_voice,'zh-CN-XiaoxiaoNeural');assert.equal(qwenCalls,0);await app.close();
+});
+
+test('disconnect aborts cloud synthesis and never starts Microsoft fallback',async()=>{
+  let started!:()=>void,aborted!:()=>void,oldCalls=0;
+  const began=new Promise<void>(resolve=>{started=resolve;});const cancelled=new Promise<void>(resolve=>{aborted=resolve;});
+  const app=await appWith({qwenSynthesize:async(_text:string,signal:AbortSignal)=>new Promise<Buffer>((_resolve,reject)=>{
+    signal.addEventListener('abort',()=>{aborted();reject(new Error('cancelled'));},{once:true});started();
+  }),synthesize:async()=>{oldCalls++;return Buffer.from('old');}});
+  try {
+    await app.listen({host:'127.0.0.1',port:0});const port=(app.server.address() as any).port;
+    const controller=new AbortController();
+    const request=fetch(`http://127.0.0.1:${port}/model/v1/speech`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'你好呀',rewrite:'never'}),signal:controller.signal}).catch(()=>null);
+    await began;controller.abort();await request;
+    await Promise.race([cancelled,new Promise((_,reject)=>setTimeout(()=>reject(new Error('upstream was not cancelled')),1000).unref())]);
+    assert.equal(oldCalls,0);
+  } finally {await app.close();}
 });

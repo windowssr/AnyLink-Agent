@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ApiError } from './db.js';
+import { createQwenSpeech } from './qwen-speech.js';
 import { type Config, resolveModelRoute } from './config.js';
 
 export const SUMMARIZE_SYSTEM = `You are a concise spoken-reply rewriter. Rewrite the assistant's text reply into 1-2 short natural spoken sentences:
@@ -68,11 +69,11 @@ export const VOICES = {
 } as const;
 export type VoiceName = keyof typeof VOICES;
 
-export type Summarize = (text: string, systemPrompt: string) => Promise<string>;
-export type Synthesize = (text: string, voice: VoiceName) => Promise<Buffer>;
+export type Summarize = (text: string, systemPrompt: string, signal?: AbortSignal) => Promise<string>;
+export type Synthesize = (text: string, voice: VoiceName, signal?: AbortSignal) => Promise<Buffer>;
 
 export function createSummarizer(config: Config, fetchImpl: typeof fetch = fetch): Summarize {
-  return async (text, systemPrompt) => {
+  return async (text, systemPrompt, signal) => {
     const route = resolveModelRoute(config, config.defaultModel);
     if (!route) throw new Error('NO_PROVIDER');
     const response = await fetchImpl(`${route.baseUrl.replace(/\/$/, '')}/chat/completions`, {
@@ -85,7 +86,7 @@ export function createSummarizer(config: Config, fetchImpl: typeof fetch = fetch
         temperature: 0.75,
         messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: text.slice(0, 6000) }],
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.any([AbortSignal.timeout(30000), ...(signal ? [signal] : [])]),
     });
     if (!response.ok) throw new Error(`PROVIDER_HTTP_${response.status}`);
     const body = await response.json() as any;
@@ -97,7 +98,8 @@ export function createSummarizer(config: Config, fetchImpl: typeof fetch = fetch
 
 const MAX_AUDIO = 1536 * 1024;
 export function createSynthesizer({ timeoutMs = 20000, config }: { timeoutMs?: number; config?: Partial<Config> } = {}): Synthesize {
-  return async (text, voice) => {
+  return async (text, voice, signal) => {
+    if (signal?.aborted) throw new Error('TTS_CANCELLED');
     const { MsEdgeTTS, OUTPUT_FORMAT } = await import('msedge-tts');
     const base = VOICES[voice];
     const profile = voice === 'sweet-lively'
@@ -108,9 +110,12 @@ export function createSynthesizer({ timeoutMs = 20000, config }: { timeoutMs?: n
       }
       : base;
     const tts = new MsEdgeTTS();
+    const cancel = () => tts.close();
+    signal?.addEventListener('abort', cancel, { once: true });
     const timer = setTimeout(() => tts.close(), timeoutMs);
     try {
       await tts.setMetadata(profile.voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      if (signal?.aborted) throw new Error('TTS_CANCELLED');
       const { audioStream } = tts.toStream(text, { rate: profile.rate, pitch: profile.pitch });
       const chunks: Buffer[] = [];
       let size = 0;
@@ -119,9 +124,10 @@ export function createSynthesizer({ timeoutMs = 20000, config }: { timeoutMs?: n
         if (size > MAX_AUDIO) { (audioStream as any).destroy?.(); throw new Error('AUDIO_TOO_LARGE'); }
         chunks.push(chunk);
       }
+      if (signal?.aborted) throw new Error('TTS_CANCELLED');
       if (!size) throw new Error('EMPTY_AUDIO');
       return Buffer.concat(chunks);
-    } finally { clearTimeout(timer); tts.close(); }
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); tts.close(); }
   };
 }
 
@@ -180,14 +186,20 @@ export function createTranscriber(config: Pick<Config, 'asrBaseUrl' | 'asrApiKey
   };
 }
 
-export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize; transcribe?: Transcribe | null } = {}) {
+export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize; qwenSynthesize?: (text: string, signal?: AbortSignal) => Promise<Buffer>; transcribe?: Transcribe | null } = {}) {
   const summarize = deps.summarize ?? createSummarizer(config);
   const synthesize = deps.synthesize ?? createSynthesizer({ config });
+  const qwen = deps.qwenSynthesize ?? (config.ttsProvider === 'qwen' && config.qwenTtsApiKey ? createQwenSpeech({
+    apiKey: config.qwenTtsApiKey, region: config.qwenTtsRegion, model: config.qwenTtsModel, voice: config.qwenTtsVoice, speechRate: config.qwenTtsSpeechRate,
+  }) : null);
   const transcribe = deps.transcribe !== undefined ? deps.transcribe : createTranscriber(config);
   app.get('/model/v1/audio/status', async () => ({
     asr_enabled: Boolean(transcribe),
     asr_model: transcribe ? (config.asrModel || 'FunAudioLLM/SenseVoiceSmall') : null,
     tts_enabled: true,
+    tts_provider: qwen ? 'qwen' : 'microsoft',
+    tts_voice: qwen ? (config.qwenTtsVoice || 'Momo') : (config.ttsVoice || VOICES['sweet-lively'].voice),
+    tts_fallbacks: qwen ? ['microsoft', 'system'] : ['system'],
   }));
   app.post('/model/v1/audio/transcriptions', { bodyLimit: 14 * 1024 * 1024 }, async (req) => {
     if (!transcribe) {
@@ -206,6 +218,10 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
     }
   });
   app.post('/model/v1/speech', { bodyLimit: 64 * 1024 }, async (req, reply) => {
+    const cancellation = new AbortController();
+    const cancel = () => { if (!reply.raw.writableEnded) cancellation.abort(); };
+    req.raw.once('aborted', cancel); reply.raw.once('close', cancel);
+    try {
     const input = speechSchema.parse(req.body);
     const cleaned = sanitizeSpeech(input.text);
     if (!cleaned) throw new ApiError(400, 'SPEECH_EMPTY', 'No speakable text after sanitization');
@@ -217,7 +233,7 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
       const basePrompt = input.system_prompt?.trim() || config.speechPrompt?.trim() || (usePersonaPrompt ? PERSONA_SPEECH_SYSTEM : SUMMARIZE_SYSTEM);
       const fullPrompt = input.style === 'persona' && persona?.content ? `${basePrompt}\n\n## 角色人设参考\n${persona.content}` : basePrompt;
       try {
-        const candidate = sanitizeSpeech(await summarize(input.text, fullPrompt));
+        const candidate = sanitizeSpeech(await summarize(input.text, fullPrompt, cancellation.signal));
         if (candidate) {
           spoken = candidate.slice(0, 200);
           rewritten = true;
@@ -227,10 +243,24 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
       }
     }
     let audio: Buffer;
-    try { audio = await synthesize(spoken, input.voice); }
-    catch {
+    let provider = 'microsoft', format = 'mp3', fallback = false;
+    const useQwen = Boolean(qwen) && input.voice === 'sweet-lively';
+    const started = Date.now();
+    try {
+      if (useQwen) {
+        try { audio = await qwen!(spoken, cancellation.signal); if (!audio.length) throw new Error('EMPTY_AUDIO'); provider = 'qwen'; format = 'wav'; }
+        catch (error) {
+          if (cancellation.signal.aborted) throw error;
+          fallback = true; audio = await synthesize(spoken, input.voice, cancellation.signal);
+        }
+      } else audio = await synthesize(spoken, input.voice, cancellation.signal);
+      if (!audio.length) throw new Error('EMPTY_AUDIO');
+    } catch {
       return reply.code(502).send({ error: { code: 'SPEECH_UNAVAILABLE', message: 'Speech synthesis unavailable', spoken_text: spoken } });
     }
-    return { spoken_text: spoken, voice: input.voice, format: 'mp3', rewritten, audio_base64: audio.toString('base64') };
+    return { spoken_text: spoken, voice: input.voice, format, rewritten, provider, fallback,
+      resolved_voice: provider === 'qwen' ? (config.qwenTtsVoice || 'Momo') : (input.voice === 'sweet-lively' ? (config.ttsVoice || VOICES[input.voice].voice) : VOICES[input.voice].voice),
+      synthesis_ms: Date.now() - started, audio_base64: audio.toString('base64') };
+    } finally { req.raw.removeListener('aborted', cancel); reply.raw.removeListener('close', cancel); }
   });
 }

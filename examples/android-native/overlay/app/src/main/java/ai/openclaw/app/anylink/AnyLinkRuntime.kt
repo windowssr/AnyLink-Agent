@@ -51,6 +51,8 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val listening = MutableStateFlow(false)
   val speaking = MutableStateFlow(false)
   val voiceNotice = MutableStateFlow("")
+  val speechPreviewActive = MutableStateFlow(false)
+  val speechVoiceStatus = MutableStateFlow("连接后使用云端语音，失败时由手机系统播报")
   val voiceLevel = MutableStateFlow(0f)
   val playbackLevel = MutableStateFlow(0f)
   val partialTranscript = MutableStateFlow("")
@@ -139,7 +141,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         speaking.value = playing
         if (!playing) voiceLevel.value = 0f
       },
-      { onAudioQueueIdle() },
+      { speechPreviewActive.value = false; onAudioQueueIdle() },
       onLevel = { playbackLevel.value = it },
       onUtterance = { spoken ->
         if (callActive.value) { callAssistantCaption.value = spoken; callState.value = "speaking" }
@@ -149,6 +151,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         if (gesture != "none") lastGestureAt = now
         agent.value?.state?.update { it.copy(emotion = pose.emotion, gesture = gesture, sequence = UUID.randomUUID().toString()) }
       },
+      onVoice = { provider -> speechVoiceStatus.value = "最近播报：" + when (provider) { "qwen" -> "阿里云 Momo · 茉兔"; "microsoft" -> "微软神经语音（兜底）"; else -> "手机系统语音（兜底）" } },
       inCall = { callActive.value },
       onError = { reportVoiceError(it) },
       beforePlayback = {
@@ -185,6 +188,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     runCatching {
       val st = CloudClient(value).request("GET", "/model/v1/audio/status")
       cloudAsrEnabled.value = st["asr_enabled"]?.jsonPrimitive?.booleanOrNull == true
+      speechVoiceStatus.value = if (st.text("tts_provider") == "qwen") "默认声音：阿里云 ${st.text("tts_voice")}" else "默认声音：微软神经语音"
     }
   }
 
@@ -812,6 +816,16 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     )
     speechPlayer?.enqueue(text, summarize = false, interrupt = false, forceRewrite = false)
   }
+
+  fun testSpeechVoice() {
+    if (callActive.value) return
+    speechPreviewActive.value = true
+    speechVoiceStatus.value = "正在准备试听…"
+    connection.value?.let { value -> scope.launch { refreshAudioStatus(value) } }
+    speechPlayer?.enqueue("你好呀，我们终于能说话了。今天过得怎么样？慢慢说，我在听呢。", summarize = false, interrupt = true, forceRewrite = false)
+  }
+
+  fun stopSpeechPreview() { if (speechPreviewActive.value) { speechPreviewActive.value = false; speechPlayer?.interrupt(); localSpeech.cancel() } }
 
   fun onActivityStarted() { activityVisible.value = true; prefs.edit().putBoolean("overlay_dismissed", false).apply(); syncWorker(); refreshOverlay() }
   fun onActivityStopped() { cancelSystemVoiceTest(); activityVisible.value = false; syncWorker(); refreshOverlay() }

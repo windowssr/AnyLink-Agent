@@ -66,6 +66,8 @@ export function loadConfig() {
   const embeddingModel = process.env.ANYLINK_EMBEDDING_MODEL?.trim() || '';
   const embeddingBaseUrl = process.env.ANYLINK_EMBEDDING_BASE_URL?.trim() || deepseekBaseUrl;
   const embeddingApiKey = secret('ANYLINK_EMBEDDING_API_KEY') ?? providerKey;
+  const rawQwenTtsKey = secret('ANYLINK_QWEN_TTS_API_KEY') ?? secret('DASHSCOPE_API_KEY') ?? '';
+  const qwenTtsApiKey = /^(REPLACE_|CONFIGURE_)/.test(rawQwenTtsKey) ? '' : rawQwenTtsKey;
   const rawAsrKey = secret('ANYLINK_ASR_API_KEY') ?? '';
   const asrApiKey = /^(REPLACE_|CONFIGURE_)/.test(rawAsrKey) ? '' : rawAsrKey;
   const asrBaseUrl = process.env.ANYLINK_ASR_BASE_URL?.trim() || (asrApiKey ? 'https://api.siliconflow.cn/v1' : '');
@@ -99,6 +101,12 @@ export function loadConfig() {
     ttsVoice: z.string().default(''),
     ttsRate: z.string().default(''),
     ttsPitch: z.string().default(''),
+    ttsProvider: z.enum(['microsoft', 'qwen']).default('microsoft'),
+    qwenTtsApiKey: z.string().default(''),
+    qwenTtsRegion: z.enum(['beijing', 'singapore']).default('beijing'),
+    qwenTtsModel: z.string().min(1).max(120).default('qwen3-tts-flash-realtime'),
+    qwenTtsVoice: z.string().min(1).max(80).default('Momo'),
+    qwenTtsSpeechRate: z.coerce.number().min(0.5).max(2).default(1.12),
     asrBaseUrl: z.string().default(''),
     asrApiKey: z.string().default(''),
     asrModel: z.string().max(120).default('FunAudioLLM/SenseVoiceSmall'),
@@ -142,6 +150,12 @@ export function loadConfig() {
     ttsVoice: process.env.ANYLINK_TTS_VOICE ?? '',
     ttsRate: process.env.ANYLINK_TTS_RATE ?? '',
     ttsPitch: process.env.ANYLINK_TTS_PITCH ?? '',
+    ttsProvider: process.env.ANYLINK_TTS_PROVIDER ?? (qwenTtsApiKey ? 'qwen' : 'microsoft'),
+    qwenTtsApiKey,
+    qwenTtsRegion: process.env.ANYLINK_QWEN_TTS_REGION ?? 'beijing',
+    qwenTtsModel: process.env.ANYLINK_QWEN_TTS_MODEL ?? 'qwen3-tts-flash-realtime',
+    qwenTtsVoice: process.env.ANYLINK_QWEN_TTS_VOICE ?? 'Momo',
+    qwenTtsSpeechRate: process.env.ANYLINK_QWEN_TTS_SPEECH_RATE ?? 1.12,
     asrBaseUrl,
     asrApiKey,
     asrModel,

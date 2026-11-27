@@ -465,6 +465,9 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
   val avatarStatus by runtime.avatarStatus.collectAsState()
   val voiceEngineMode by runtime.voiceEngineMode.collectAsState()
   val cloudAsrEnabled by runtime.cloudAsrEnabled.collectAsState()
+  val speechVoiceStatus by runtime.speechVoiceStatus.collectAsState()
+  val speechBusy by runtime.speechPreviewActive.collectAsState()
+  val inVoiceCall by runtime.callActive.collectAsState()
   val offlineModel by runtime.offlineModelState.collectAsState()
   val systemVoiceService by runtime.systemVoiceService.collectAsState()
   val systemVoiceOptions by runtime.systemVoiceOptions.collectAsState()
@@ -527,6 +530,11 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         AssistChip(onClick = { runtime.reloadAvatar() }, label = { Text("重新加载大肥鱼") })
       }
+      HorizontalDivider(color = Color(0xFFDCEEF8))
+      Text("大肥鱼的声音", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
+      Text(speechVoiceStatus, style = MaterialTheme.typography.bodySmall, color = SeaSlate)
+      Text("优先使用阿里云 Momo，无法合成时切回原来的微软语音，再由手机系统语音兜底。", style = MaterialTheme.typography.bodySmall, color = SeaSlate)
+      AssistChip(enabled = !inVoiceCall, onClick = { if (speechBusy) runtime.stopSpeechPreview() else runtime.testSpeechVoice() }, label = { Text(if (speechBusy) "停止试听" else "试听当前声音") })
       HorizontalDivider(color = Color(0xFFDCEEF8))
       Text("语音输入与实时通话识别引擎", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
       LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
