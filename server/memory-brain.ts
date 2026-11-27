@@ -128,12 +128,33 @@ export function isTrivialTurn(messages: Array<{ role: string; content: string }>
 export class MemoryBrain {
   private pending = new Set<Promise<void>>();
   private debounceBatches = new Map<string, { episodeIds: string[]; timer: ReturnType<typeof setTimeout> }>();
+  private ownerChain: Promise<unknown> = Promise.resolve();
   private fetchImpl: typeof fetch;
   private onMemoryUpdated?: MemoryBrainDeps['onMemoryUpdated'];
 
   constructor(private db: Db, private config: Config, deps: MemoryBrainDeps = {}) {
     this.fetchImpl = deps.fetchImpl ?? fetch;
     this.onMemoryUpdated = deps.onMemoryUpdated;
+  }
+
+  /** Serialize consolidation passes per owner so concurrent updates never clobber memory revisions. */
+  private serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.ownerChain.then(fn, fn);
+    this.ownerChain = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  /** Re-enqueue any pending episodes left behind by an unexpected server restart. */
+  async recoverPending(): Promise<number> {
+    const rows = (await this.db.query(
+      "SELECT id FROM memory_episodes WHERE owner_id=$1 AND status='pending' ORDER BY created_at ASC LIMIT 50",
+      [OWNER_ID],
+    )).rows;
+    if (!rows.length) return 0;
+    for (const r of rows) {
+      this.track(this.consolidateEpisode(r.id).then(() => {}).catch(() => {}));
+    }
+    return rows.length;
   }
 
   private track(promise: Promise<void>) {
@@ -351,45 +372,49 @@ export class MemoryBrain {
   async consolidateBatch(episodeIds: string[]): Promise<{ status: 'consolidated' | 'skipped' | 'failed'; summary: string; actions: unknown[] }> {
     if (episodeIds.length === 0) return { status: 'skipped', summary: '', actions: [] };
     if (episodeIds.length === 1) return this.consolidateEpisode(episodeIds[0]);
+    return this.serialize(async () => {
+      const rows = (await this.db.query(
+        `SELECT e.*, d.name AS device_name, a.name AS agent_name, a.key AS agent_key
+         FROM memory_episodes e
+         LEFT JOIN devices d ON d.id=e.source_device_id
+         LEFT JOIN agents a ON a.id=e.source_agent_id
+         WHERE e.id = ANY($1::uuid[]) AND e.owner_id=$2 AND e.status='pending'
+         ORDER BY e.created_at ASC`,
+        [episodeIds, OWNER_ID],
+      )).rows;
+      if (!rows.length) return { status: 'skipped', summary: '', actions: [] };
 
-    const rows = (await this.db.query(
-      `SELECT e.*, d.name AS device_name, a.name AS agent_name, a.key AS agent_key
-       FROM memory_episodes e
-       LEFT JOIN devices d ON d.id=e.source_device_id
-       LEFT JOIN agents a ON a.id=e.source_agent_id
-       WHERE e.id = ANY($1::uuid[]) AND e.owner_id=$2
-       ORDER BY e.created_at ASC`,
-      [episodeIds, OWNER_ID],
-    )).rows;
-    if (!rows.length) return { status: 'failed', summary: '', actions: [] };
+      const anchor = rows[rows.length - 1];
+      const combinedMessages = rows.flatMap(r => Array.isArray(r.messages) ? r.messages : []);
+      const combinedMetadata = Object.assign({}, ...rows.map(r => (r.metadata && typeof r.metadata === 'object' ? r.metadata : {})), { batched_episodes: rows.map(r => r.id) });
+      const outcome = await this.consolidateRow({ ...anchor, messages: combinedMessages, metadata: combinedMetadata });
 
-    const anchor = rows[rows.length - 1];
-    const combinedMessages = rows.flatMap(r => Array.isArray(r.messages) ? r.messages : []);
-    const combinedMetadata = Object.assign({}, ...rows.map(r => (r.metadata && typeof r.metadata === 'object' ? r.metadata : {})), { batched_episodes: rows.map(r => r.id) });
-    const outcome = await this.consolidateRow({ ...anchor, messages: combinedMessages, metadata: combinedMetadata });
-
-    const otherIds = rows.slice(0, -1).map(r => r.id);
-    if (otherIds.length) {
-      await this.db.query(
-        `UPDATE memory_episodes SET status=$2,consolidation_result=$3,consolidated_at=now() WHERE id=ANY($1::uuid[])`,
-        [otherIds, outcome.status, JSON.stringify({ batched_into: anchor.id, actions: outcome.actions })],
-      );
-    }
-    return outcome;
+      const otherIds = rows.slice(0, -1).map(r => r.id);
+      if (otherIds.length) {
+        await this.db.query(
+          `UPDATE memory_episodes SET status=$2,consolidation_result=$3,consolidated_at=now() WHERE id=ANY($1::uuid[])`,
+          [otherIds, outcome.status, JSON.stringify({ batched_into: anchor.id, actions: outcome.actions })],
+        );
+      }
+      return outcome;
+    });
   }
 
   /** Run Cloud Memory Manager Agent on a stored episode (LLM-driven with deterministic fallback). */
   async consolidateEpisode(episodeId: string): Promise<{ status: 'consolidated' | 'skipped' | 'failed'; summary: string; actions: unknown[] }> {
-    const ep = (await this.db.query(
-      `SELECT e.*, d.name AS device_name, a.name AS agent_name, a.key AS agent_key
-       FROM memory_episodes e
-       LEFT JOIN devices d ON d.id=e.source_device_id
-       LEFT JOIN agents a ON a.id=e.source_agent_id
-       WHERE e.id=$1 AND e.owner_id=$2`,
-      [episodeId, OWNER_ID],
-    )).rows[0];
-    if (!ep) return { status: 'failed', summary: '', actions: [] };
-    return this.consolidateRow(ep);
+    return this.serialize(async () => {
+      const ep = (await this.db.query(
+        `SELECT e.*, d.name AS device_name, a.name AS agent_name, a.key AS agent_key
+         FROM memory_episodes e
+         LEFT JOIN devices d ON d.id=e.source_device_id
+         LEFT JOIN agents a ON a.id=e.source_agent_id
+         WHERE e.id=$1 AND e.owner_id=$2`,
+        [episodeId, OWNER_ID],
+      )).rows[0];
+      if (!ep) return { status: 'failed', summary: '', actions: [] };
+      if (ep.status !== 'pending') return { status: ep.status, summary: ep.summary ?? '', actions: [] };
+      return this.consolidateRow(ep);
+    });
   }
 
   private async consolidateRow(ep: any): Promise<{ status: 'consolidated' | 'skipped' | 'failed'; summary: string; actions: unknown[] }> {

@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AnyLink Protocol",
-    "version": "3.0.0",
-    "description": "Harness-independent Personal Agent Network protocol. Cloud Hub provides multi-model gateway, Cloud Memory Brain (hybrid retrieval, async consolidation, automatic device-boundary learning), and real-time WebSocket task routing (/edge/v1/ws). Edge agents manage only their own local environments."
+    "version": "3.2.0",
+    "description": "Harness-independent Personal Agent Network protocol. Cloud Hub provides multi-model gateway with SSE disconnect recovery, Cloud Memory Brain (hybrid retrieval, serialized consolidation, startup recovery, automatic device-boundary learning), binary cross-device artifacts, and real-time WebSocket task bus (/edge/v1/ws) with heartbeat fencing, monotonic event cursors, receipt acknowledgements, queue priorities, loop guards, and interactive suspend/reply."
   },
   "servers": [
     {
@@ -14,7 +14,7 @@
   "paths": {
     "/edge/v1/connect": {
       "post": {
-        "summary": "Join with owner key: upsert device and agent, rotate credential (201)",
+        "summary": "Join with owner key or preset login password: upsert device and agent, rotate credential (201)",
         "security": [
           {
             "joinKey": []
@@ -36,13 +36,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -54,7 +54,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           },
           "503": {
             "description": "Join disabled"
@@ -64,7 +70,7 @@
     },
     "/edge/v1/protocol": {
       "get": {
-        "summary": "Negotiate AnyLink protocol 3.0, transport endpoints and routing modes",
+        "summary": "Negotiate AnyLink protocol 3.2, transport endpoints, capabilities and routing modes",
         "security": [
           {
             "deviceBearer": []
@@ -76,13 +82,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -94,7 +100,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -113,13 +125,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -131,7 +143,76 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/edge/v1/events": {
+      "get": {
+        "summary": "Poll persisted edge events after monotonic seq cursor (HTTP fallback for WS resume_after_seq)",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "after_seq",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -160,13 +241,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -178,7 +259,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -207,13 +294,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -225,7 +312,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -254,13 +347,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -272,7 +365,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -291,13 +390,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -309,7 +408,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -328,13 +433,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -346,7 +451,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -365,13 +476,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -383,7 +494,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -412,13 +529,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -430,7 +547,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -459,13 +582,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -477,7 +600,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -496,13 +625,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -514,7 +643,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -554,13 +689,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -572,7 +707,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -621,13 +762,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -639,7 +780,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       },
@@ -685,13 +832,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -703,7 +850,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -732,13 +885,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -750,7 +903,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -784,6 +943,8 @@
               "enum": [
                 "queued",
                 "running",
+                "awaiting_input",
+                "awaiting_approval",
                 "cancel_requested",
                 "succeeded",
                 "failed",
@@ -800,13 +961,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -818,12 +979,18 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       },
       "post": {
-        "summary": "Create cross-device task by instruction or capability without capability-manifest gate",
+        "summary": "Create cross-device task with priority, require_online, retries, concurrency_key, and loop-safe trace propagation",
         "security": [
           {
             "deviceBearer": []
@@ -863,13 +1030,13 @@
             }
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -881,7 +1048,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -917,13 +1090,13 @@
             }
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -935,14 +1108,20 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/edge/v1/tasks/claim": {
       "post": {
-        "summary": "Atomically claim a routed task with lease tracking (HTTP fallback for WS)",
+        "summary": "Atomically claim a routed task issuing attempt + fencing lease_token (HTTP fallback for WS)",
         "security": [
           {
             "deviceBearer": []
@@ -965,13 +1144,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -983,14 +1162,20 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/edge/v1/tasks/{id}/heartbeat": {
       "post": {
-        "summary": "Extend running task lease and check cooperative cancellation status",
+        "summary": "Extend running task lease with fencing lease_token verification and cooperative cancel status",
         "security": [
           {
             "deviceBearer": []
@@ -1022,13 +1207,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1040,14 +1225,20 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/edge/v1/tasks/{id}/progress": {
       "post": {
-        "summary": "Report live task progress (pushed over WebSocket to sender)",
+        "summary": "Report live task progress (persisted to event log and pushed over WebSocket)",
         "security": [
           {
             "deviceBearer": []
@@ -1086,13 +1277,13 @@
             }
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1104,14 +1295,170 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}/suspend": {
+      "post": {
+        "summary": "Suspend running task into awaiting_input or awaiting_approval for human/caller interaction",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskSuspend"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}/reply": {
+      "post": {
+        "summary": "Reply to or approve/reject a suspended task, resuming worker lease or declining",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskReply"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/edge/v1/tasks/{id}/result": {
       "post": {
-        "summary": "Persist terminal result (succeeded|failed|declined|cancelled|unknown); declined/failed feeds Cloud Memory Brain",
+        "summary": "Persist terminal result with fencing lease_token verification; declined/failed feeds Cloud Memory Brain",
         "security": [
           {
             "deviceBearer": []
@@ -1160,13 +1507,13 @@
             }
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1178,14 +1525,73 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/edge/v1/tasks/{id}/ack": {
+      "post": {
+        "summary": "Acknowledge receipt delivery of a terminal task so offline replay stops repeating it",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/edge/v1/tasks/{id}/cancel": {
       "post": {
-        "summary": "Cancel queued work or push cooperative cancellation to claiming agent",
+        "summary": "Cancel queued/suspended work or push cooperative cancellation to claiming agent",
         "security": [
           {
             "deviceBearer": []
@@ -1224,13 +1630,13 @@
             }
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1242,7 +1648,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1282,13 +1694,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1300,7 +1712,237 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/edge/v1/artifacts": {
+      "post": {
+        "summary": "Upload temporary binary or base64 cross-device artifact (10 MiB max, TTL auto-pruned)",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactMeta"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/edge/v1/artifacts/{id}": {
+      "get": {
+        "summary": "Download binary artifact stream with ETag and X-AnyLink-SHA256 verification",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an artifact owned by this deployment",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/edge/v1/artifacts/{id}/meta": {
+      "get": {
+        "summary": "Read artifact metadata without downloading binary payload",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactMeta"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1319,13 +1961,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1337,14 +1979,20 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/model/v1/chat/completions": {
       "post": {
-        "summary": "Multi-model OpenAI Chat Completions passthrough (JSON/SSE) with optional X-AnyLink-Auto-Memory header",
+        "summary": "Multi-model OpenAI Chat Completions passthrough (JSON/SSE) with X-AnyLink-Auto-Memory and X-AnyLink-Detach-On-Disconnect",
         "security": [
           {
             "deviceBearer": []
@@ -1366,13 +2014,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1384,14 +2032,73 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/model/v1/requests/{id}": {
+      "get": {
+        "summary": "Recover status, partial output, or completed snapshot for an interrupted model request",
+        "security": [
+          {
+            "deviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "201": {
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
+          },
+          "202": {
+            "description": "Accepted for asynchronous cloud processing"
+          },
+          "400": {
+            "description": "Invalid input or task loop/depth limit violation"
+          },
+          "401": {
+            "description": "Invalid or revoked credential"
+          },
+          "403": {
+            "description": "Not permitted for this identity"
+          },
+          "404": {
+            "description": "Not found or not visible to this agent"
+          },
+          "409": {
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/model/v1/speech": {
       "post": {
-        "summary": "Optional spoken reply TTS endpoint with configurable neutral or persona style",
+        "summary": "Spoken reply TTS endpoint with configurable neutral or persona style and automatic spoken rewrite",
         "security": [
           {
             "deviceBearer": []
@@ -1413,13 +2120,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1431,7 +2138,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1450,13 +2163,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1468,7 +2181,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       },
@@ -1506,13 +2225,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1524,7 +2243,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1573,13 +2298,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1591,7 +2316,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1610,13 +2341,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1628,7 +2359,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1647,13 +2384,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1665,7 +2402,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1694,13 +2437,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1712,7 +2455,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1741,13 +2490,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1759,7 +2508,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1788,13 +2543,13 @@
             "description": "Successful operation"
           },
           "201": {
-            "description": "Created; one-time secret when issuing credentials"
+            "description": "Created; one-time secret when issuing credentials or artifact metadata"
           },
           "202": {
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1806,7 +2561,13 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
@@ -1838,7 +2599,7 @@
             "description": "Accepted for asynchronous cloud processing"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input or task loop/depth limit violation"
           },
           "401": {
             "description": "Invalid or revoked credential"
@@ -1850,14 +2611,20 @@
             "description": "Not found or not visible to this agent"
           },
           "409": {
-            "description": "Revision, idempotency, or terminal-state conflict"
+            "description": "Revision, idempotency, target offline, lease fencing, or terminal-state conflict"
+          },
+          "413": {
+            "description": "Payload or artifact quota limit exceeded"
+          },
+          "429": {
+            "description": "Queue depth or rate limit exceeded"
           }
         }
       }
     },
     "/v1/auth/login": {
       "post": {
-        "summary": "Log in as the single deployment owner",
+        "summary": "Log in as the single deployment owner using owner token or preset login password",
         "security": [],
         "requestBody": {
           "required": true,
@@ -1865,12 +2632,14 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "token"
-                ],
                 "additionalProperties": false,
                 "properties": {
                   "token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "password": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
@@ -1885,7 +2654,7 @@
             "description": "Authenticated; Set-Cookie supplies anylink_session"
           },
           "401": {
-            "description": "Invalid owner token"
+            "description": "Invalid owner token or password"
           }
         }
       }
@@ -1901,7 +2670,7 @@
       "joinKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Owner join key from server secrets"
+        "description": "Owner join key or preset login password from server secrets"
       },
       "ownerSession": {
         "type": "apiKey",
@@ -2163,11 +2932,60 @@
             "type": "integer",
             "minimum": 10,
             "maximum": 3600
+          },
+          "execution_timeout_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 86400
+          },
+          "priority": {
+            "default": 5,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "require_online": {
+            "default": false,
+            "type": "boolean"
+          },
+          "idempotent": {
+            "default": false,
+            "type": "boolean"
+          },
+          "max_retries": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "concurrency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "trace_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "parent_task_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "allow_reentry": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
           "ttl_seconds",
-          "lease_seconds"
+          "lease_seconds",
+          "priority",
+          "require_online",
+          "idempotent",
+          "max_retries",
+          "allow_reentry"
         ],
         "additionalProperties": false
       },
@@ -2178,6 +2996,11 @@
             "type": "integer",
             "minimum": 10,
             "maximum": 3600
+          },
+          "lease_token": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           }
         },
         "additionalProperties": false
@@ -2197,6 +3020,86 @@
             "type": "number",
             "minimum": 0,
             "maximum": 100
+          },
+          "data": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "lease_token": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TaskSuspend": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "awaiting_input",
+              "awaiting_approval"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "choices": {
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          "risk_level": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "timeout_seconds": {
+            "default": 600,
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 86400
+          },
+          "lease_token": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "state",
+          "prompt",
+          "timeout_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "TaskReply": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "choice": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "approved": {
+            "type": "boolean"
           },
           "data": {
             "type": "object",
@@ -2249,6 +3152,11 @@
               "message"
             ],
             "additionalProperties": false
+          },
+          "lease_token": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           }
         },
         "required": [
@@ -2333,6 +3241,8 @@
             "enum": [
               "queued",
               "running",
+              "awaiting_input",
+              "awaiting_approval",
               "cancel_requested",
               "succeeded",
               "failed",
@@ -2340,6 +3250,97 @@
               "cancelled",
               "unknown",
               "expired"
+            ]
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "max_retries": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "idempotent": {
+            "type": "boolean"
+          },
+          "lease_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "concurrency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_depth": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "call_chain": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pending_interaction": {
+            "anyOf": [
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interaction_expires_at": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "progress": {
@@ -2399,6 +3400,11 @@
                       "message"
                     ],
                     "additionalProperties": false
+                  },
+                  "lease_token": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
                 "required": [
@@ -2416,6 +3422,24 @@
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
           },
+          "execution_timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_deadline_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "lease_expires_at": {
             "type": [
               "string",
@@ -2423,6 +3447,12 @@
             ]
           },
           "heartbeat_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receipt_acked_at": {
             "type": [
               "string",
               "null"
@@ -2458,15 +3488,132 @@
           "instruction",
           "input",
           "state",
+          "priority",
+          "attempt",
+          "max_retries",
+          "idempotent",
+          "lease_token",
+          "concurrency_key",
+          "trace_id",
+          "parent_task_id",
+          "call_depth",
+          "call_chain",
+          "pending_interaction",
+          "interaction_expires_at",
           "progress",
           "result",
           "lease_seconds",
+          "execution_timeout_seconds",
+          "execution_deadline_at",
           "lease_expires_at",
           "heartbeat_at",
+          "receipt_acked_at",
           "created_at",
           "expires_at",
           "started_at",
           "finished_at"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactUpload": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "default": "attachment.bin",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "content_type": {
+            "default": "application/octet-stream",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "data_base64": {
+            "type": "string",
+            "minLength": 1
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400
+          }
+        },
+        "required": [
+          "filename",
+          "content_type",
+          "data_base64"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactMeta": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "source_device_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "source_agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filename": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_device_id",
+          "source_agent_id",
+          "task_id",
+          "filename",
+          "content_type",
+          "size_bytes",
+          "sha256",
+          "created_at",
+          "expires_at"
         ],
         "additionalProperties": false
       },
@@ -2842,6 +3989,15 @@
             "default": true,
             "type": "boolean"
           },
+          "rewrite": {
+            "default": "auto",
+            "type": "string",
+            "enum": [
+              "auto",
+              "always",
+              "never"
+            ]
+          },
           "voice": {
             "default": "sweet-lively",
             "type": "string",
@@ -2867,6 +4023,7 @@
         "required": [
           "text",
           "summarize",
+          "rewrite",
           "voice",
           "style"
         ],

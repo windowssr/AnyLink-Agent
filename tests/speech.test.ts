@@ -66,3 +66,21 @@ test('speech route: validation and empty-after-sanitize',async()=>{
   assert.equal((await app.inject({method:'POST',url:'/model/v1/speech',payload:{text:'```\ncode only\n```'}})).statusCode,400);
   await app.close();
 });
+
+test('persona speech rewrites mechanical short receipts and strips stage parens',async()=>{
+  assert.equal(sanitizeSpeech('哼，办妥啦（轻拍尾巴）！'), '哼，办妥啦 ！');
+  assert.equal(needsSummary('跨设备任务完成啦：/Users/demo/test.txt', '跨设备任务完成啦：/Users/demo/test.txt', 'persona'), true);
+  let capturedPrompt='';
+  const app=Fastify();
+  registerSpeech(app,{deepseekApiKey:'',deepseekBaseUrl:'https://unused'} as any,{content:'你是蓝色大肥鱼鲸鱼娘'},{
+    summarize:async(_text,prompt)=>{ capturedPrompt=prompt; return '哼，主人，电脑那边的文件我已经帮你挪好啦！'; },
+    synthesize:async()=>Buffer.from('ID3persona'),
+  });
+  const res=await app.inject({method:'POST',url:'/model/v1/speech',payload:{text:'已写入 /Users/demo/hello.txt',summarize:true,rewrite:'always',style:'persona',voice:'sweet-lively'}});
+  assert.equal(res.statusCode,200);
+  const body=res.json();
+  assert.equal(body.rewritten,true);
+  assert.equal(body.spoken_text,'哼，主人，电脑那边的文件我已经帮你挪好啦！');
+  assert.ok(capturedPrompt.includes('大肥鱼') && capturedPrompt.includes('你是蓝色大肥鱼鲸鱼娘'));
+  await app.close();
+});

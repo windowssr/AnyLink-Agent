@@ -8,9 +8,10 @@ import { type Config, listModelRoutes, OWNER_ID } from './config.js';
 import { ApiError, createDb, hash, idempotent, migrate, transaction } from './db.js';
 import { createDevice, deleteMemory, devicePatchSchema, deviceSchema, editMemory, getMemory, listDevices, memoryDirectory, memoryPatchSchema, memorySchema, memorySearchSchema, saveMemory, searchMemories, updateDevice } from './store.js';
 import { authenticateEdge, registerConnectRoute, registerCredentialRoutes } from './edge-auth.js';
-import { registerModelProxy } from './model-proxy.js';
+import { registerModelProxy, pruneModelSnapshots } from './model-proxy.js';
 import { registerSpeech } from './speech.js';
 import { LinkService, registerLink } from './link.js';
+import { registerArtifacts, pruneExpiredArtifacts } from './artifacts.js';
 import { MemoryBrain, memoryAssembleSchema, memoryIngestSchema } from './memory-brain.js';
 import { WsHub } from './ws-hub.js';
 
@@ -47,15 +48,27 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
     }
   }
 
-  const wsHub = new WsHub(db);
+  const wsHub = new WsHub(db, {
+    pingIntervalMs: config.wsPingIntervalMs,
+    maxMissedPongs: config.wsMaxMissedPongs,
+    maxBufferedBytes: config.wsMaxBufferedBytes,
+  });
   const memoryBrain = new MemoryBrain(db, config, {
     fetchImpl,
     onMemoryUpdated: event => wsHub.notifyMemoryUpdated(event),
   });
-  const linkService = new LinkService(db, wsHub, memoryBrain);
+  const linkService = new LinkService(db, wsHub, memoryBrain, {
+    maxQueuedPerAgent: config.maxQueuedPerAgent,
+    maxQueuedGlobal: config.maxQueuedGlobal,
+    maxCallDepth: config.maxCallDepth,
+    onReapTick: async () => {
+      await Promise.all([wsHub.pruneOldEvents(), pruneExpiredArtifacts(db), pruneModelSnapshots(db)]);
+    },
+  });
   wsHub.setTaskDelegate(linkService);
   wsHub.attach(app);
   linkService.startLeaseReaper(config.leaseReaperIntervalMs);
+  void memoryBrain.recoverPending().catch(() => {});
 
   const loginAttempts = new Map<string, { count: number; until: number }>();
 
@@ -93,7 +106,7 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
     return (await idempotent(db, scope, key(req), body, fn)).value;
   }
 
-  app.get('/healthz', async () => ({ ok: true, service: 'anylink-agent', version: '0.6.0', protocol: '3.0', role: 'personal-agent-hub' }));
+  app.get('/healthz', async () => ({ ok: true, service: 'anylink-agent', version: '0.9.0', protocol: '3.2', role: 'personal-agent-hub' }));
   app.get('/readyz', async (_req, reply) => {
     let database = false;
     try { await db.query('SELECT 1'); database = true; } catch {}
@@ -134,13 +147,14 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
   });
 
   app.get('/v1/status', async () => ({
-    version: '0.6.0',
-    protocol: '3.0',
+    version: '0.9.0',
+    protocol: '3.2',
     assistant: 'AnyLink',
     default_model: config.defaultModel,
     models: listModelRoutes(config).map(m => m.id),
     cloud_memory_brain: true,
     ws_enabled: true,
+    artifacts_enabled: true,
     owner_id: OWNER_ID,
     join_enabled: !!(config.joinKey || config.loginPassword),
     login_password_enabled: !!config.loginPassword,
@@ -169,11 +183,22 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
   registerModelProxy(app, db, config, memoryBrain);
   registerSpeech(app, config, persona);
   registerLink(app, db, linkService, wsHub);
+  registerArtifacts(app, db, config);
+
+  app.get('/edge/v1/events', async req => {
+    const query = z.object({
+      after_seq: z.coerce.number().int().nonnegative().default(0),
+      limit: z.coerce.number().int().min(1).max(200).default(100),
+    }).strict().parse(req.query ?? {});
+    const items = await wsHub.listEventsFor(req.edgeIdentity!, query.after_seq, query.limit);
+    const latest_seq = items.length ? items[items.length - 1].seq : await wsHub.latestEventSeq();
+    return { items, latest_seq };
+  });
 
   app.get('/edge/v1/identity', async req => {
     const me = req.edgeIdentity!;
     const agent = (await db.query('SELECT id,key,name,kind,summary,capabilities FROM agents WHERE id=$1', [me.agent_id])).rows[0];
-    return { device: (await listDevices(db)).find(d => d.id === me.device_id), agent, scopes: ['memory', 'memory_brain', 'model', 'tasks', 'ws', 'persona'], protocol: { name: 'anylink', version: '3.0' } };
+    return { device: (await listDevices(db)).find(d => d.id === me.device_id), agent, scopes: ['memory', 'memory_brain', 'model', 'tasks', 'ws', 'persona', 'artifacts'], protocol: { name: 'anylink', version: '3.2' } };
   });
 
   app.post('/edge/v1/device/install-id', async req => {
@@ -294,6 +319,10 @@ export async function createApp(config: Config, { logger = true, fetchImpl }: { 
   const webRoot = resolve('dist/web');
   if (existsSync(webRoot)) await app.register(staticPlugin, { root: webRoot, prefix: '/', index: ['index.html'] });
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Endpoint or page not found' } }));
+  app.addHook('preClose', async () => {
+    linkService.stopLeaseReaper();
+    await memoryBrain.drain();
+  });
   app.addHook('onClose', async () => {
     linkService.stopLeaseReaper();
     await memoryBrain.drain();

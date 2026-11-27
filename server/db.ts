@@ -174,6 +174,68 @@ export async function migrate(db: Db) {
         INSERT INTO schema_migrations(version) VALUES(6);
       `);
     }
+    if (!(await c.query('SELECT 1 FROM schema_migrations WHERE version=7')).rowCount) {
+      await c.query(`
+        -- Protocol v3.1 + v3.2: WS event cursor, receipt ACK, fencing token, retries, priorities, loop guard, suspend/reply, binary artifacts, SSE resume
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS priority integer NOT NULL DEFAULT 5;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS attempt integer NOT NULL DEFAULT 0;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS max_retries integer NOT NULL DEFAULT 0;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS idempotent boolean NOT NULL DEFAULT false;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS lease_token uuid;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS execution_timeout_seconds integer;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS execution_deadline_at timestamptz;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS concurrency_key text;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS trace_id uuid;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS parent_task_id uuid REFERENCES link_tasks(id);
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS call_depth integer NOT NULL DEFAULT 0;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS call_chain jsonb NOT NULL DEFAULT '[]';
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS receipt_acked_at timestamptz;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS pending_interaction jsonb;
+        ALTER TABLE link_tasks ADD COLUMN IF NOT EXISTS interaction_expires_at timestamptz;
+
+        DO $$ DECLARE r record; BEGIN FOR r IN SELECT conname FROM pg_constraint WHERE conrelid='link_tasks'::regclass AND contype='c' LOOP EXECUTE format('ALTER TABLE link_tasks DROP CONSTRAINT %I',r.conname); END LOOP; END $$;
+        ALTER TABLE link_tasks ADD CONSTRAINT link_tasks_state_check CHECK(state IN ('queued','running','awaiting_input','awaiting_approval','cancel_requested','succeeded','failed','declined','cancelled','unknown','expired'));
+
+        CREATE INDEX IF NOT EXISTS link_task_queued_expires ON link_tasks(expires_at) WHERE state='queued';
+        CREATE INDEX IF NOT EXISTS link_task_waiting_expires ON link_tasks(interaction_expires_at) WHERE state IN ('awaiting_input','awaiting_approval') AND interaction_expires_at IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS link_task_unacked_receipts ON link_tasks(source_agent_id,finished_at DESC) WHERE receipt_acked_at IS NULL AND finished_at IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS link_task_concurrency_running ON link_tasks(owner_id,concurrency_key) WHERE state IN ('running','awaiting_input','awaiting_approval','cancel_requested') AND concurrency_key IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS edge_events(
+          seq bigserial PRIMARY KEY,
+          owner_id uuid NOT NULL,
+          target_agent_id uuid REFERENCES agents(id) ON DELETE CASCADE,
+          target_device_id uuid REFERENCES devices(id) ON DELETE CASCADE,
+          event_type text NOT NULL,
+          payload jsonb NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS edge_events_agent_seq ON edge_events(owner_id,target_agent_id,seq);
+        CREATE INDEX IF NOT EXISTS edge_events_device_seq ON edge_events(owner_id,target_device_id,seq);
+        CREATE INDEX IF NOT EXISTS edge_events_created ON edge_events(created_at);
+
+        CREATE TABLE IF NOT EXISTS edge_artifacts(
+          id uuid PRIMARY KEY,
+          owner_id uuid NOT NULL,
+          source_device_id uuid NOT NULL REFERENCES devices(id),
+          source_agent_id uuid NOT NULL REFERENCES agents(id),
+          task_id uuid REFERENCES link_tasks(id) ON DELETE SET NULL,
+          filename text NOT NULL,
+          content_type text NOT NULL,
+          size_bytes integer NOT NULL CHECK(size_bytes >= 0),
+          sha256 text NOT NULL,
+          data bytea NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          expires_at timestamptz NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS edge_artifacts_owner_expires ON edge_artifacts(owner_id,expires_at);
+        CREATE INDEX IF NOT EXISTS edge_artifacts_task ON edge_artifacts(task_id) WHERE task_id IS NOT NULL;
+
+        ALTER TABLE model_requests ADD COLUMN IF NOT EXISTS response_snapshot jsonb;
+
+        INSERT INTO schema_migrations(version) VALUES(7);
+      `);
+    }
     // Metadata only: a proxy crash cannot prove whether an upstream inference completed.
     await c.query("UPDATE model_requests SET state='submission_unknown',error_code='SERVICE_RESTARTED',finished_at=now() WHERE state='submitted'");
   });

@@ -45,7 +45,7 @@ test('AnyLink SDK over real HTTP: join, agent routing and durable results',{skip
       try{assert.equal((await disabled.app.inject({method:'POST',url:'/edge/v1/connect',headers:{authorization:`Bearer ${joinKey}`},payload:{device:{install_id:'install-y',name:'y',platform:'other'},agent:{key:'a',name:'a'}}})).statusCode,503);}finally{await disabled.app.close();}
     });
     await t.test('protocol, directory, persona and context expose agent identity',async()=>{
-      const p=await source.client.protocol();assert.equal(p.version,'3.0');assert.ok((p.routing as string[]).includes('device_name'));
+      const p=await source.client.protocol();assert.equal(p.version,'3.2');assert.ok((p.routing as string[]).includes('device_name'));
       const d=await source.client.directory();assert.ok(d.items.some(i=>i.agents.some((a:any)=>a.self)));
       const persona=await source.client.persona();assert.equal(persona.name,'dafeiyu');assert.ok(persona.sha256.length===64);
       const c=await source.client.context();assert.equal(c.device_id,source.deviceId);assert.equal(c.agent_id,source.agentId);assert.ok(c.persona.content.includes('大肥鱼'));

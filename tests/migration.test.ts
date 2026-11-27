@@ -41,8 +41,10 @@ test('migration v3 to v4 backfills agents, moves capabilities and drops grants',
   assert.equal(task.source_agent_id,agent.id);assert.equal(task.target_device_id,deviceId);assert.equal(task.claimed_by_agent_id,agent.id);
   for(const table of ['link_grants','link_capabilities'])assert.equal((await db.query('SELECT to_regclass($1) AS t',[table])).rows[0].t,null,table+' dropped');
   assert.ok((await db.query("SELECT conname FROM pg_constraint WHERE conrelid='memories'::regclass AND contype='c'")).rows.length>=2,'named memory checks exist');
-  assert.equal((await db.query('SELECT max(version) AS v FROM schema_migrations')).rows[0].v,6,'migrated cleanly through v6');
+  assert.equal((await db.query('SELECT max(version) AS v FROM schema_migrations')).rows[0].v,7,'migrated cleanly through v7');
   assert.ok((await db.query("SELECT to_regclass('memory_episodes') AS t")).rows[0].t,'memory_episodes table created');
+  assert.ok((await db.query("SELECT to_regclass('edge_events') AS t")).rows[0].t,'edge_events table created');
+  assert.ok((await db.query("SELECT to_regclass('edge_artifacts') AS t")).rows[0].t,'edge_artifacts table created');
   // The old token authenticates as the default agent with moved capabilities.
   const app=await createApp({databaseUrl:url!,ownerToken:'o'.repeat(30),deepseekApiKey:'',deepseekBaseUrl:'http://127.0.0.1:1',defaultModel:'deepseek-flash',memoryModel:'deepseek-flash',embeddingModel:'',embeddingBaseUrl:'http://127.0.0.1:1',embeddingApiKey:'',models:[],allowAnyModel:false,gatewayAutoMemoryDefault:false,maxGlobalConcurrency:16,maxAgentConcurrency:4,maxAgentRpm:60,trustProxy:'loopback',origin:'http://127.0.0.1:3180',host:'127.0.0.1',port:3180,joinKey:'',loginPassword:'',personaFile:'examples/persona/dafeiyu.md',speechPrompt:'',leaseReaperIntervalMs:60000,memoryDebounceMs:0,memoryBatchMax:6},{logger:false});
   try{

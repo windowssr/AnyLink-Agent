@@ -6,6 +6,8 @@ import { type Config, listModelRoutes, resolveModelRoute } from './config.js';
 import type { MemoryBrain } from './memory-brain.js';
 
 export const MODEL = 'deepseek-flash';
+const MAX_SNAPSHOT_CHARS = 256 * 1024;
+const idParams = z.object({ id: z.uuid() });
 
 export const modelInputSchema = z.object({
   model: z.string().trim().min(1).max(120),
@@ -31,15 +33,22 @@ function extractText(content: unknown): string {
   return '';
 }
 
-function shouldAutoMemory(headerValue: unknown, defaultEnabled: boolean): boolean {
+function truthyHeader(headerValue: unknown, defaultEnabled: boolean): boolean {
   const raw = String(headerValue ?? '').trim().toLowerCase();
   if (['on', 'true', '1', 'yes'].includes(raw)) return true;
   if (['off', 'false', '0', 'no'].includes(raw)) return false;
   return defaultEnabled;
 }
 
+export async function pruneModelSnapshots(db: Db): Promise<void> {
+  await db.query(
+    "UPDATE model_requests SET response_snapshot=NULL WHERE response_snapshot IS NOT NULL AND finished_at IS NOT NULL AND finished_at < now() - interval '10 minutes'",
+  ).catch(() => {});
+}
+
 export function registerModelProxy(app: FastifyInstance, db: Db, config: Config, memoryBrain?: MemoryBrain) {
   const active = new Map<string, AbortController>();
+  const activePartial = new Map<string, { content: string; finish_reason: string | null }>();
   const activeByAgent = new Map<string, Set<string>>();
 
   function acquireSlot(agentId: string, requestId: string) {
@@ -56,6 +65,7 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
 
   function releaseSlot(agentId: string, requestId: string) {
     active.delete(requestId);
+    activePartial.delete(requestId);
     const agentSet = activeByAgent.get(agentId);
     if (agentSet) {
       agentSet.delete(requestId);
@@ -75,6 +85,32 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
         default: i === 0 || r.id === config.defaultModel,
         input_modalities: r.inputModalities,
       })),
+    };
+  });
+
+  // Protocol v3.2: resume/recover an interrupted streaming or non-streaming model completion by X-AnyLink-Request-Id.
+  app.get('/model/v1/requests/:id', async req => {
+    const who = req.edgeIdentity!;
+    const { id } = idParams.parse(req.params);
+    const row = (await db.query(
+      `SELECT id,device_id,agent_id,model,state,prompt_tokens,completion_tokens,error_code,response_snapshot,created_at,finished_at
+       FROM model_requests WHERE id=$1 AND (agent_id=$2 OR device_id=$3)`,
+      [id, who.agent_id, who.device_id],
+    )).rows[0];
+    if (!row) throw new ApiError(404, 'MODEL_REQUEST_NOT_FOUND', 'Model request not found for this agent');
+    const live = activePartial.get(id);
+    return {
+      id: row.id,
+      model: row.model,
+      state: row.state,
+      error_code: row.error_code,
+      usage: (row.prompt_tokens !== null || row.completion_tokens !== null)
+        ? { prompt_tokens: row.prompt_tokens, completion_tokens: row.completion_tokens }
+        : null,
+      partial_text: live?.content ?? row.response_snapshot?.content ?? null,
+      result: row.response_snapshot ?? null,
+      created_at: row.created_at,
+      finished_at: row.finished_at,
     };
   });
 
@@ -99,6 +135,8 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
     acquireSlot(who.agent_id, id);
     const controller = new AbortController();
     active.set(id, controller);
+    const liveBuf = { content: '', finish_reason: null as string | null };
+    activePartial.set(id, liveBuf);
 
     try {
       await db.query("INSERT INTO model_requests(id,credential_id,device_id,agent_id,model,state) VALUES($1,$2,$3,$4,$5,'submitted')",
@@ -108,12 +146,19 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
       throw e;
     }
 
+    const detachOnDisconnect = truthyHeader(req.headers['x-anylink-detach-on-disconnect'], false);
+    let clientDisconnected = false;
     const timer = setTimeout(() => controller.abort(), 120000);
-    const close = () => { if (!reply.raw.writableEnded) controller.abort(); };
+    const close = () => {
+      if (!reply.raw.writableEnded) {
+        clientDisconnected = true;
+        if (!detachOnDisconnect) controller.abort();
+      }
+    };
     reply.raw.on('close', close);
 
     // Optional 1A gateway auto-memory mode: inject assembled shared memory & passively ingest completed turn.
-    const autoMemory = Boolean(memoryBrain && shouldAutoMemory(req.headers['x-anylink-auto-memory'], config.gatewayAutoMemoryDefault));
+    const autoMemory = Boolean(memoryBrain && truthyHeader(req.headers['x-anylink-auto-memory'], config.gatewayAutoMemoryDefault));
     const lastUserMessage = [...input.messages].reverse().find(m => m.role === 'user');
     const lastUserText = lastUserMessage ? extractText(lastUserMessage.content).trim() : '';
     let forwardedMessages = input.messages;
@@ -142,11 +187,15 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
     let usage: any = null;
     let persisted = false;
     let capturedAssistantText = '';
+    const capturedToolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>();
+    let responseSnapshot: Record<string, unknown> | null = null;
 
     const persist = async () => {
       const count = (n: unknown) => Number.isSafeInteger(n) && Number(n) >= 0 ? Number(n) : null;
-      await db.query('UPDATE model_requests SET state=$2,error_code=$3,prompt_tokens=$4,completion_tokens=$5,finished_at=now() WHERE id=$1',
-        [id, state, errorCode, count(usage?.prompt_tokens), count(usage?.completion_tokens)]);
+      await db.query(
+        'UPDATE model_requests SET state=$2,error_code=$3,prompt_tokens=$4,completion_tokens=$5,response_snapshot=$6,finished_at=now() WHERE id=$1',
+        [id, state, errorCode, count(usage?.prompt_tokens), count(usage?.completion_tokens), responseSnapshot ? JSON.stringify(responseSnapshot) : null],
+      );
       persisted = true;
     };
 
@@ -186,35 +235,52 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
         state = 'rejected';
         errorCode = `PROVIDER_HTTP_${upstream.status}`;
         await persist();
-        return reply.code(upstream.status).send({ error: { message: 'Model provider rejected the request', type: 'upstream_error', code: errorCode }, request_id: id });
+        if (!clientDisconnected && !reply.raw.destroyed) {
+          return reply.code(upstream.status).send({ error: { message: 'Model provider rejected the request', type: 'upstream_error', code: errorCode }, request_id: id });
+        }
+        return;
       }
 
       if (!input.stream) {
         const result = await upstream.json() as any;
         usage = result.usage;
         capturedAssistantText = extractText(result?.choices?.[0]?.message?.content);
+        if (detachOnDisconnect) {
+          responseSnapshot = {
+            content: capturedAssistantText.slice(0, MAX_SNAPSHOT_CHARS),
+            tool_calls: result?.choices?.[0]?.message?.tool_calls ?? [],
+            finish_reason: result?.choices?.[0]?.finish_reason ?? 'stop',
+            usage: usage ?? null,
+          };
+        }
         state = 'completed';
         await persist();
         scheduleAutoIngest();
-        reply.header('X-AnyLink-Request-Id', id);
-        if (memoryInjected) reply.header('X-AnyLink-Memory-Injected', 'true');
-        return reply.send(result);
+        if (!clientDisconnected && !reply.raw.destroyed) {
+          reply.header('X-AnyLink-Request-Id', id);
+          if (memoryInjected) reply.header('X-AnyLink-Memory-Injected', 'true');
+          return reply.send(result);
+        }
+        return;
       }
 
       if (!upstream.body) throw new Error('EMPTY_PROVIDER_STREAM');
       reply.hijack();
-      reply.raw.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Accel-Buffering': 'no',
-        'X-AnyLink-Request-Id': id,
-        ...(memoryInjected ? { 'X-AnyLink-Memory-Injected': 'true' } : {}),
-      });
+      if (!clientDisconnected && !reply.raw.destroyed) {
+        reply.raw.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'X-Accel-Buffering': 'no',
+          'X-AnyLink-Request-Id': id,
+          ...(memoryInjected ? { 'X-AnyLink-Memory-Injected': 'true' } : {}),
+        });
+      }
 
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
       let lines = '';
       let done = false;
+      const shouldCaptureFull = detachOnDisconnect || autoMemory;
       try {
         while (true) {
           const chunk = await reader.read();
@@ -229,9 +295,28 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
               try {
                 const data = JSON.parse(line.slice(6));
                 if (data.usage) usage = data.usage;
-                if (autoMemory && capturedAssistantText.length < 4000) {
-                  const delta = data?.choices?.[0]?.delta?.content;
-                  if (typeof delta === 'string') capturedAssistantText += delta;
+                const choice = data?.choices?.[0];
+                if (choice?.finish_reason) liveBuf.finish_reason = String(choice.finish_reason);
+                if (shouldCaptureFull) {
+                  const delta = choice?.delta?.content;
+                  if (typeof delta === 'string') {
+                    if (capturedAssistantText.length < (detachOnDisconnect ? MAX_SNAPSHOT_CHARS : 4000)) {
+                      capturedAssistantText += delta;
+                    }
+                    if (liveBuf.content.length < MAX_SNAPSHOT_CHARS) liveBuf.content += delta;
+                  }
+                  if (detachOnDisconnect && Array.isArray(choice?.delta?.tool_calls)) {
+                    for (const tc of choice.delta.tool_calls) {
+                      const idx = Number(tc?.index ?? 0);
+                      const existing = capturedToolCalls.get(idx) ?? { id: '', type: 'function', function: { name: '', arguments: '' } };
+                      if (typeof tc?.id === 'string' && tc.id) existing.id = tc.id;
+                      if (typeof tc?.function?.name === 'string') existing.function.name += tc.function.name;
+                      if (typeof tc?.function?.arguments === 'string' && existing.function.arguments.length < 32768) {
+                        existing.function.arguments += tc.function.arguments;
+                      }
+                      capturedToolCalls.set(idx, existing);
+                    }
+                  }
                 }
               } catch {}
             }
@@ -239,17 +324,36 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
           if (lines.length > 1048576) throw new Error('PROVIDER_EVENT_TOO_LARGE');
           if (done) {
             state = 'completed';
+            if (detachOnDisconnect) {
+              responseSnapshot = {
+                content: capturedAssistantText.slice(0, MAX_SNAPSHOT_CHARS),
+                tool_calls: [...capturedToolCalls.entries()].sort(([a], [b]) => a - b).map(([, v]) => v),
+                finish_reason: liveBuf.finish_reason ?? 'stop',
+                usage: usage ?? null,
+              };
+            }
             await persist();
             scheduleAutoIngest();
           }
-          if (!reply.raw.write(chunk.value)) {
-            await new Promise<void>((resolve, reject) => {
-              const clean = () => { reply.raw.off('drain', drain); reply.raw.off('close', closed); };
-              const drain = () => { clean(); resolve(); };
-              const closed = () => { clean(); reject(new Error('CLIENT_DISCONNECTED')); };
-              reply.raw.once('drain', drain);
-              reply.raw.once('close', closed);
-            });
+          if (!clientDisconnected && !reply.raw.destroyed && !reply.raw.writableEnded) {
+            try {
+              if (!reply.raw.write(chunk.value)) {
+                await new Promise<void>((resolve, reject) => {
+                  const clean = () => { reply.raw.off('drain', drain); reply.raw.off('close', closed); };
+                  const drain = () => { clean(); resolve(); };
+                  const closed = () => {
+                    clean();
+                    clientDisconnected = true;
+                    if (detachOnDisconnect) resolve(); else reject(new Error('CLIENT_DISCONNECTED'));
+                  };
+                  reply.raw.once('drain', drain);
+                  reply.raw.once('close', closed);
+                });
+              }
+            } catch (writeErr) {
+              clientDisconnected = true;
+              if (!detachOnDisconnect) throw writeErr;
+            }
           }
           if (done) {
             await reader.cancel().catch(() => {});
@@ -261,8 +365,16 @@ export function registerModelProxy(app: FastifyInstance, db: Db, config: Config,
       }
       state = done ? 'completed' : 'submission_unknown';
       if (!done) errorCode = 'PROVIDER_STREAM_INTERRUPTED';
+      if (detachOnDisconnect && !responseSnapshot && (capturedAssistantText || capturedToolCalls.size)) {
+        responseSnapshot = {
+          content: capturedAssistantText.slice(0, MAX_SNAPSHOT_CHARS),
+          tool_calls: [...capturedToolCalls.entries()].sort(([a], [b]) => a - b).map(([, v]) => v),
+          finish_reason: liveBuf.finish_reason,
+          usage: usage ?? null,
+        };
+      }
       if (!persisted) await persist();
-      reply.raw.end();
+      if (!clientDisconnected && !reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
     } catch {
       if (!persisted) state = 'submission_unknown';
       errorCode = controller.signal.aborted ? 'MODEL_INTERRUPTED' : 'MODEL_TRANSPORT_UNKNOWN';
