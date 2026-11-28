@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ApiError } from './db.js';
-import { createQwenSpeech } from './qwen-speech.js';
+import { createQwenSpeechPool } from './qwen-speech.js';
 import { type Config, resolveModelRoute } from './config.js';
 
 export const SUMMARIZE_SYSTEM = `You are a concise spoken-reply rewriter. Rewrite the assistant's text reply into 1-2 short natural spoken sentences:
@@ -189,15 +189,18 @@ export function createTranscriber(config: Pick<Config, 'asrBaseUrl' | 'asrApiKey
 export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize; qwenSynthesize?: (text: string, signal?: AbortSignal, onPcm?: (pcm: Buffer) => void) => Promise<Buffer>; transcribe?: Transcribe | null } = {}) {
   const summarize = deps.summarize ?? createSummarizer(config);
   const synthesize = deps.synthesize ?? createSynthesizer({ config });
-  const qwen = deps.qwenSynthesize ?? (config.ttsProvider === 'qwen' && config.qwenTtsApiKey ? createQwenSpeech({
+  const qwenPool = config.ttsProvider === 'qwen' && config.qwenTtsApiKey ? createQwenSpeechPool({
     apiKey: config.qwenTtsApiKey, region: config.qwenTtsRegion, model: config.qwenTtsModel, voice: config.qwenTtsVoice, speechRate: config.qwenTtsSpeechRate,
-  }) : null);
+  }) : null;
+  const qwen = deps.qwenSynthesize ?? qwenPool;
+  app.addHook('onClose', async () => { qwenPool?.close(); });
   const transcribe = deps.transcribe !== undefined ? deps.transcribe : createTranscriber(config);
   app.get('/model/v1/audio/status', async () => ({
     asr_enabled: Boolean(transcribe),
     asr_model: transcribe ? (config.asrModel || 'FunAudioLLM/SenseVoiceSmall') : null,
     tts_enabled: true,
     tts_streaming: Boolean(qwen),
+    tts_session_reuse: Boolean(qwenPool),
     tts_provider: qwen ? 'qwen' : 'microsoft',
     tts_voice: qwen ? (config.qwenTtsVoice || 'Momo') : (config.ttsVoice || VOICES['sweet-lively'].voice),
     tts_fallbacks: qwen ? ['microsoft', 'system'] : ['system'],
@@ -248,6 +251,9 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
     const useQwen = Boolean(qwen) && input.voice === 'sweet-lively' && req.headers['x-anylink-speech-provider'] !== 'microsoft';
     const wantsStream = String(req.headers.accept ?? '').split(',').some(v => v.trim() === 'application/x-ndjson');
     const source = ['chat', 'call', 'notification', 'preview'].includes(String(req.headers['x-anylink-speech-source'])) ? String(req.headers['x-anylink-speech-source']) : 'other';
+    const turnHeader = String(req.headers['x-anylink-speech-turn'] ?? '');
+    // Credentials are revalidated on every HTTP request; never share context between devices/credentials.
+    const sessionKey = req.edgeIdentity && /^[A-Za-z0-9:_-]{1,160}$/.test(turnHeader) ? `${req.edgeIdentity.id}:${turnHeader}` : undefined;
     const started = Date.now();
     const voice = () => provider === 'qwen' ? (config.qwenTtsVoice || 'Momo') : (input.voice === 'sweet-lively' ? (config.ttsVoice || VOICES[input.voice].voice) : VOICES[input.voice].voice);
     const record = (outcome: string) => app.log.info({ event: 'speech_synthesis', request_id: req.id, source, provider, resolved_voice: voice(), fallback, reason, rewritten, text_chars: spoken.length, first_audio_ms: firstAudioMs || undefined, synthesis_ms: Date.now() - started, outcome }, 'Speech synthesis');
@@ -264,13 +270,13 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
       if (!streaming) {
         firstAudioMs = Date.now() - started; streaming = true; provider = 'qwen'; format = 'pcm_s16le';
         reply.hijack(); for (const [name, value] of Object.entries(reply.getHeaders())) if (value !== undefined) reply.raw.setHeader(name, value); reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
-        emit({ type: 'start', spoken_text: spoken, provider, resolved_voice: voice(), format, sample_rate: 24000, channels: 1, rewritten, fallback: false, request_id: req.id });
+        emit({ type: 'start', spoken_text: spoken, provider, resolved_voice: voice(), format, sample_rate: 24000, channels: 1, rewritten, fallback: false, request_id: req.id, session_id: sessionKey ? qwenPool?.sessionId(sessionKey) : undefined, speech_rate: config.qwenTtsSpeechRate });
       }
       pcmBytes += length; for (let offset = 0; offset < length; offset += 9600) emit({ type: 'audio', audio_base64: bytes.subarray(offset, Math.min(offset + 9600, length)).toString('base64') });
     } : undefined;
     try {
       if (useQwen) {
-        try { provider = 'qwen'; audio = await qwen!(spoken, cancellation.signal, onPcm); if (!audio.length) throw new Error('EMPTY_AUDIO'); format = streaming ? 'pcm_s16le' : 'wav'; }
+        try { provider = 'qwen'; audio = await qwen!(spoken, cancellation.signal, onPcm, sessionKey); if (!audio.length) throw new Error('EMPTY_AUDIO'); format = streaming ? 'pcm_s16le' : 'wav'; }
         catch (error) {
           reason = /^TTS_[A-Z_]+$/.test(String((error as Error)?.message)) ? (error as Error).message : 'TTS_PROVIDER_FAILED';
           if (cancellation.signal.aborted || streaming) throw error;

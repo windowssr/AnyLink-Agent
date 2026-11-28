@@ -32,6 +32,21 @@ async function appWith(deps:{summarize?:any;synthesize?:any;qwenSynthesize?:any}
   registerSpeech(app,{deepseekApiKey:'',deepseekBaseUrl:'https://unused'} as any,null,deps);
   return app;
 }
+
+test('speech reuse keys are scoped to the reauthenticated credential and untrusted headers cannot share context',async()=>{
+  const keys:(string|undefined)[]=[];
+  const app=await appWith({qwenSynthesize:async(_text:string,_signal:AbortSignal,_pcm:unknown,key?:string)=>{keys.push(key);return Buffer.from('wave');}});
+  app.addHook('onRequest',async req=>{const id=String(req.headers['test-credential']??'');if(id)req.edgeIdentity={id,device_id:'device',agent_id:'agent'};});
+  for(const headers of [
+    {'test-credential':'A','x-anylink-speech-turn':'session:call:1'},
+    {'test-credential':'B','x-anylink-speech-turn':'session:call:1'},
+    {'test-credential':'A','x-anylink-speech-turn':'bad turn'},
+    {'x-anylink-speech-turn':'session:call:1'},
+  ]){
+    const result=await app.inject({method:'POST',url:'/model/v1/speech',headers,payload:{text:'你好呀',voice:'sweet-lively'}});assert.equal(result.statusCode,200);
+  }
+  assert.deepEqual(keys,['A:session:call:1','B:session:call:1',undefined,undefined]);await app.close();
+});
 test('speech route: sanitize+summarize happy path returns mp3 payload',async()=>{
   const app=await appWith({summarize:async()=>Promise.resolve('文件已经帮你整理好啦，详情在屏幕上。'),synthesize:async()=>'MP3DATA'.length?Buffer.from('ID3fake'):Buffer.alloc(0)});
   const res=await app.inject({method:'POST',url:'/model/v1/speech',payload:{text:'**完成**：已把 `报告.pdf` 移到下载目录。\n\n| 项 | 值 |\n|---|---|\n| 位置 | 下载 |\n\nhttps://x.y',summarize:true,voice:'sweet-warm'}});

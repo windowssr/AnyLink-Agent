@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import WebSocket from 'ws';
-import {createQwenSpeech,pcmWave,type QwenSocketFactory} from '../server/qwen-speech.js';
+import {createQwenSpeech,createQwenSpeechPool,pcmWave,type QwenSocketFactory} from '../server/qwen-speech.js';
 
 class FakeSocket extends EventEmitter {
   readyState=WebSocket.OPEN; sent:any[]=[]; closed=false;
@@ -68,4 +68,56 @@ test('Qwen exposes valid PCM before response.done for streaming consumers',async
   const f=fixture(s=>{delta(s);finish=()=>done(s);});
   let settled=false;const result=createQwenSpeech({apiKey:'test'},f)('你好',undefined,chunk=>chunks.push(chunk)).finally(()=>{settled=true;});
   await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false);assert.deepEqual(chunks,[pcm]);finish();assert.equal((await result).length,pcm.length+44);
+});
+
+test('authenticated speech context keeps one configured socket and serializes prefetched clauses',async()=>{
+  let connects=0;
+  const f=fixture(s=>delta(s));
+  const pool=createQwenSpeechPool({apiKey:'test'},{...f,createSocket:(u,o)=>{connects++;return f.createSocket(u,o);}});
+  try {
+    const first=pool('第一句。',undefined,undefined,'credential:call');
+    await new Promise(resolve=>setImmediate(resolve));
+    const id=pool.sessionId('credential:call');assert.ok(id);
+    const second=pool('第二句。',undefined,undefined,'credential:call');
+    assert.equal(connects,1);assert.equal(f.socket.sent.filter(e=>e.type==='input_text_buffer.commit').length,1);
+    done(f.socket);await first;await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.socket.sent.filter(e=>e.type==='session.update').length,1);
+    assert.equal(f.socket.sent.filter(e=>e.type==='input_text_buffer.commit').length,2);
+    assert.equal(pool.sessionId('credential:call'),id);done(f.socket);await second;
+    assert.equal(f.socket.closed,false);assert.equal(f.socket.sent.some(e=>e.type==='session.finish'),false);
+  } finally {pool.close();}
+  assert.equal(f.socket.closed,true);
+});
+
+test('barge in abort closes shared synthesis and rejects queued audio before a fresh session',async()=>{
+  const f=fixture(s=>delta(s)),pool=createQwenSpeechPool({apiKey:'test'},f),cancel=new AbortController();
+  const first=pool('旧回复',cancel.signal,undefined,'credential:call');
+  const rejection1=assert.rejects(first,/TTS_CANCELLED/);
+  await new Promise(resolve=>setImmediate(resolve));
+  const oldId=pool.sessionId('credential:call');
+  const second=pool('旧预取',undefined,undefined,'credential:call');const rejection2=assert.rejects(second,/TTS_CANCELLED/);
+  cancel.abort();await Promise.all([rejection1,rejection2]);assert.equal(f.socket.closed,true);assert.equal(pool.sessionId('credential:call'),undefined);
+  const fresh=pool('新回复',undefined,undefined,'credential:call');await new Promise(resolve=>setImmediate(resolve));
+  assert.notEqual(pool.sessionId('credential:call'),oldId);done(f.socket);await fresh;pool.close();
+});
+
+test('speech context is isolated by credential and idle sockets expire',async()=>{
+  const sockets:FakeSocket[]=[];
+  const pool=createQwenSpeechPool({apiKey:'test'},{keepAliveMs:15,createSocket:(u,o)=>{
+    const f=fixture(s=>{delta(s);done(s);}),socket=f.createSocket(u,o);sockets.push(socket as unknown as FakeSocket);return socket;
+  }});
+  try {
+    await Promise.all([pool('甲',undefined,undefined,'credentialA:call'),pool('乙',undefined,undefined,'credentialB:call')]);
+    assert.equal(sockets.length,2);assert.notEqual(pool.sessionId('credentialA:call'),pool.sessionId('credentialB:call'));
+    await new Promise(resolve=>setTimeout(resolve,30));assert.ok(sockets.every(s=>s.closed));
+    assert.equal(pool.sessionId('credentialA:call'),undefined);
+  } finally {pool.close();}
+});
+
+test('a stalled reusable synthesis retires active and queued work without replaying incomplete PCM',async()=>{
+  const f=fixture(s=>delta(s)),pool=createQwenSpeechPool({apiKey:'test'},{...f,idleTimeoutMs:20});
+  const first=pool('第一句',undefined,undefined,'credential:call');const rejected=assert.rejects(first,/TTS_AUDIO_STALLED/);
+  await new Promise(resolve=>setImmediate(resolve));
+  const next=pool('后续句子',undefined,undefined,'credential:call');const rejectedNext=assert.rejects(next,/TTS_AUDIO_STALLED/);
+  await Promise.all([rejected,rejectedNext]);assert.equal(f.socket.closed,true);assert.equal(pool.sessionId('credential:call'),undefined);pool.close();
 });
