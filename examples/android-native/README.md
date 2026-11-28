@@ -8,17 +8,17 @@ Android 客户端直接在手机本地运行完整的 Agent 会话、工具循�
 
 ## 本次发布范围与升级
 
-最新公开预览版：[v0.10.0-preview.12 · 公开 APK 与发布说明](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.12)。
+最新公开预览版：[v0.10.0-preview.15 · 公开 APK 与发布说明](https://github.com/windowssr/AnyLink-Agent/releases/tag/v0.10.0-preview.15)。
 
-当前分支在验证 Android preview.15：增加通话语音自动打断、回声过滤及整轮连续合成与播放。本次增量修改 Android 和服务器语音网关，不修改电脑端。新增连续合成需更新配套服务器；尚未发布 preview.15 Release。
+preview.15 增加通话语音自动打断、回声过滤及整轮连续合成与播放。相对上一个公开版 preview.12，本次同时修改 Android App 和服务器语音网关，不修改电脑端、Web、SDK 或 MCP。新增连续合成需更新配套服务器；本机使用的服务器已部署此网关代码。
 
 preview.15 已通过 93 项 Android 回归、37 项服务端单元测试（另 5 项集成场景按单元入口跳过）、62 项数据库集成测试、13 项 SDK 测试与类型/协议检查。荣耀 BRP-AN80 / Android 15 真机已启用 AEC 和降噪；用户确认无需点击即可插话，整轮连续播放后声线明显连贯、语速合适。一次 111 字符回复的识别结果到首声约 2.57 秒、首段排队到实际发声约 0.84 秒，为单次观测，不是延迟保证。听筒测试中整段保持一个 Momo PCM 流；外放、耳机和电视/旁人讲话干扰尚需扩大验收。
 
-相对 preview.8，本次同时修改了 **Android App 和配套服务器语音网关**（`server/config.ts`、`server/speech.ts`、`server/qwen-speech.ts`），电脑端、SDK 和 MCP 没有修改。服务器包版本号仍为 0.9.2，协议编号保持 v3.2；版本号相同不代表本次服务端代码未变化。
+服务端增量包括 `server/speech.ts`、`server/qwen-speech.ts`，以及新增的 `server/continuous-speech.ts` 和 `server/qwen-live.ts`。服务器包版本号仍为 0.9.2，协议编号保持 v3.2；版本号相同不代表本次服务端代码未变化。
 
-要使用 Momo 分片播放，需要更新配套服务器并配置百炼 Key；未配置时保留原微软语音，再由手机系统 TTS 兜底。旧服务器仍可通过原 JSON 音频响应与新版 App 通信，但没有新增的 PCM 流式能力。发布说明包含配置、兼容范围及本轮验证结果。
+要使用整轮连续 Momo 播报，需要更新配套服务器并配置百炼 Key；未配置时保留原微软语音，再由手机系统 TTS 兜底。客户端根据 `/model/v1/audio/status` 的 `tts_continuous` 选择能力：preview.12 网关仍可逐句播放 PCM，更旧网关保留 JSON 音频响应。发布说明包含配置、兼容范围及本轮验证结果。
 
-## 一、核心特性与前端架构（Android `0.10.0-preview.15` 本地验证）
+## 一、核心特性与前端架构（Android `0.10.0-preview.15`）
 
 - **透明人物舞台与 SVG 图标**：主界面显示半身，通话页将人物放大至小腿以上、不露脚，阅读模式缩小人物。WebView 明确使用 `MATCH_PARENT`，避免网页零高度；Live2D 就绪同时验证可见布局和真实 GPU 像素。私有版加载失败使用私有形象兜底，公开版使用原创矢量形象。界面操作图标来自 `web/icons/` 的 SVG 源文件，并生成原生 VectorDrawable；修改路径定义后运行 `node examples/android-native/scripts/generate-icons.mjs`。
 - **本地离线、系统与可选云端 ASR**：本地使用 sherpa-onnx 2.0.3 与约 199 MiB 中英流式模型，无需云端密钥，使用束搜索并给人物名称“大肥鱼”加入适度热词偏置。顶栏「保活」下载模型并校验 SHA-256 后即可用于语音输入、通话和本地测试；自动模式优先使用已下载模型，手动系统模式保留原调用。本地模式的录音只在手机内转写，识别后的文字按原有聊天流程发送；对话与回复仍需要 AnyLink 服务器。录音会话独立管理，取消后的回调、超时和 HTTP 响应不能进入下一轮。
@@ -54,7 +54,7 @@ Android 原生界面（Live2D 舞台 + Markdown 对话流 + 本地/系统/可选
   → 本机 DeviceAgent（会话 / 工具循环 / 远程 agent.invoke 执行 / SQLite 幂等账本）
     → AnyLink Cloud Hub (HTTPS + WSS /edge/v1/ws)
       ├── 云端记忆大脑：/edge/v1/memory/assemble & /edge/v1/memory/ingest
-      ├── 多模型与语音网关：/model/v1/chat/completions (SSE) · /model/v1/speech · /model/v1/audio/transcriptions
+      ├── 多模型与语音网关：/model/v1/chat/completions (SSE) · /model/v1/speech/live (+ PATCH /:id) · /model/v1/speech · /model/v1/audio/transcriptions
       └── 跨设备实时总线：/edge/v1/tasks + /edge/v1/artifacts + /edge/v1/ws 推送
 ```
 
