@@ -88,11 +88,11 @@ Designed for real-world mobile networks, NAT drops, sleeping laptops, and multi-
 
 ### 1. Python SDK (`anylink-agent`) — Linux Servers, Scripts, LangGraph, CrewAI
 
-The SDK source and PyPI Trusted Publishing workflow are available. The first PyPI upload requires the owner's one-time publisher binding; until it succeeds, install from the checkout. See [publisher setup](sdk-python/README.md#github-actions-trusted-publishing).
+The Python SDK is available on [PyPI](https://pypi.org/project/anylink-agent/). SDK releases use independent `python-v<version>` tags and GitHub Actions Trusted Publishing; see [publisher setup](sdk-python/README.md#github-actions-trusted-publishing).
 
 ```bash
-python -m pip install ./sdk-python
-# After the first PyPI publication: pip install anylink-agent
+python -m pip install anylink-agent
+# From a local checkout: python -m pip install ./sdk-python
 ```
 
 ```python
