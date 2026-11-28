@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ApiError } from './db.js';
 import { createQwenSpeechPool } from './qwen-speech.js';
+import { registerContinuousSpeech } from './continuous-speech.js';
 import { type Config, resolveModelRoute } from './config.js';
 
 export const SUMMARIZE_SYSTEM = `You are a concise spoken-reply rewriter. Rewrite the assistant's text reply into 1-2 short natural spoken sentences:
@@ -187,6 +188,7 @@ export function createTranscriber(config: Pick<Config, 'asrBaseUrl' | 'asrApiKey
 }
 
 export function registerSpeech(app: FastifyInstance, config: Config, persona: { content: string } | null, deps: { summarize?: Summarize; synthesize?: Synthesize; qwenSynthesize?: (text: string, signal?: AbortSignal, onPcm?: (pcm: Buffer) => void) => Promise<Buffer>; transcribe?: Transcribe | null } = {}) {
+  registerContinuousSpeech(app, config, sanitizeSpeech);
   const summarize = deps.summarize ?? createSummarizer(config);
   const synthesize = deps.synthesize ?? createSynthesizer({ config });
   const qwenPool = config.ttsProvider === 'qwen' && config.qwenTtsApiKey ? createQwenSpeechPool({
@@ -201,6 +203,7 @@ export function registerSpeech(app: FastifyInstance, config: Config, persona: { 
     tts_enabled: true,
     tts_streaming: Boolean(qwen),
     tts_session_reuse: Boolean(qwenPool),
+    tts_continuous: Boolean(qwenPool),
     tts_provider: qwen ? 'qwen' : 'microsoft',
     tts_voice: qwen ? (config.qwenTtsVoice || 'Momo') : (config.ttsVoice || VOICES['sweet-lively'].voice),
     tts_fallbacks: qwen ? ['microsoft', 'system'] : ['system'],
