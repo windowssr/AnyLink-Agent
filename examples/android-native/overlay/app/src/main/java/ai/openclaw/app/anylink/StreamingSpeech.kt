@@ -10,7 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 
 /** Bounded audio queue. The HTTP producer can run while this utterance is playing or is next in line. */
-internal class PcmSpeechStream(val spoken: String, val voice: String, val requestId: String, val sampleRate: Int = 24000) {
+internal class PcmSpeechStream(@Volatile var spoken: String, val voice: String, val requestId: String, val sampleRate: Int = 24000, val sessionId: String = "", val speechRate: Float = 0f) {
   val audio = Channel<ByteArray>(8)
   val levels = PcmLevels(sampleRate)
   var producer: Job? = null
@@ -37,6 +37,8 @@ internal interface PcmOutput {
   fun play()
   fun write(bytes: ByteArray, offset: Int, size: Int): Int
   fun positionFrames(): Long
+  fun volume(gain: Float) {}
+  fun underruns(): Int = 0
   fun stop()
   fun release()
 }
@@ -51,6 +53,8 @@ internal class AndroidPcmOutput(rate: Int, call: Boolean) : PcmOutput {
   override fun play() = track.play()
   override fun write(bytes: ByteArray, offset: Int, size: Int): Int = track.write(bytes, offset, size, AudioTrack.WRITE_NON_BLOCKING)
   override fun positionFrames(): Long = track.playbackHeadPosition.toLong() and 0xffffffffL
+  override fun volume(gain: Float) { track.setVolume(gain.coerceIn(0f, 1f)) }
+  override fun underruns(): Int = track.underrunCount
   override fun stop() { runCatching { track.pause(); track.flush() } }
   override fun release() = track.release()
 }

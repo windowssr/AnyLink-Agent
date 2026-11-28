@@ -1,6 +1,6 @@
 {
   "name": "anylink-android-native",
-  "version": "0.10.0-preview.12",
+  "version": "0.10.0-preview.15",
   "private": true,
   "type": "module",
   "scripts": {

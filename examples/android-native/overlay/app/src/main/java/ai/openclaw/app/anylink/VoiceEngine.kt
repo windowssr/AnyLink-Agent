@@ -53,17 +53,19 @@ internal class VoiceSentenceChunker {
   }
 
   fun take(force: Boolean = false): String? {
-    val minimum = if (first) 6 else 12
+    val minimum = if (first) 4 else 16
     var end = -1
     for (i in 0 until pending.length) {
       val count = i + 1
       val ch = pending[i]
-      if (ch in "。！？!?；;\n" || (count >= minimum && ch in "，,：:") || (first && count >= 24 && ch.isWhitespace()) || count >= 48) {
+      // Short comma fragments reset TTS prosody. Keep a quick first sentence, then complete phrases.
+      if ((count >= minimum && ch in "。！？!?；;\n") || (count >= 32 && ch in "，,：:") || (count >= 48 && ch.isWhitespace()) || count >= 64) {
         end = i + 1
         break
       }
     }
     if (end < 0 && force && pending.isNotEmpty()) end = pending.length
+    if (force && end > 0 && pending.length - end in 1..7) end = pending.length
     if (end <= 0) return null
     val raw = pending.substring(0, end)
     pending.delete(0, end)

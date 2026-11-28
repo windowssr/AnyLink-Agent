@@ -51,7 +51,7 @@ internal object SpeechSanitizer {
   }
 }
 
-private data class Pending(val text: String, val summarize: Boolean, val forceRewrite: Boolean, val source: String, val turn: String, val queued: Long = android.os.SystemClock.elapsedRealtime())
+private data class Pending(val text: String, val summarize: Boolean, val forceRewrite: Boolean, val source: String, val turn: String, val queued: Long = android.os.SystemClock.elapsedRealtime(), val live: LiveSpeechTurn? = null)
 internal data class SpeechPayload(val spoken: String?, val audio: String? = null, val format: String = "mp3", val provider: String = "system", val stream: PcmSpeechStream? = null, val requestId: String = "", val reason: String = "", val resolvedVoice: String = "") {
   companion object {
     fun parse(body: JsonObject): SpeechPayload = SpeechPayload(body.text("spoken_text"), body.text("audio_base64").takeIf { it.isNotBlank() },
@@ -81,13 +81,18 @@ internal class SpeechPlayer(
   private val onDiagnostic: (JsonObject) -> Unit = {},
   private val onPlaybackText: (String, String) -> Unit = { _, _ -> },
   private val localVoice: () -> String = { "system-default" },
+  private val continuousEnabled: () -> Boolean = { false },
 ) {
   private val http = AnyLinkHttp.builder().followRedirects(false).followSslRedirects(false).callTimeout(45000, java.util.concurrent.TimeUnit.MILLISECONDS).build()
   private val json = Json { ignoreUnknownKeys = true }
+  private val liveHttp = http.newBuilder().callTimeout(180, java.util.concurrent.TimeUnit.SECONDS).readTimeout(35, java.util.concurrent.TimeUnit.SECONDS).build()
+  private val liveTurns = linkedMapOf<String, LiveSpeechTurn>()
+  private val turnModes = linkedMapOf<String, Boolean>()
   private val main = Handler(Looper.getMainLooper())
   private val pending = ArrayDeque<Pending>()
   private val deferred = ArrayDeque<Pending>()
   private val providers = java.util.concurrent.ConcurrentHashMap<String, String>()
+  private val speechSession = UUID.randomUUID().toString()
   private val streams = java.util.Collections.synchronizedSet(mutableSetOf<PcmSpeechStream>())
   private var pcmOutput: PcmOutput? = null
   private var pcmJob: Job? = null
@@ -98,18 +103,35 @@ internal class SpeechPlayer(
   private var prepared: PreparedSpeech? = null
   private var currentFile: File? = null
   private var levelTick: Runnable? = null
+  private var gain = 1f
   val isActive: Boolean get() = busy || pending.isNotEmpty() || fetchJob != null || prepared != null
+
+  fun setDucked(ducked: Boolean) {
+    gain = if (ducked) .18f else 1f
+    runCatching { pcmOutput?.volume(gain) }; runCatching { player?.setVolume(gain, gain) }
+  }
 
   fun enqueue(text: String, summarize: Boolean, interrupt: Boolean, forceRewrite: Boolean = false, source: String = "chat", turn: String = UUID.randomUUID().toString()) {
     if (text.isBlank()) return
-    val next = Pending(text, summarize, forceRewrite, source, turn)
+    var next = Pending(text, summarize, forceRewrite, source, turn)
     if (inCall() && source == "notification") { if (deferred.size >= 32) deferred.pollFirst(); deferred.addLast(next); return }
     if (interrupt) interrupt()
+    val continuous = turnModes.getOrPut(turn) { continuousEnabled() && source in setOf("call", "chat") && !summarize && !forceRewrite }
+    if (turnModes.size > 64) turnModes.remove(turnModes.keys.first())
+    if (continuous) {
+      liveTurns[turn]?.let { it.append(text); return }
+      val live = LiveSpeechTurn(text, source); liveTurns[turn] = live
+      if (liveTurns.size > 32) liveTurns.remove(liveTurns.keys.first())
+      next = next.copy(live = live)
+    }
     pending.addLast(next); pump()
   }
+  fun finishTurn(turn: String) { liveTurns[turn]?.finish() }
   fun releaseDeferred() { if (!inCall()) { while (deferred.isNotEmpty()) pending.addLast(deferred.removeFirst()); pump() } }
   fun interrupt() {
+    setDucked(false)
     epoch++; pending.clear(); fetchJob?.cancel(); fetchJob = null
+    liveTurns.values.forEach { it.cancel() }; liveTurns.clear(); turnModes.clear()
     prepared?.file?.delete(); prepared?.stream?.cancel(); prepared = null
     synchronized(streams) { streams.toList() }.forEach { it.cancel() }; streams.clear()
     http.dispatcher.cancelAll()
@@ -168,6 +190,7 @@ internal class SpeechPlayer(
       .toString().toRequestBody("application/json".toMediaType())
     val call = http.newCall(Request.Builder().url(conn.server + "/model/v1/speech")
       .header("Authorization", "Bearer ${conn.token}").header("Accept", "application/x-ndjson")
+      .header("X-AnyLink-Speech-Turn", "$speechSession:${if (next.source == "call") next.turn.substringBeforeLast(':') else next.turn}")
       .header("X-AnyLink-Speech-Source", next.source).header("X-AnyLink-Speech-Provider", providers[next.turn] ?: "qwen").post(body).build())
     currentCoroutineContext().ensureActive()
     val owner = currentCoroutineContext()[Job]!!
@@ -178,7 +201,7 @@ internal class SpeechPlayer(
         val input = response.body.source()
         val start = event(input.readUtf8LineStrict(1024 * 1024))
         check(start.text("type") == "start" && start.text("format") == "pcm_s16le" && start.text("sample_rate") == "24000" && start.text("channels") == "1")
-        val active = PcmSpeechStream(start.text("spoken_text"), start.text("resolved_voice"), start.text("request_id")); stream = active
+        val active = PcmSpeechStream(start.text("spoken_text"), start.text("resolved_voice"), start.text("request_id"), sessionId = start.text("session_id"), speechRate = start.text("speech_rate").toFloatOrNull() ?: 0f); stream = active
         active.closeNetwork = { call.cancel() }; streams.add(active)
         owner.invokeOnCompletion { failure -> if (failure != null) { active.cancel(); streams.remove(active) } }
         fun readAudio(e: JsonObject): ByteArray {
@@ -214,35 +237,53 @@ internal class SpeechPlayer(
     if (providers[next.turn] == "system") return@withContext SpeechPayload(SpeechSanitizer.clean(next.text).take(160))
     currentCoroutineContext().ensureActive()
     val conn = connection() ?: return@withContext SpeechPayload(SpeechSanitizer.clean(next.text).take(160))
-    val result = runCatching { requestSpeech(conn, next) }.getOrNull()
+    var request = next
+    if (next.live != null) {
+      try {
+        val stream = next.live.open(liveHttp, scope, conn); streams.add(stream)
+        return@withContext SpeechPayload(stream.spoken, provider = "qwen", stream = stream, requestId = stream.requestId)
+      } catch (e: CancellationException) { throw e }
+      catch (_: Exception) {
+        kotlinx.coroutines.withTimeoutOrNull(15000) { next.live.finished.await() }
+        currentCoroutineContext().ensureActive()
+        providers[next.turn] = "microsoft"; request = next.copy(text = next.live.text, live = null)
+      }
+    }
+    val result = runCatching { requestSpeech(conn, request) }.getOrNull()
     currentCoroutineContext().ensureActive()
-    result ?: SpeechPayload(SpeechSanitizer.clean(next.text).take(160), reason = "SPEECH_TRANSPORT_FAILED")
+    result ?: SpeechPayload(SpeechSanitizer.clean(request.text).take(160), reason = "SPEECH_TRANSPORT_FAILED")
   }
-  private fun trace(next: Pending, provider: String, requestId: String, outcome: String, reason: String = "", resolvedVoice: String = "") {
+  private fun trace(next: Pending, provider: String, requestId: String, outcome: String, reason: String = "", resolvedVoice: String = "", sampleRate: Int = 0, underruns: Int = 0, sessionId: String = "", speechRate: Float = 0f) {
     onDiagnostic(jsonObject("source" to str(next.source), "turn" to str(next.turn), "provider" to str(provider), "request_id" to str(requestId),
-      "text_chars" to kotlinx.serialization.json.JsonPrimitive(next.text.length), "elapsed_ms" to kotlinx.serialization.json.JsonPrimitive(android.os.SystemClock.elapsedRealtime() - next.queued), "outcome" to str(outcome), "reason" to str(reason), "resolved_voice" to str(resolvedVoice), "at" to str(java.time.Instant.now().toString())))
+      "text_chars" to kotlinx.serialization.json.JsonPrimitive(next.live?.text?.length ?: next.text.length), "elapsed_ms" to kotlinx.serialization.json.JsonPrimitive(android.os.SystemClock.elapsedRealtime() - next.queued), "outcome" to str(outcome), "reason" to str(reason), "resolved_voice" to str(resolvedVoice),
+      "sample_rate" to kotlinx.serialization.json.JsonPrimitive(sampleRate), "underruns" to kotlinx.serialization.json.JsonPrimitive(underruns), "session_id" to str(sessionId), "speech_rate" to kotlinx.serialization.json.JsonPrimitive(speechRate), "at" to str(java.time.Instant.now().toString())))
   }
   private fun playPcm(ready: PreparedSpeech, stamp: Int) {
     val stream = ready.stream!!
     pcmJob = scope.launch(start = CoroutineStart.LAZY) {
       var output: PcmOutput? = null
       var announced = false
+      var shown = ""
       try {
         if (!beforePlayback()) return@launch
         val out = createPcmOutput(stream.sampleRate, inCall()); output = out; pcmOutput = out
+        out.volume(gain)
         val tick = object : Runnable {
           override fun run() {
             if (stamp != epoch || pcmOutput !== out) return
             val position = runCatching { out.positionFrames() }.getOrDefault(0)
             if (!announced && position > 0) {
-              announced = true; onSpeaking(true); onUtterance(ready.spoken); onPlaybackText(ready.spoken, ready.pending.source); onVoice(ready.provider); trace(ready.pending, ready.provider, ready.requestId, "playing", resolvedVoice = stream.voice)
+              announced = true; onSpeaking(true); onVoice(ready.provider); trace(ready.pending, ready.provider, ready.requestId, "playing", resolvedVoice = stream.voice, sampleRate = stream.sampleRate, sessionId = stream.sessionId, speechRate = stream.speechRate)
             }
-            onLevel(stream.levels.levelAt(position)); main.postDelayed(this, 20)
+            if (announced && stream.spoken != shown) {
+              onUtterance(stream.spoken); onPlaybackText(stream.spoken.removePrefix(shown), ready.pending.source); shown = stream.spoken
+            }
+            onLevel(stream.levels.levelAt(position) * gain); main.postDelayed(this, 20)
           }
         }
         levelTick = tick; main.post(tick)
         withContext(Dispatchers.IO) { renderPcm(stream, out) }
-        trace(ready.pending, ready.provider, ready.requestId, "completed", resolvedVoice = stream.voice)
+        trace(ready.pending, ready.provider, ready.requestId, "completed", resolvedVoice = stream.voice, sampleRate = stream.sampleRate, underruns = out.underruns(), sessionId = stream.sessionId, speechRate = stream.speechRate)
       } catch (e: CancellationException) { throw e }
       catch (_: Exception) {
         if (stamp == epoch) {
@@ -267,11 +308,11 @@ internal class SpeechPlayer(
         if (stamp != epoch || player !== mp) return@setOnPreparedListener
         if (!beforePlayback()) { finish(mp, stamp); return@setOnPreparedListener }
         runCatching {
-          mp.start(); onSpeaking(true); onUtterance(spoken); onPlaybackText(spoken, next.source); onVoice(provider); trace(next, provider, requestId, "playing", resolvedVoice = resolvedVoice)
+          mp.setVolume(gain, gain); mp.start(); onSpeaking(true); onUtterance(spoken); onPlaybackText(spoken, next.source); onVoice(provider); trace(next, provider, requestId, "playing", resolvedVoice = resolvedVoice)
           val tick = object : Runnable {
             override fun run() {
               if (stamp != epoch || player !== mp) return
-              onLevel(envelope.levelAt(runCatching { mp.currentPosition }.getOrDefault(-1)))
+              onLevel(envelope.levelAt(runCatching { mp.currentPosition }.getOrDefault(-1)) * gain)
               main.postDelayed(this, 20)
             }
           }

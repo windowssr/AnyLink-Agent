@@ -360,6 +360,8 @@ class AnyLinkActivity : ComponentActivity() {
         val callAudioRoute by runtime.callAudioRoute.collectAsState()
         val partialTranscript by runtime.partialTranscript.collectAsState()
         val callActive by runtime.callActive.collectAsState()
+        val callAutoBargeInActive by runtime.callAutoBargeInActive.collectAsState()
+        val callEchoCancellation by runtime.callEchoCancellation.collectAsState()
         val callState by runtime.callState.collectAsState()
         val callMuted by runtime.callMuted.collectAsState()
         val callSpeakerOn by runtime.callSpeakerOn.collectAsState()
@@ -416,6 +418,7 @@ class AnyLinkActivity : ComponentActivity() {
           finishListening = { runtime.finishListeningNow() },
           cancelListening = { runtime.cancelListening() },
           callActive = callActive,
+          autoBargeIn = callAutoBargeInActive && (!callSpeakerOn || callEchoCancellation),
           callState = callState,
           callMuted = callMuted,
           callSpeakerOn = callSpeakerOn,
@@ -474,6 +477,9 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
   val speechBusy by runtime.speechPreviewActive.collectAsState()
   val inVoiceCall by runtime.callActive.collectAsState()
   val offlineModel by runtime.offlineModelState.collectAsState()
+  val autoBargeIn by runtime.autoBargeInEnabled.collectAsState()
+  val callVadState by runtime.callVadState.collectAsState()
+  val callBargeInStatus by runtime.callBargeInStatus.collectAsState()
   val systemVoiceService by runtime.systemVoiceService.collectAsState()
   val systemVoiceOptions by runtime.systemVoiceOptions.collectAsState()
   val systemVoiceDiagnostic by runtime.systemVoiceDiagnostic.collectAsState()
@@ -547,6 +553,13 @@ private fun FloatingSettingsSheet(runtime: AnyLinkRuntime, onDismiss: () -> Unit
       }, label = { Text("复制播报诊断") })
       Text("诊断只记录播报来源、实际声音、耗时及降级原因，不含正文或密钥。", style = MaterialTheme.typography.bodySmall, color = SeaSlate)
       Text("语音输入与实时通话识别引擎", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = DeepInk)
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Switch(checked = autoBargeIn, enabled = !inVoiceCall, onCheckedChange = { runtime.setAutoBargeIn(it) })
+        Text("通话中语音自动打断", style = MaterialTheme.typography.bodyMedium, color = DeepInk)
+      }
+      Text("$callVadState\n$callBargeInStatus", style = MaterialTheme.typography.bodySmall, color = SeaSlate)
+      Text("需要本地识别模型。只在通话中收音，静音或挂断即停止；外放时会过滤自身播报，旁人的说话声仍可能触发。", style = MaterialTheme.typography.bodySmall, color = SeaSlate)
+      if (autoBargeIn) AssistChip(enabled = !inVoiceCall, onClick = { runtime.prepareCallVad() }, label = { Text("准备自动打断模型") })
       LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val voiceModes = listOf(
           VoiceRecognizerController.MODE_AUTO to "自动（推荐）",
@@ -698,6 +711,7 @@ internal fun CloudCompanionScreen(
   finishListening: () -> Unit = {},
   cancelListening: () -> Unit = {},
   callActive: Boolean = false,
+  autoBargeIn: Boolean = false,
   callState: String = "idle",
   callMuted: Boolean = false,
   callSpeakerOn: Boolean = true,
@@ -1252,6 +1266,7 @@ internal fun CloudCompanionScreen(
     if (callActive) {
       VoiceCallOverlay(
         callState = callState,
+        autoBargeIn = autoBargeIn,
         muted = callMuted,
         speakerOn = callSpeakerOn,
         durationSec = callDurationSec,

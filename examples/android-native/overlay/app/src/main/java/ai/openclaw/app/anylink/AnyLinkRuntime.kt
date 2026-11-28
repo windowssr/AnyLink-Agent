@@ -64,6 +64,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   val partialTranscript = MutableStateFlow("")
   val voiceEngineMode = MutableStateFlow(prefs.getString("voice_engine_mode", VoiceRecognizerController.MODE_AUTO) ?: VoiceRecognizerController.MODE_AUTO)
   val cloudAsrEnabled = MutableStateFlow(false)
+  private val continuousTtsEnabled = MutableStateFlow(false)
   val systemVoiceService = MutableStateFlow(prefs.getString("system_voice_service", "auto") ?: "auto")
   val systemVoiceOptions = MutableStateFlow<List<SystemSpeechTarget>>(emptyList())
   val systemVoiceDiagnostic = MutableStateFlow("")
@@ -103,6 +104,16 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private val offlineModels = OfflineAsrModels(app, scope)
   val offlineModelState = offlineModels.state
   private val offlineSpeech = SherpaOfflineSpeech(offlineModels)
+  private val callVadModel = CallVadModel(app, scope)
+  val callVadState = callVadModel.state
+  val autoBargeInEnabled = MutableStateFlow(prefs.getBoolean("call_auto_barge_in", true))
+  val callBargeInStatus = MutableStateFlow("本地识别配合语音检测，确认插话后自动停止播报。")
+  val callAutoBargeInActive = MutableStateFlow(false)
+  val callEchoCancellation = MutableStateFlow(false)
+  private val duplexCapture = DuplexCallCapture(scope, offlineSpeech, callVadModel)
+  private var duplexFailed = false
+  private var callPlaybackHistory = ""
+  private var vadDownloadJob: Job? = null
   private var offlineDownloadJob: Job? = null
   private val pendingLocalApprovals = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
   // Separate CloudClient instances for chat vs background worker prevent concurrent cancel clobbering.
@@ -151,7 +162,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       onLevel = { playbackLevel.value = it },
       onUtterance = { spoken ->
         spokenCaption.value = spoken
-        if (callActive.value) { callAssistantCaption.value = spoken; callState.value = "speaking" }
+        if (callActive.value) { callPlaybackHistory = (callPlaybackHistory + spoken).takeLast(240); callAssistantCaption.value = spoken; callState.value = "speaking" }
         val pose = speechPose(spoken)
         val now = android.os.SystemClock.elapsedRealtime()
         val gesture = if (now - lastGestureAt > 2400) pose.gesture else "none"
@@ -162,11 +173,13 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
       onVoice = { provider -> speechVoiceStatus.value = "最近播报：" + when (provider) { "qwen" -> "阿里云 Momo · 茉兔"; "microsoft" -> "微软神经语音（兜底）"; else -> "手机系统语音（兜底）" } },
       inCall = { callActive.value },
       localVoice = { localSpeech.voiceName },
+      continuousEnabled = { continuousTtsEnabled.value },
       onDiagnostic = { recordSpeechDiagnostic(it) },
       onError = { reportVoiceError(it); if (callActive.value) callState.value = "error" },
       beforePlayback = {
         if (callActive.value) {
-          voiceEngine.cancel(); listening.value = false; voiceLevel.value = 0f
+          if (!duplexCapture.active) voiceEngine.cancel()
+          listening.value = false; voiceLevel.value = 0f
           val ready = callAudio.requestPlaybackFocus()
           if (!ready) { callState.value = "error"; callAssistantCaption.value = voiceNotice.value }
           ready
@@ -188,6 +201,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   // ---- connection / agent -------------------------------------------------
 
   private fun activate(value: CloudConnection) {
+    continuousTtsEnabled.value = false
     wsClient?.close(); wsClient = null; wsOnline.value = false
     workerJob?.cancel(); workerJob = null
     connection.value = value
@@ -204,6 +218,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     runCatching {
       val st = CloudClient(value).request("GET", "/model/v1/audio/status")
       cloudAsrEnabled.value = st["asr_enabled"]?.jsonPrimitive?.booleanOrNull == true
+      if (connection.value == value) continuousTtsEnabled.value = st["tts_continuous"]?.jsonPrimitive?.booleanOrNull == true
       speechVoiceStatus.value = if (st.text("tts_provider") == "qwen") "默认声音：阿里云 ${st.text("tts_voice")}" else "默认声音：微软神经语音"
     }
   }
@@ -273,6 +288,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
           }
         }
       }) } catch (_: Exception) { error.value = "这次回复未完成，请查看文字或重试。" }
+      finally { speechPlayer?.finishTurn(speechTurn) }
       if (speechPlayer?.isActive != true) speechPresentationActive.value = false
       val last = active.state.value.runs.firstOrNull()
       if (last?.text("state") == "completed" && last.text("id") != lastSpokenRun && last.text("answer").isNotBlank()) {
@@ -987,6 +1003,57 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
 
   // ---- turn-taking call session: capture -> ASR -> agent -> audio -> capture ----
 
+  fun setAutoBargeIn(enabled: Boolean) {
+    if (callActive.value) return
+    autoBargeInEnabled.value = enabled; prefs.edit().putBoolean("call_auto_barge_in", enabled).apply()
+    if (enabled) prepareCallVad()
+  }
+  fun prepareCallVad() {
+    if (vadDownloadJob?.isActive == true || callVadModel.ready) return
+    vadDownloadJob = scope.launch { callVadModel.prepare() }
+  }
+  private fun stopDuplexCapture() {
+    duplexCapture.stop(); callAutoBargeInActive.value = false; voiceCaptureActive.value = false; speechPlayer?.setDucked(false)
+  }
+  private fun startDuplexCapture(stamp: Int) {
+    voiceEngine.cancel()
+    duplexCapture.start(
+      context = { CallListenContext(callTurnRunning || speechPlayer?.isActive == true, speaking.value, callPlaybackHistory, callSpeakerOn.value) },
+      onReady = { aec, ns -> if (stamp == callEpoch && callActive.value && !callMuted.value) {
+        callAutoBargeInActive.value = true; callEchoCancellation.value = aec; voiceCaptureActive.value = true
+        if (!callTurnRunning && speechPlayer?.isActive != true) { listening.value = true; callState.value = "listening" }
+        callBargeInStatus.value = "自动打断已开启 · 回声消除${if (aec) "已启用" else "不可用，外放时请点人物插话"} · 降噪${if (ns) "已启用" else "不可用"}"
+        recordBargeInDiagnostic("ready", "aec=$aec,ns=$ns")
+        if (callStartedAt == 0L) { callStartedAt = android.os.SystemClock.elapsedRealtime(); callAssistantCaption.value = "直接开口，也可以在我说话时插话。" }
+      } },
+      onDuck = { speechPlayer?.setDucked(it) },
+      onInterrupt = { if (stamp == callEpoch && callActive.value && !callMuted.value) stopCallAssistant() },
+      onPartial = { text -> if (stamp == callEpoch && callActive.value && !callMuted.value) {
+        listening.value = true; callState.value = "listening"; partialTranscript.value = text; callUserCaption.value = text
+      } },
+      onFinal = { text -> if (stamp == callEpoch && callActive.value && !callMuted.value) {
+        listening.value = false; partialTranscript.value = ""; voiceLevel.value = 0f; callUserCaption.value = text; runCallTurn(text)
+      } },
+      onLevel = { voiceLevel.value = it },
+      onDiagnostic = { recordBargeInDiagnostic(it) },
+      onError = { if (stamp == callEpoch && callActive.value) {
+        duplexFailed = true; stopDuplexCapture(); listening.value = false
+        callBargeInStatus.value = "自动打断暂不可用，已恢复轮流说话；仍可点人物插话。"
+        recordBargeInDiagnostic("capture_failed"); checkCallResumeListening()
+      } },
+    )
+  }
+  private fun recordBargeInDiagnostic(outcome: String, detail: String = "") {
+    recordSpeechDiagnostic(jsonObject("source" to str("barge_in"), "outcome" to str(outcome), "detail" to str(detail), "at" to str(java.time.Instant.now().toString())))
+  }
+  /** Stop only the old reply: the input stream and its first syllables belong to the user. */
+  private fun stopCallAssistant() {
+    callTurnEpoch++; callTurnJob?.cancel(); callTurnJob = null; callTurnRunning = false
+    agent.value?.stop(); speechPlayer?.interrupt(); localSpeech.cancel(); callAudio.releasePlaybackFocus()
+    resumeListeningJob?.cancel(); resumeListeningJob = null
+    callState.value = "listening"; listening.value = true; callRetries = 0
+  }
+
   fun startVoiceCall() {
     if (callActive.value) return
     if (connection.value == null) { voiceNotice.value = "请先连接服务器。"; return }
@@ -998,6 +1065,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     scope.launch { runCatching { agent.value?.prewarmVoice() } }
     val stamp = ++callEpoch
     callActive.value = true; callMuted.value = false; callState.value = "connecting"
+    duplexFailed = false; callPlaybackHistory = ""; if (autoBargeInEnabled.value) prepareCallVad()
     callDurationSec.value = 0; callStartedAt = 0; callRetries = 0
     callUserCaption.value = ""; callAssistantCaption.value = "正在准备通话…"
     connection.value?.let { value -> scope.launch { withTimeoutOrNull(3500) { refreshAudioStatus(value) } } }
@@ -1038,9 +1106,10 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     if (!callActive.value) return
     callMuted.value = !callMuted.value
     if (callMuted.value) {
+      stopDuplexCapture()
       voiceEngine.cancel(); listening.value = false; voiceLevel.value = 0f
       if (!callTurnRunning && speechPlayer?.isActive != true) callState.value = "muted"
-    } else { if (callState.value == "error") bargeInCall() else checkCallResumeListening() }
+    } else { if (callState.value == "error") bargeInCall() else startCallListening() }
   }
   fun toggleCallSpeaker() { if (callActive.value) callAudio.route(!callSpeakerOn.value) }
 
@@ -1053,8 +1122,14 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     resumeListeningJob = scope.launch { if (stamp == callEpoch && callActive.value) startCallListening() }
   }
   private fun startCallListening() {
-    if (!callActive.value || callMuted.value || callTurnRunning || speechPlayer?.isActive == true) return
+    if (!callActive.value || callMuted.value) return
     val stamp = callEpoch
+    if (!duplexFailed && autoBargeInEnabled.value && offlineSpeech.available() && callVadModel.ready && voiceEngineMode.value in setOf(VoiceRecognizerController.MODE_AUTO, VoiceRecognizerController.MODE_OFFLINE)) {
+      if (!duplexCapture.active) startDuplexCapture(stamp)
+      else { listening.value = true; callState.value = "listening" }
+      return
+    }
+    if (callTurnRunning || speechPlayer?.isActive == true) return
     voiceEngine.cancel(); listening.value = true; callState.value = "connecting"; partialTranscript.value = ""
     voiceEngine.start(
       preferredMode = voiceEngineMode.value, silenceEndMs = 850,
@@ -1107,7 +1182,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
         )
       } catch (e: kotlinx.coroutines.CancellationException) { throw e }
       catch (_: Exception) { if (callActive.value && stamp == callTurnEpoch) callAssistantCaption.value = "这次回复没有完成，请再说一次。" }
-      finally { if (stamp == callTurnEpoch) { callTurnRunning = false; checkCallResumeListening() } }
+      finally { if (stamp == callTurnEpoch) { speechPlayer?.finishTurn("call:$callEpoch:$stamp"); callTurnRunning = false; checkCallResumeListening() } }
     }
   }
   private fun onAudioQueueIdle() {
@@ -1119,6 +1194,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
   private fun checkCallResumeListening() {
     if (!callActive.value || callTurnRunning || speechPlayer?.isActive == true || speaking.value || callState.value == "error") return
     if (callMuted.value) { callState.value = "muted"; return }
+    if (duplexCapture.active) { listening.value = true; callState.value = "listening"; return }
     val stamp = callEpoch
     resumeListeningJob?.cancel()
     resumeListeningJob = scope.launch {
@@ -1127,6 +1203,7 @@ internal class AnyLinkRuntime private constructor(private val app: Application) 
     }
   }
   fun interruptVoice() {
+    stopDuplexCapture()
     cancelSystemVoiceTest()
     voiceEpoch++; voiceStartJob?.cancel(); voiceStartJob = null
     resumeListeningJob?.cancel(); resumeListeningJob = null

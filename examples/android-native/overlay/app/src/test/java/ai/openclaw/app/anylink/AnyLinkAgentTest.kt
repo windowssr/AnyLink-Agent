@@ -620,20 +620,23 @@ class AnyLinkAgentTest {
 """, prefix.toByteArray(Charsets.UTF_8).size).throttleBody((prefix.toByteArray(Charsets.UTF_8).size + 16).toLong(), 2, TimeUnit.SECONDS))
       val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
       val spoken = mutableListOf<String>(); val events = mutableListOf<JsonObject>(); val played = java.util.concurrent.atomic.AtomicLong(0)
-      var released = false
+      var released = false; val gains = mutableListOf<Float>()
       val output = object : PcmOutput {
         override fun play() = Unit
         override fun write(bytes: ByteArray, offset: Int, size: Int): Int { played.addAndGet(size / 2L); return size }
         override fun positionFrames(): Long = played.get()
+        override fun volume(gain: Float) { gains += gain }
         override fun stop() = Unit
         override fun release() { released = true }
       }
       val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { fail("must not fall back"); null }, {},
         onUtterance = { spoken += it }, createPcmOutput = { _, _ -> output }, onDiagnostic = { events += it })
+      player.setDucked(true)
       val started = System.currentTimeMillis(); player.enqueue("我在听呢。", false, false, source = "call", turn = "turn-1")
       while (spoken.isEmpty() && System.currentTimeMillis() - started < 1600) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(20)); delay(15) }
       assertEquals("events=$events", listOf("我在听呢。"), spoken); assertTrue("playback must precede the delayed done event", player.isActive)
       assertTrue(events.any { it.text("outcome") == "playing" && it.text("request_id") == "test-stream" })
+      assertEquals(.18f, gains.last()); player.setDucked(false); assertEquals(1f, gains.last())
       player.interrupt(); delay(50); org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
       assertTrue(released); assertFalse(player.isActive)
     }
@@ -651,6 +654,55 @@ class AnyLinkAgentTest {
       val deadline = System.currentTimeMillis() + 3000
       while (spoken.isEmpty() && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(15) }
       assertEquals(listOf("收到文件啦"), spoken); assertEquals(1, server.requestCount); player.interrupt()
+    }
+  }
+
+  @Test fun `continuous reply appends later model text but creates only one audio output`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start()
+      val pcm = android.util.Base64.encodeToString(ByteArray(4800), android.util.Base64.NO_WRAP)
+      val prefix = """{"type":"start","spoken_text":"第一句。","provider":"qwen","resolved_voice":"Momo","format":"pcm_s16le","sample_rate":24000,"channels":1,"request_id":"one-turn","session_id":"same-response","speech_rate":1.12}
+{"type":"text","text":"第二句。"}
+{"type":"audio","audio_base64":"$pcm"}
+"""
+      val bytes = prefix.toByteArray(Charsets.UTF_8).size
+      server.enqueue(MockResponse().setHeader("Content-Type", "application/x-ndjson").setChunkedBody(prefix + """{"type":"done","frames":2400,"padding":"${"x".repeat(200)}"}
+""", bytes).throttleBody((bytes + 16).toLong(), 2, TimeUnit.SECONDS))
+      repeat(2) { server.enqueue(response("""{"accepted":true}""")) }
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice)
+      var outputs = 0; var continuous = true; val played = java.util.concurrent.atomic.AtomicLong(); val spoken = mutableListOf<String>()
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { fail("unexpected fallback"); null }, {},
+        continuousEnabled = { continuous }, onUtterance = { spoken += it }, createPcmOutput = { _, _ ->
+          outputs++; object : PcmOutput {
+            override fun play() = Unit
+            override fun write(bytes: ByteArray, offset: Int, size: Int): Int { played.addAndGet(size / 2L); return size }
+            override fun positionFrames() = played.get()
+            override fun stop() = Unit
+            override fun release() = Unit
+          }
+        })
+      player.enqueue("第一句。", false, false, source = "call", turn = "reply"); continuous = false
+      player.enqueue("第二句。", false, false, source = "call", turn = "reply"); player.finishTurn("reply")
+      val deadline = System.currentTimeMillis() + 1800
+      while ((spoken.isEmpty() || server.requestCount < 3) && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(20)); delay(15) }
+      assertEquals(1, outputs); assertEquals(listOf("第一句。第二句。"), spoken); assertEquals(3, server.requestCount)
+      assertEquals("/model/v1/speech/live", server.takeRequest(1, TimeUnit.SECONDS)!!.path)
+      val append = server.takeRequest(1, TimeUnit.SECONDS)!!; assertEquals("PATCH", append.method); assertTrue(append.body.readUtf8().contains("第二句。"))
+      assertTrue(server.takeRequest(1, TimeUnit.SECONDS)!!.body.readUtf8().contains("\"finish\":true")); player.interrupt()
+    }
+  }
+
+  @Test fun `continuous first audio failure falls back with the whole collected reply once`() = runBlocking {
+    MockWebServer().use { server ->
+      server.start(); server.enqueue(MockResponse().setResponseCode(503).setBody("{}")); server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":{"spoken_text":"第一句。第二句。"}}"""))
+      val conn = CloudConnection(server.url("/").toString().trimEnd('/'), testToken, testDevice); val spoken = mutableListOf<String>()
+      val player = SpeechPlayer(RuntimeEnvironment.getApplication(), this, { conn }, { spoken += it; null }, {}, continuousEnabled = { true })
+      player.enqueue("第一句。", false, false, source = "call", turn = "reply"); player.enqueue("第二句。", false, false, source = "call", turn = "reply"); player.finishTurn("reply")
+      val deadline = System.currentTimeMillis() + 3000
+      while (spoken.isEmpty() && System.currentTimeMillis() < deadline) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); delay(15) }
+      assertEquals(listOf("第一句。第二句。"), spoken); assertEquals(2, server.requestCount)
+      server.takeRequest(1, TimeUnit.SECONDS)!!; val fallback = server.takeRequest(1, TimeUnit.SECONDS)!!
+      assertEquals("microsoft", fallback.getHeader("X-AnyLink-Speech-Provider")); assertTrue(fallback.body.readUtf8().contains("第一句。第二句。")); player.interrupt()
     }
   }
 

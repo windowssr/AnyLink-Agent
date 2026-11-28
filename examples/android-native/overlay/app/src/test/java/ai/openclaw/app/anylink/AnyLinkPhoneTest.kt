@@ -541,7 +541,8 @@ class AnyLinkPhoneTest {
     chunker.append("哼，主人好呀！")
     assertEquals("哼，主人好呀！", chunker.take())
     chunker.append("```kotlin\nprintln(1)\n```已经帮你搞定啦。")
-    assertEquals("已经帮你搞定啦。", chunker.take())
+    assertNull(chunker.take())
+    assertEquals("已经帮你搞定啦。", chunker.take(force = true))
     chunker.append("尾巴还在摇哦")
     assertNull(chunker.take(force = false))
     assertEquals("尾巴还在摇哦", chunker.take(force = true))
@@ -560,6 +561,46 @@ class AnyLinkPhoneTest {
     assertTrue(vad.hasSpeech)
     assertEquals(VoiceVadDetector.Decision.CONTINUE, vad.feed(0.004f, 600L))
     assertEquals(VoiceVadDetector.Decision.SPEECH_ENDED, vad.feed(0.004f, 1100L))
+  }
+
+  @Test fun `barge in requires sustained speech and text evidence and only ducks transient sounds`() {
+    val gate = BargeInGate()
+    val decisions = (1..5).map { gate.feed(true, "", true, true, "今天过得怎么样", true) }
+    assertTrue(decisions.none { it == "duck" }); assertFalse(gate.confirmed)
+    repeat(6) { assertNotEquals("interrupt", gate.feed(true, "", true, true, "今天过得怎么样", true)) }
+    assertEquals("duck", gate.feed(true, "等", true, true, "今天过得怎么样", true))
+    assertEquals("interrupt", gate.feed(true, "等一下", true, true, "今天过得怎么样", true))
+    assertTrue(gate.confirmed)
+    assertEquals("continue", gate.feed(true, "等一下", false, false, "", true))
+  }
+
+  @Test fun `playback echo cannot interrupt even when ASR contains a single typo`() {
+    for (echo in listOf("今天过得怎么样", "今天过的怎么样")) {
+      val gate = BargeInGate()
+      repeat(14) { gate.feed(true, "", true, true, "你好呀今天过得怎么样慢慢说", true) }
+      assertEquals("echo", gate.feed(true, echo, true, true, "你好呀今天过得怎么样慢慢说", true))
+      assertFalse(gate.confirmed)
+    }
+    assertFalse(isPlaybackEcho("先停一下", "你好呀，今天过得怎么样？"))
+    assertFalse(isPlaybackEcho("好", "今天过得好不好"))
+  }
+
+  @Test fun `speaker without AEC never automatically interrupts and normal input remains available`() {
+    val gate = BargeInGate()
+    repeat(20) { assertEquals("blocked", gate.feed(true, "停一下", true, true, "我在这里", false)) }
+    assertFalse(gate.ducked); assertFalse(gate.confirmed)
+    assertEquals("accept", gate.feed(true, "你好", false, false, "我在这里", false))
+  }
+
+  @Test fun `voice chunker keeps comma phrases together and preserves a fast complete first sentence`() {
+    val chunks = VoiceSentenceChunker()
+    chunks.append("我在陪着你呀，今天过得怎么样？慢慢说，我一直在听呢。")
+    assertEquals("我在陪着你呀，今天过得怎么样？", chunks.take())
+    assertNull(chunks.take())
+    assertEquals("慢慢说，我一直在听呢。", chunks.take(true))
+    assertNull(chunks.take(true))
+    val greeting = VoiceSentenceChunker(); greeting.append("我在这里呀。后面还没说完")
+    assertEquals("我在这里呀。", greeting.take())
   }
 
   @Test fun `sendVoiceCallTurn streams spoken sentences immediately on SSE punctuation`() = runBlocking {

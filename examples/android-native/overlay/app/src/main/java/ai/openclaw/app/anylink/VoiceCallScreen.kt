@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.sp
 internal fun VoiceCallOverlay(
   callState: String, muted: Boolean, speakerOn: Boolean, durationSec: Int, voiceLevel: Float,
   userCaption: String, assistantCaption: String, onToggleMute: () -> Unit, onToggleSpeaker: () -> Unit,
-  onBargeIn: () -> Unit, onEndCall: () -> Unit, onPanelTop: (Int) -> Unit = {}, audioRoute: String = if (speakerOn) "外放" else "听筒",
+  onBargeIn: () -> Unit, onEndCall: () -> Unit, onPanelTop: (Int) -> Unit = {}, audioRoute: String = if (speakerOn) "外放" else "听筒", autoBargeIn: Boolean = false,
 ) {
   val colors = MaterialTheme.colorScheme
   val status = when {
@@ -35,7 +35,7 @@ internal fun VoiceCallOverlay(
     callState == "transcribing" -> "正在识别"
     callState == "thinking" -> "正在准备回复"
     callState == "buffering" -> "正在准备声音"
-    callState == "speaking" -> "正在说话 · 点人物可插话"
+    callState == "speaking" -> if (autoBargeIn) "正在说话 · 直接开口可插话" else "正在说话 · 点人物可插话"
     callState == "reconnecting" -> "正在恢复监听"
     else -> "正在连接"
   }
